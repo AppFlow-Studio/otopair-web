@@ -16,6 +16,12 @@ import {
 } from "./lib/notificationScope";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { customServiceNames } from "./lib/customServiceNames";
+import {
+  getActiveQuoteCheckoutHold,
+  getQuoteHoldExpiresAt,
+  getQuoteRevision,
+  isQuoteHoldActive,
+} from "./lib/quoteHoldOwnership";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -416,6 +422,7 @@ export const getBookingsForRange = query({
           customerNote: booking.customer_notes ?? null,
           recommendationState: booking.recommendation_state ?? null,
           diagnosticFollowupState: booking.diagnostic_followup_state ?? null,
+          expiresAt: null,
           // Out-of-range estimate awaiting the customer's confirmation of the
           // new hold — surfaced on the day-lane block as a "Confirming new
           // hold" badge (the block status stays vehicle_at_shop/in_progress).
@@ -425,54 +432,73 @@ export const getBookingsForRange = query({
       })
     );
 
-    // Tentative-hold events: tire-quote responses this shop has submitted that
+    // Tentative-hold events: quote responses this shop has submitted that
     // are still active (not superseded, not expired) and whose underlying
     // booking hasn't been confirmed yet. Each response carries an availability
     // slot the mechanic offered — surface those as dashed/translucent blocks
     // in the responding mechanic's lane so they don't double-book themselves.
     const now = Date.now();
-    const tireResponses = await ctx.db
-      .query("tire_quote_responses")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
-      .collect();
+    const [tireResponses, rotorResponses] = await Promise.all([
+      ctx.db
+        .query("tire_quote_responses")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+        .collect(),
+      ctx.db
+        .query("rotor_quote_responses")
+        .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shopId))
+        .collect(),
+    ]);
 
-    const activeResponses = tireResponses.filter((r: any) => {
-      if (r.superseded_at != null) return false;
-      if (typeof r.expires_at === "number" && r.expires_at <= now) return false;
-      if (!r.mechanic_id) return false; // unassigned tentative holds aren't surfaced
+    const candidateResponses = [
+      ...tireResponses.map((response) => ({ quoteType: "tire" as const, response })),
+      ...rotorResponses.map((response) => ({ quoteType: "rotor" as const, response })),
+    ];
+    const checkedResponses = await Promise.all(candidateResponses.map(async ({ quoteType, response: r }) => {
+      if (r.cancelled_at != null || r.superseded_at != null || !r.mechanic_id) return null;
+      const checkoutHold = await getActiveQuoteCheckoutHold(
+        ctx,
+        quoteType,
+        r._id,
+        getQuoteRevision(r),
+        now,
+      );
+      if (!isQuoteHoldActive(r, now) && !checkoutHold) return null;
       const date = r.availability?.date;
-      if (!date || date < args.dateFrom || date > args.dateTo) return false;
+      if (!date || date < args.dateFrom || date > args.dateTo) return null;
       if (scope && scope.kind === "mechanic" && String(r.mechanic_id) !== String(scope.mechanicId)) {
-        return false;
+        return null;
       }
-      return true;
-    });
+      return { quoteType, response: r, checkoutHold };
+    }));
+    const activeResponses = checkedResponses.filter(
+      (item): item is NonNullable<typeof item> => item != null,
+    );
 
     const tentativeEvents = await Promise.all(
-      activeResponses.map(async (r: any) => {
+      activeResponses.map(async ({ quoteType, response: r, checkoutHold }) => {
         const booking: any = await ctx.db.get(r.booking_id);
         if (!booking) return null;
         if (booking.status !== "pending_quote" && booking.status !== "quotes_ready") return null;
         const customer: any = booking.user_id ? await ctx.db.get(booking.user_id) : null;
         const mechanic: any = r.mechanic_id ? await ctx.db.get(r.mechanic_id) : null;
         return {
-          _id: `tq_${r._id}` as any,
-          source: "tire_quote" as any,
+          _id: `${quoteType === "tire" ? "tq" : "rq"}_${r._id}`,
+          source: quoteType === "tire" ? "tire_quote" : "rotor_quote",
           backfilledAtMs: null,
           invoiceNumber: null,
-          scheduledDate: r.availability.date as string,
-          scheduledTime: r.availability.time as string,
+          scheduledDate: r.availability.date,
+          scheduledTime: r.availability.time,
           estimatedMinutes: r.estimated_duration_minutes ?? 30,
-          status: "tentative_quote" as any,
+          status: "tentative_quote" as const,
           customerName:
             `${customer?.first_name ?? ""} ${customer?.last_name ?? ""}`.trim() ||
             customer?.email ||
-            "Tire quote",
+            `${quoteType === "tire" ? "Tire" : "Rotor"} quote`,
           mechanicId: r.mechanic_id,
           mechanicName: mechanic
             ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
             : null,
-          serviceNames: ["Tire Replacement"],
+          serviceNames: [quoteType === "tire" ? "Tire Replacement" : "Rotor Replacement"],
           vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
           licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
           totalCost: r.total ?? null,
@@ -482,6 +508,7 @@ export const getBookingsForRange = query({
           diagnosticFollowupState: null,
           bookingId: booking._id,
           responseId: r._id,
+          expiresAt: checkoutHold?.expires_at ?? getQuoteHoldExpiresAt(r),
         };
       }),
     );

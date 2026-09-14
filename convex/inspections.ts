@@ -33,6 +33,7 @@ import {
   INSPECTION_TEMPLATE_VERSION,
 } from "../lib/inspection-template";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
+import { rotorMinForVin } from "./lib/rotorMin";
 import { serviceMatchKey } from "./lib/serviceMatch";
 import type { Id } from "./_generated/dataModel";
 import { OWNER_PROFILE_QUESTIONS } from "../lib/owner-profile-questions";
@@ -641,6 +642,8 @@ export const _assembleInspectionData = internalQuery({
           .join(" ") || null
       : null;
     const owner = await findOwnerForBooking(ctx, booking);
+    // Grade the PDF's rotor rows against THIS vehicle's enrichment minimum.
+    const rotorMin = await rotorMinForVin(ctx, booking.vin);
 
     // vehicles stores make/model/trim inside the free-form `metadata` blob
     // (the typed columns are just year + the spec foreign keys).
@@ -683,7 +686,7 @@ export const _assembleInspectionData = internalQuery({
       shopName: shop?.name ?? null,
       mechanicName,
       generatedAtMs: Date.now(),
-      zones: formatZonesForPdf(inspection.zones ?? []),
+      zones: formatZonesForPdf(inspection.zones ?? [], { rotorMin }),
       ownerRows,
       findingsAttention: inspection.findings_attention ?? [],
       findingsMonitor: inspection.findings_monitor ?? [],
@@ -755,6 +758,8 @@ export const getUnaddressedFindingsForBooking = query({
       ? await ctx.db.query("services").collect()
       : [];
     const state = hydrateTieredInspectionState(inspection);
+    // Rotor recommendation grades against THIS vehicle's enrichment minimum.
+    const rotorMin = await rotorMinForVin(ctx, booking.vin);
 
     // 1 — already on the booking as a catalog service.
     const handledServiceIds = new Set(
@@ -789,7 +794,7 @@ export const getUnaddressedFindingsForBooking = query({
       }
     }
 
-    return deriveSuggestedRecommendations(state, { onlyCompletedZones: true })
+    return deriveSuggestedRecommendations(state, { onlyCompletedZones: true, rotorMin })
       .map((s) => {
         const found = services.find((svc: any) =>
           svc.slug ? s.match.includes(svc.slug) : false,

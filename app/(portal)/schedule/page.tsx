@@ -85,6 +85,7 @@ import LateStartReviewDialog, {
   type LateStartReviewView,
 } from "@/components/late-start-review-dialog";
 import CreateBookingDrawer from "./create-booking-drawer";
+import QuoteDetailPanel from "./quote-detail-panel";
 import DatePicker from "@/components/ui/date-picker";
 
 /* ------------------------------------------------------------------ */
@@ -251,6 +252,11 @@ export default function SchedulePage() {
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
   const [selectedBookingId, setSelectedBookingId] = useState<Id<"bookings"> | null>(null);
+  const [selectedQuote, setSelectedQuote] = useState<{
+    eventId: string;
+    responseId: string;
+    quoteType: "tire" | "rotor";
+  } | null>(null);
   const [manualReviewExpanded, setManualReviewExpanded] = useState(true);
   const [lateStartExpanded, setLateStartExpanded] = useState(true);
   const [toast, setToast] = useState<{ msg: string; key: number } | null>(null);
@@ -396,9 +402,9 @@ export default function SchedulePage() {
   const drawerOpen = !!blockTimeDrawer;
   const { setSidebarCompact } = usePortalSidebar();
   useEffect(() => {
-    setSidebarCompact(drawerOpen || !!selectedBookingId);
+    setSidebarCompact(drawerOpen || !!selectedBookingId || !!selectedQuote);
     return () => setSidebarCompact(false);
-  }, [drawerOpen, selectedBookingId, setSidebarCompact]);
+  }, [drawerOpen, selectedBookingId, selectedQuote, setSidebarCompact]);
 
   // Pre-fill drawer form fields when drawer opens
   useEffect(() => {
@@ -634,23 +640,26 @@ export default function SchedulePage() {
     setRescheduleError("");
   }, []);
 
-  // Tentative-quote events (status="tentative_quote") use a synthetic id
-  // (`tq_<responseId>`) so they don't collide with real bookings. Clicking
-  // one routes the mechanic into the unified Quotes page on the Tires tab,
-  // focused on the underlying booking so they can edit / withdraw their
-  // quote.
+  // Tentative-quote events use synthetic ids so they cannot collide with real
+  // bookings. Clicking one opens its quote detail panel in the Schedule view.
   const handleEventSelect = useCallback(
     (ev: CalendarEvent) => {
       if (ev.status === "tentative_quote") {
-        const targetBooking = ev.tentativeBookingId;
-        if (targetBooking) {
-          router.push(`/bookings/quote-requests?type=tire&booking=${targetBooking}`);
+        if (ev.responseId && ev.quoteType) {
+          setSelectedBookingId(null);
+          setManualReschedule(null);
+          setSelectedQuote({
+            eventId: String(ev.id),
+            responseId: ev.responseId,
+            quoteType: ev.quoteType,
+          });
         }
         return;
       }
+      setSelectedQuote(null);
       setSelectedBookingId(ev.id as Id<"bookings">);
     },
-    [router],
+    [],
   );
 
   /**
@@ -956,6 +965,21 @@ export default function SchedulePage() {
   });
   bookingsRef.current = bookings;
 
+  useEffect(() => {
+    const nextExpiry = (bookings ?? [])
+      .map((event) => event.expiresAt)
+      .filter((expiresAt): expiresAt is number =>
+        typeof expiresAt === "number" && expiresAt > nowTimestamp,
+      )
+      .sort((a, b) => a - b)[0];
+    if (nextExpiry == null) return;
+    const timeoutId = window.setTimeout(
+      () => setNowTimestamp(Date.now()),
+      Math.max(0, nextExpiry - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [bookings, nowTimestamp]);
+
   // Wider lookahead used only when auto-opening the create-booking drawer to find the
   // next available slot across the next 14 days.
   const wantsAutoOpen = searchParams.get("action") === "newBooking";
@@ -1221,6 +1245,12 @@ export default function SchedulePage() {
     if (!bookings) return [];
     const bookingEvents: CalendarEvent[] = bookings
       .filter((b) => mechanicFilter === "all" || b.mechanicId === mechanicFilter)
+      .filter(
+        (b) =>
+          b.status !== "tentative_quote" ||
+          b.expiresAt == null ||
+          b.expiresAt > nowTimestamp,
+      )
       .map((b) => {
         const [h, m] = b.scheduledTime.split(":").map(Number);
         const endTime = getBookingEndTime(
@@ -1262,6 +1292,13 @@ export default function SchedulePage() {
           responseId: (b as any).responseId
             ? String((b as any).responseId)
             : undefined,
+          quoteType:
+            b.source === "rotor_quote"
+              ? "rotor"
+              : b.source === "tire_quote"
+                ? "tire"
+                : undefined,
+          expiresAt: b.expiresAt ?? null,
         };
       });
 
@@ -1410,6 +1447,7 @@ export default function SchedulePage() {
     btDescription,
     btType,
     savedBlockTypes,
+    nowTimestamp,
   ]);
 
   // For month view: collapse individual bookings into one chip per status per day
@@ -1824,7 +1862,7 @@ export default function SchedulePage() {
               if (manualReschedule) setManualReschedule(null);
               handleEventSelect(event);
             }}
-            selectedEventId={selectedBookingId ?? null}
+            selectedEventId={selectedQuote?.eventId ?? selectedBookingId ?? null}
             onProposeReschedule={handleProposeReschedule}
             onDragError={(msg) => setToast({ msg, key: Date.now() })}
             onSelectEmptyCell={
@@ -2372,12 +2410,19 @@ export default function SchedulePage() {
 
       {/* Job detail drawer — side panel on desktop, bottom sheet on mobile/iPad */}
       {sidePanel(
-        Boolean(selectedBookingId || manualReschedule),
+        Boolean(selectedQuote || selectedBookingId || manualReschedule),
         () => {
+          setSelectedQuote(null);
           setSelectedBookingId(null);
           setManualReschedule(null);
         },
-        manualReschedule ? (() => {
+        selectedQuote ? (
+          <QuoteDetailPanel
+            quoteType={selectedQuote.quoteType}
+            responseId={selectedQuote.responseId}
+            onClose={() => setSelectedQuote(null)}
+          />
+        ) : manualReschedule ? (() => {
             const m = manualReschedule;
             const hasDateTime = Boolean(m.date && m.time);
             const outsideHours = hasDateTime

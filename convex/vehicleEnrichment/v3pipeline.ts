@@ -40,6 +40,7 @@ import { mergeBlockedDomains } from "./utils/enrichmentFlags";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
+import { recordDecisions, type DecisionEvent } from "./utils/decisionLog";
 import { GAP_FILL_SYSTEM, buildGapFillPrompt } from "./prompts/gapFillPrompt";
 import { callClaudeWithWebSearch } from "./utils/claudeClient";
 import { deriveEngineFamily } from "./laborSibling";
@@ -83,6 +84,9 @@ import {
   buildVDBMappingPrompt,
   parseVDBMappingResponse,
 } from "../lib/vehicleDatabases";
+import { decodeProvider } from "../lib/decodeProvider";
+import { carApiVinDecode, extractCarApiFields } from "../lib/carApi";
+import { marketCheckFetchAll } from "../lib/marketCheck";
 import { MODEL_HAIKU } from "./utils/batchClient";
 import { lookupChassisCode } from "./utils/chassisLookup";
 import { validateChassisCodeYear, validateEngineCodeYear } from "./generationGate";
@@ -560,13 +564,13 @@ function mergeBatch1(
  *  grew timing-belt parts, and FWD diff fields could come back the same way).
  *  Jun-9 review medium finding; exported for tests. */
 /**
- * Rotor DISCARD minimums are deliberately excluded from Batch-2 / gap-fill
- * re-asks. Those paths carry a flat {value, source_url} shape with no room for
- * the verbatim label, and an unlabelled minimum is indistinguishable from a
- * nominal — the one failure that condemns healthy rotors. They are filled only
- * by paths that can quote a label: Batch 1, the rotor-spec resource tiers, a
- * mechanic reading the casting, or a director with a source link.
- * Nominals stay gap-fillable; they are never graded against.
+ * Rotor DISCARD minimums are no longer extraction targets AT ALL (removed
+ * from V4_FIELD_KEYS, Aug 2026): the minimum is derived as a 15% wear
+ * threshold off the sourced NOMINAL (rotorSpecResource.deriveRotorMinMm).
+ * This set is kept as a belt-and-suspenders guard so no re-ask path can ever
+ * resurrect them — an unlabelled minimum is indistinguishable from a nominal,
+ * the one failure that condemns healthy rotors.
+ * Nominals stay gap-fillable; the minimum is arithmetic, not extraction.
  */
 export const GAP_FILL_EXCLUDED_FIELDS: ReadonlySet<string> = new Set([
   "rotor_front_min_thickness_mm",
@@ -1831,60 +1835,12 @@ async function writeNormalizedData(
       psType && psType !== "electric"
         ? asNumber(fields.ps_fluid_capacity_oz?.value)
         : undefined,
-    // Rotor thickness. A minimum that is still non-null here passed the label
-    // cross-check in sanityChecks — anything unlabelled or backed by a nominal
-    // label was nulled there — so surviving to this point IS what "sourced"
-    // means. Nominal is written to its own column and never promoted.
-    // A value that survived only WITH a sanity flag (delta-implausible,
-    // front-below-rear) is stamped "oem_spec_flagged": classify() grades it
-    // like an estimate (warn-capped), never as a clean spec.
-    rotor_front_min_thickness_mm: asNumber(fields.rotor_front_min_thickness_mm?.value),
-    rotor_rear_min_thickness_mm: asNumber(fields.rotor_rear_min_thickness_mm?.value),
+    // Rotor NOMINAL (new/original) thickness — the only rotor dimension
+    // extraction supplies now. The replace-at minimum is DERIVED from it at
+    // finalize (resolveRotorMinimums, 15% wear policy Aug 2026); minimums are
+    // no longer extraction fields, so nothing here writes or clears them.
     rotor_front_nominal_thickness_mm: asNumber(fields.rotor_front_nominal_thickness_mm?.value),
     rotor_rear_nominal_thickness_mm: asNumber(fields.rotor_rear_nominal_thickness_mm?.value),
-    rotor_front_min_quality:
-      fields.rotor_front_min_thickness_mm?.value != null
-        ? (fields.rotor_front_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
-        : undefined,
-    rotor_rear_min_quality:
-      fields.rotor_rear_min_thickness_mm?.value != null
-        ? (fields.rotor_rear_min_thickness_mm?.flagged ? "oem_spec_flagged" : "oem_spec")
-        : undefined,
-    rotor_min_source_url:
-      fields.rotor_front_min_thickness_mm?.source_url ??
-      fields.rotor_rear_min_thickness_mm?.source_url ??
-      undefined,
-    // Per-axle labels (the shared column let a front label vouch for a rear
-    // value); the legacy column still receives front-first for old readers.
-    rotor_front_min_observed_label:
-      asString(fields.rotor_front_min_observed_label?.value) ?? undefined,
-    rotor_rear_min_observed_label:
-      asString(fields.rotor_rear_min_observed_label?.value) ?? undefined,
-    rotor_min_observed_label:
-      asString(fields.rotor_front_min_observed_label?.value) ??
-      asString(fields.rotor_rear_min_observed_label?.value) ??
-      undefined,
-    // A sanity REJECT this run invalidates the stored value too — without the
-    // explicit clear, a pre-gate-era diameter-as-thickness survives every
-    // re-run (nulled value → undefined → undefined-skip).
-    clear_fields: (() => {
-      const clears: string[] = [];
-      if (fields.rotor_front_min_thickness_mm?.rejected) {
-        clears.push(
-          "rotor_front_min_thickness_mm",
-          "rotor_front_min_quality",
-          "rotor_front_min_observed_label",
-        );
-      }
-      if (fields.rotor_rear_min_thickness_mm?.rejected) {
-        clears.push(
-          "rotor_rear_min_thickness_mm",
-          "rotor_rear_min_quality",
-          "rotor_rear_min_observed_label",
-        );
-      }
-      return clears.length ? clears : undefined;
-    })(),
   });
 
   // E2. chassis_specs — dual-write platform-level fields.
@@ -2315,6 +2271,14 @@ export const enrichVehicleBatchV3 = internalAction({
             Date.now() - lastActivity < LIVE_WINDOW_MS;
           if (!isLive) {
             console.log(`[v8] Force-unstick: no live run for ${configKey} (status=${status}) — taking over`);
+            await recordDecisions(ctx, [{
+              vehicleConfigId: String(existingConfig._id),
+              stage: "admission",
+              decisionKey: "run_admission",
+              chosen: "force_unstick_takeover",
+              reason: `director force with no live run (status=${status}, heartbeat dead) — prior run marked failed`,
+              outcome: "ok",
+            }]);
             if (latestRun && LIVE_RUN_STATUSES.has(latestRun.status)) {
               await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
                 run_id: latestRun._id,
@@ -2352,9 +2316,25 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "already_enriching",
+            reason: `a live run owns this config (status=${status}, age ${Math.round(runAge / 60000)}min) — second run refused`,
+            outcome: "skipped",
+          }]);
           return { status: "already_enriching" as const, configId: existingConfig._id };
         }
         console.log(`[v8] Stale/dead in-progress run for ${configKey} (${Math.round(runAge / 60000)}min old), re-enriching`);
+        await recordDecisions(ctx, [{
+          vehicleConfigId: String(existingConfig._id),
+          stage: "admission",
+          decisionKey: "run_admission",
+          chosen: "stuck_bypass",
+          reason: `in-progress status ${status} is ${Math.round(runAge / 60000)}min old (>4h safety valve) — prior chain superseded, re-enriching`,
+          outcome: "ok",
+        }]);
       }
 
       // Complete/verified — use cache unless stale.
@@ -2374,6 +2354,14 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "cache_hit_validating",
+            reason: `cache older than 180d — served stored config, background validation scheduled`,
+            outcome: "ok",
+          }]);
           return { status: "cache_hit_validating" as const, configId: existingConfig._id };
         } else {
           console.log(`[v8] Cache hit for ${configKey} (status=${status})`);
@@ -2381,6 +2369,14 @@ export const enrichVehicleBatchV3 = internalAction({
             internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
             { vehicle_id: args.vehicleId, vehicle_config_id: existingConfig._id },
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(existingConfig._id),
+            stage: "admission",
+            decisionKey: "run_admission",
+            chosen: "cache_hit",
+            reason: `config ${status} and fresh (<180d) — no run created, stored enrichment served`,
+            outcome: "ok",
+          }]);
           return { status: "cache_hit" as const, configId: existingConfig._id };
         }
       }
@@ -2405,6 +2401,22 @@ export const enrichVehicleBatchV3 = internalAction({
     // (isNhtsaDescriptor catches all three.) Persist the resolved code back to
     // the engines table after STEP 3 below, so sibling-matching uses it.
     let resolvedEngineCodeForPersist: string | null = null;
+    // Decision stream: the engine-code identity chain runs BEFORE the run row
+    // exists (created STEP 5), so its choices are buffered here and flushed
+    // with the runId once there is one — the survey's "visible in logs only"
+    // hole, closed. Chains that exit early (resolved-key cache adoption) emit
+    // config-scoped events immediately inside adoptVerifiedEngineCode.
+    const identityDecisions: DecisionEvent[] = [];
+    const noteIdentity = (chosen: string, reason: string, outcome: string) => {
+      identityDecisions.push({
+        stage: "identity",
+        decisionKey: "engine_code_resolution",
+        chosen,
+        reason,
+        outcome,
+        flags: `from=${args.engineCode ?? "?"}`,
+      });
+    };
     // Adopt a verified replacement code: rebuild the key, thread it through
     // the scheduler chain (poll bodies rebuild `vehicle` from args.engineCode
     // — batch-2 audit: Soul verified "U" yet completed as "2l_4cyl"), and
@@ -2420,6 +2432,17 @@ export const enrichVehicleBatchV3 = internalAction({
       );
       if (resolvedConfig && (resolvedConfig.enrichment_status === "complete" || resolvedConfig.enrichment_status === "verified")) {
         console.log(`[v8] Resolved config already complete (status=${resolvedConfig.enrichment_status}) — attaching`);
+        await recordDecisions(ctx, [
+          ...identityDecisions.map((e) => ({ ...e, vehicleConfigId: String(resolvedConfig._id) })),
+          {
+            vehicleConfigId: String(resolvedConfig._id),
+            stage: "identity",
+            decisionKey: "engine_code_resolution",
+            chosen: `adopted:${code}`,
+            reason: `verified code rebuilt the config key and a ${resolvedConfig.enrichment_status} config already owns it — attached instead of re-enriching`,
+            outcome: "ok",
+          },
+        ]);
         await ctx.runMutation(
           internal.vehicleEnrichment.v3mutations.attachVehicleConfig,
           { vehicle_id: args.vehicleId, vehicle_config_id: resolvedConfig._id },
@@ -2455,6 +2478,7 @@ export const enrichVehicleBatchV3 = internalAction({
           );
       if (replacement.source === "verified" && !isNhtsaDescriptor(replacement.engineCode)) {
         console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${replacement.engineCode}"`);
+        noteIdentity(`corrected:${replacement.engineCode}`, `spec gate: ${specGate.reason ?? "displacement/cylinder contradiction"} — replaced via ${known ? "year-pinned table" : "re-resolution"}`, "ok");
         const cacheHitId = await adoptVerifiedEngineCode(replacement.engineCode);
         if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
       } else {
@@ -2463,6 +2487,7 @@ export const enrichVehicleBatchV3 = internalAction({
         // treat as "unresolved" rather than trusting as an engine identity.
         const placeholder = `${args.displacement}l_${vPicData?.cylinders ?? "unknown"}cyl`.toLowerCase();
         console.warn(`[v8] No verified replacement for "${args.engineCode}" — falling back to "${placeholder}"`);
+        noteIdentity(`placeholder:${placeholder}`, `spec gate contradiction but no verified replacement — honest displacement descriptor keeps identity unresolved rather than wrong`, "rejected");
         await adoptVerifiedEngineCode(placeholder);
       }
     } else if (isNhtsaDescriptor(args.engineCode)) {
@@ -2474,6 +2499,7 @@ export const enrichVehicleBatchV3 = internalAction({
       );
       if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
         console.log(`[v8] Engine code resolved+verified: "${args.engineCode}" → "${resolved.engineCode}"`);
+        noteIdentity(`resolved:${resolved.engineCode}`, `NHTSA/VDB placeholder resolved to a verified OEM code`, "ok");
         const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
         if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
       } else if (resolved.source === "unverified") {
@@ -2481,8 +2507,10 @@ export const enrichVehicleBatchV3 = internalAction({
         // poisoned config keys and extraction prompts. Keep the displacement
         // placeholder — it is honest and still unique enough to key on.
         console.warn(`[v8] Engine code candidate "${resolved.engineCode}" failed verification — keeping placeholder "${args.engineCode}"`);
+        noteIdentity(`kept_placeholder:${args.engineCode}`, `candidate ${resolved.engineCode} failed adversarial verification — unverified codes poison config keys (CZDA/ERG/G4FJ class)`, "held");
       } else if (resolved.source === "unknown") {
         console.log(`[v8] Engine code resolution returned unknown — keeping placeholder "${args.engineCode}"`);
+        noteIdentity(`kept_placeholder:${args.engineCode}`, `resolution returned unknown — placeholder is honest and unique enough to key on`, "noop");
       }
     } else if (args.engineCode && args.engineCode.replace(/[^a-zA-Z0-9]/g, "").length <= 4) {
       // Round 10 (batch-11 Equinox): a SHORT decoder code (GM RPO shape —
@@ -2509,6 +2537,7 @@ export const enrichVehicleBatchV3 = internalAction({
       }
       if (verdict === "refuted") {
         console.warn(`[v8] Short engine code "${args.engineCode}" REFUTED for MY${args.year} — re-resolving`);
+        noteIdentity(`refuted:${args.engineCode}`, `short RPO-shape code refuted for MY${args.year} (${codeYear.known ? "year-pinned table" : "adversarial check"}) — re-resolving`, "rejected");
         const resolved = await resolveEngineCode(
           args.year, args.make, args.model, args.trim,
           args.displacement, vPicData?.cylinders ?? 4,
@@ -2517,10 +2546,12 @@ export const enrichVehicleBatchV3 = internalAction({
         );
         if (resolved.source === "verified" && !isNhtsaDescriptor(resolved.engineCode)) {
           console.log(`[v8] Engine code corrected: "${args.engineCode}" → "${resolved.engineCode}"`);
+          noteIdentity(`corrected:${resolved.engineCode}`, `refuted RPO replaced by verified re-resolution`, "ok");
           const cacheHitId = await adoptVerifiedEngineCode(resolved.engineCode);
           if (cacheHitId) return { status: "cache_hit" as const, configId: cacheHitId };
         } else {
           console.warn(`[v8] Refuted code "${args.engineCode}" could not be replaced with a verified one — keeping (visible in logs only)`);
+          noteIdentity(`kept_refuted:${args.engineCode}`, `refuted code had no verified replacement — kept under protest`, "held");
         }
       }
     }
@@ -2571,10 +2602,30 @@ export const enrichVehicleBatchV3 = internalAction({
       }
     }
 
-    // VDB advanced decode — runs once, cached by VIN. Fields used in Step 6b/6e.
+    // Structured decode — VDB (default) or CarAPI (PARTS_DECODE_PROVIDER=carapi).
+    // Both map to the extractVDBFields shape; CarAPI returns null for brake tier /
+    // steering / CCA so the `if (vdbFields?.x)` seeds in Step 6b/6c/6e skip and
+    // Claude Batch 1B fills them. Installed options/packages: the VDB path uses
+    // the decode raw; the CarAPI path uses MarketCheck NeoVIN (per-VIN, higher
+    // signal) fed into the same assessAvailablePackages detector.
+    const enrichProvider = decodeProvider();
     const decodeStartedAt = Date.now();
-    const vdbRaw = vehicleDoc.vin ? await advancedVinDecode(vehicleDoc.vin) : null;
-    const vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+    let vdbFields: ReturnType<typeof extractVDBFields> | null = null;
+    let packagesRaw: any = null;
+    let packagesSource: "vdb_optional_options" | "marketcheck_neovin" = "vdb_optional_options";
+    if (vehicleDoc.vin) {
+      if (enrichProvider === "carapi") {
+        const carApiRaw = await carApiVinDecode(vehicleDoc.vin);
+        vdbFields = carApiRaw ? extractCarApiFields(carApiRaw) : null;
+        const mc = await marketCheckFetchAll(vehicleDoc.vin);
+        packagesRaw = mc.ok ? { neovin: mc.neovin, basic: mc.basic } : null;
+        packagesSource = "marketcheck_neovin";
+      } else {
+        const vdbRaw = await advancedVinDecode(vehicleDoc.vin);
+        vdbFields = vdbRaw ? extractVDBFields(vdbRaw) : null;
+        packagesRaw = vdbRaw;
+      }
+    }
     const decodeEndedAt = Date.now();
 
     // Identity gap-fill: the applicability rules fail OPEN when drivetrain /
@@ -2593,13 +2644,14 @@ export const enrichVehicleBatchV3 = internalAction({
     // the 23 services. Stored on vehicle_configs.packages_available (after the upsert
     // below) and passed into Batch 1 so Claude can return package-specific part numbers.
     // See docs/PACKAGE_AWARE_PARTS.md.
-    const detectedPackages = vdbRaw
+    const detectedPackages = packagesRaw
       ? assessAvailablePackages({
-          vdbRaw,
+          vdbRaw: packagesRaw,
           make: args.make,
           model: args.model,
           trim: args.trim,
           year: args.year,
+          source: packagesSource,
         })
       : [];
     if (detectedPackages.length > 0) {
@@ -2797,6 +2849,18 @@ export const enrichVehicleBatchV3 = internalAction({
       response_text: JSON.stringify({ nhtsa_merged_identity: vPicData, vdb_fields: vdbFields }, null, 2),
     });
 
+    // Flush the buffered identity decisions now that run + config ids exist.
+    if (identityDecisions.length > 0) {
+      await recordDecisions(
+        ctx,
+        identityDecisions.map((e) => ({
+          ...e,
+          vehicleConfigId: String(vehicleConfigId),
+          runId: String(runId),
+        })),
+      );
+    }
+
     // STEP 6: Upsert drivetrain_config — only if we have a REAL value from NHTSA.
     // If drivetrain is unknown, skip this. _pollBatch1V3 will create it after
     // Batch 1 resolves the drivetrain (the Batch-1A attributes block).
@@ -2818,7 +2882,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 8). Mapping result + raw blocks → intervals/labor in _pollBatch1V3.
     let vdbRepairRaw: { blocks: any[]; actions: string[] } | null = null;
     try {
-      vdbRepairRaw = vehicleDoc.vin ? await fetchVDBRepairRaw(vehicleDoc.vin) : null;
+      // Repair estimates are VDB-only; the CarAPI stack sources intervals/labor
+      // from Claude + manual library + OLP instead. Null → downstream 1C no-ops.
+      vdbRepairRaw =
+        enrichProvider === "vdb" && vehicleDoc.vin
+          ? await fetchVDBRepairRaw(vehicleDoc.vin)
+          : null;
       if (vdbRepairRaw) {
         console.log(`[v8] VDB repair: fetched ${vdbRepairRaw.blocks.length} blocks, ${vdbRepairRaw.actions.length} unique actions`);
       }
@@ -3667,6 +3736,10 @@ async function runPollBatch1Body(
         makeId: args.makeId,
         runId: args.runId,
         attempt: 1,
+        // Resubmit payload for the transient-error auto-retry (see _pollBatch2V3).
+        batch2UserPrompt,
+        batch2SearchUses,
+        batch2BlockedDomains,
       },
     );
 
@@ -3729,6 +3802,16 @@ export const _pollBatch2V3 = internalAction({
     // Anthropic — this flag keeps slow-polling it and applies the gap-fill
     // when it ends instead of orphaning the results (Challenger case).
     lateCollect: v.optional(v.boolean()),
+    // Auto-retry (Sep 2026): a batch that ENDS `errored`/`expired` (a transient
+    // Anthropic-side failure, NOT a parse verdict) is resubmitted once. These
+    // carry the exact resubmit payload so the retry rebuilds an identical
+    // request; the output schema is reconstructable from `nullFields`. Optional
+    // so in-flight scheduled rows (mid-deploy) and the lateCollect path — which
+    // never retries — don't need them. `batch2Retry` is the attempt counter.
+    batch2UserPrompt: v.optional(v.string()),
+    batch2SearchUses: v.optional(v.number()),
+    batch2BlockedDomains: v.optional(v.array(v.string())),
+    batch2Retry: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
@@ -3865,9 +3948,105 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         : JSON.stringify(results, null, 2),
     });
 
+    // ── Transient-error auto-retry (Sep 2026) ────────────────────────────────
+    // An ended batch whose request came back `errored`/`expired` is an
+    // Anthropic-side transient (the async queue overloaded / api_error'd /
+    // expired the request), NOT a problem with our prompt — resubmitting the
+    // identical request usually succeeds (the CR-V mellow-cat case: 147m in
+    // queue, then 0-token `errored`, pricing silently dropped). This is
+    // distinct from the 3h TIMEOUT path above (which arms the late collector
+    // for a batch that never ENDED) and from a PARSE verdict (`json_extraction_*`),
+    // which the fields/services rescue rungs below already handle and which a
+    // resubmit would not fix. Bounded by PARTS_BATCH2_MAX_RETRY (default 1),
+    // live-path only (never lateCollect). Kill switch: PARTS_BATCH2_RETRY=off.
+    {
+      const retryCount = args.batch2Retry ?? 0;
+      const maxBatch2Retry = Number(process.env.PARTS_BATCH2_MAX_RETRY ?? "1");
+      const isTransientBatchError =
+        !!r2?.error && /^(errored|expired)\b/.test(String(r2.error));
+      if (
+        !timedOut &&
+        !args.lateCollect &&
+        isTransientBatchError &&
+        process.env.PARTS_BATCH2_RETRY !== "off" &&
+        args.batch2UserPrompt != null &&
+        retryCount < maxBatch2Retry
+      ) {
+        try {
+          const newBatchId = await submitBatch([
+            {
+              customId: "batch2",
+              system: BATCH_2_SYSTEM,
+              userPrompt: args.batch2UserPrompt,
+              maxTokens: 16384,
+              temperature: 0,
+              maxSearchUses: args.batch2SearchUses ?? 6,
+              blockedDomains: args.batch2BlockedDomains,
+              outputSchema: buildBatch2ArraySchema(args.nullFields),
+            },
+          ]);
+          // Re-open the batch2 step row against the fresh batch (the prior
+          // errored response_text stays — it is not overwritten here).
+          await traceStep(ctx, {
+            run_id: args.runId,
+            vehicle_config_id: args.vehicleConfigId,
+            step: "batch2",
+            seq: 4,
+            status: "submitted",
+            started_at: Date.now(),
+            summary: `RETRY ${retryCount + 1}/${maxBatch2Retry} · batchId=${newBatchId} · prev ${String(r2?.error).slice(0, 40)}`,
+          });
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: `resubmit_${retryCount + 1}`,
+            reason: `transient batch2 error (${String(r2?.error).slice(0, 80)}) — resubmitted as ${newBatchId}`,
+            outcome: "ok",
+          }]);
+          await ctx.scheduler.runAfter(
+            POLL_INTERVAL_MS,
+            internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+            { ...args, batchId: newBatchId, attempt: 1, batch2Retry: retryCount + 1 },
+          );
+          console.log(
+            `[v8/_pollBatch2] transient batch2 error — resubmitted (retry ${retryCount + 1}/${maxBatch2Retry}) batchId=${newBatchId}`,
+          );
+          return; // do NOT finalize — the fresh batch's poll chain will
+        } catch (e) {
+          // The resubmit itself failed — fall through to the batch-1-only
+          // finalize so the run is never lost, and record why.
+          console.error(
+            `[v8/_pollBatch2] batch2 resubmit FAILED (retry ${retryCount + 1}) — finalizing with batch1 data:`,
+            e,
+          );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: "resubmit_failed",
+            reason: `resubmit threw: ${String(e).slice(0, 120)}`,
+            outcome: "error",
+          }]);
+        }
+      }
+    }
+
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
       console.error(`[v8/_pollBatch2] batch2 ${r2.error} — continuing with batch1 data only`);
+      await recordDecisions(ctx, [{
+        vehicleConfigId: String(args.vehicleConfigId),
+        runId: String(args.runId),
+        stage: "batch2",
+        decisionKey: "batch2_result",
+        chosen: String(r2.error).split(":")[0].slice(0, 60),
+        reason: String(r2.error),
+        outcome: "error",
+        cost: { tokens_in: r2.usage?.tokensIn, tokens_out: r2.usage?.tokensOut, web_searches: r2.usage?.webSearches },
+      }]);
       // Don't abort — we still have batch1 data, just skip gap fill
     }
 
@@ -3899,6 +4078,101 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       }
     }
 
+    // Rescue-rung error tags (fields + services rungs below both push here;
+    // merged into the run's errors[] at finalize).
+    const batch2RescueErrors: string[] = [];
+
+    // ── Fields rescue rung (Aug 2026) ────────────────────────────────────
+    // The empty-payload quit loses BOTH halves of batch-2, and until now only
+    // services had a rescue — the 60-103-field gap list simply stayed null,
+    // which is why every empty-payload run lands 10-20 fill points under its
+    // peers (LaCrosse 59 / Hummer 64 / Civic Si 67 on Aug 27, all beneath the
+    // 70 gate). Ground truth on the failure: the model runs its 13 searches,
+    // then emits ONE ~30-char grammar-minimal `{"fields":[],"services":[]}`
+    // and stops (end_turn) — the paid mega-ask quits at the write-out. The
+    // services rescue proved the cure is ask size (5/5 recoveries): a small
+    // focused re-ask completes where the mega-ask quits. So on a failed
+    // batch-2 the gap list is re-asked in chunks of ≤25 fields, each its own
+    // synchronous turn, merged under the same only-fill-nulls rule.
+    // Runs BEFORE the services rescue so its recoveries feed knownParts.
+    // Disable: PARTS_FIELDS_RESCUE=off.
+    if (
+      r2 &&
+      r2.error &&
+      args.nullFields.length > 0 &&
+      process.env.PARTS_FIELDS_RESCUE !== "off"
+    ) {
+      const CHUNK = 25;
+      const MAX_CHUNKS = 3;
+      const chunks: string[][] = [];
+      for (let i = 0; i < args.nullFields.length && chunks.length < MAX_CHUNKS; i += CHUNK) {
+        chunks.push(args.nullFields.slice(i, i + CHUNK));
+      }
+      const dropped = args.nullFields.length - chunks.reduce((n, c) => n + c.length, 0);
+      if (dropped > 0) {
+        console.warn(`[v8/fields-rescue] gap list exceeds rescue budget — ${dropped} field(s) not re-asked`);
+      }
+      const rescueVehicle: VehicleInput = {
+        vehicleId: args.vehicleId,
+        year: args.year, make: args.make, model: args.model,
+        trim: args.trim, engineCode: args.engineCode, displacement: args.displacement,
+      };
+      const knownPartsForFields: Record<string, string> = {};
+      for (const k of Object.keys(PART_FIELD_MAP)) {
+        const v = allFields[k]?.value;
+        if (typeof v === "string" && v.trim()) knownPartsForFields[k] = v.trim();
+        if (Object.keys(knownPartsForFields).length >= 20) break;
+      }
+      let rescueFilled = 0;
+      let rescueChunksOk = 0;
+      for (const chunk of chunks) {
+        try {
+          const res = await callClaudeWithWebSearch({
+            system: BATCH_2_SYSTEM,
+            userPrompt: buildBatch2Prompt(rescueVehicle, chunk, knownPartsForFields),
+            maxSearchUses: Math.min(6 + Math.ceil(chunk.length / 8), 10),
+            maxTokens: 8000,
+            temperature: 0,
+          });
+          callLog.push({
+            call: "fields_rescue",
+            tokensIn: res.usage.tokensIn,
+            tokensOut: res.usage.tokensOut,
+            webSearches: res.usage.webSearches,
+            durationMs: 0,
+          });
+          const parsed = parseBatch2(normalizeBatchShape(res.data, "2"), chunk);
+          for (const [k, fv] of Object.entries(parsed.gapFields)) {
+            if (allFields[k]?.value == null && fv?.value != null) {
+              allFields[k] = fv;
+              rescueFilled++;
+            }
+          }
+          rescueChunksOk++;
+        } catch (e) {
+          console.warn(`[v8/fields-rescue] chunk failed (non-fatal):`, e);
+        }
+      }
+      if (rescueChunksOk > 0) {
+        batch2RescueErrors.push(`batch2_fields_rescue_used:${rescueFilled}`);
+        await recordDecisions(ctx, [{
+          vehicleConfigId: String(args.vehicleConfigId),
+          runId: String(args.runId),
+          stage: "batch2",
+          decisionKey: "fields_rescue",
+          chosen: "re_asked_in_chunks",
+          reason: `batch-2 lost its fields (${String(r2!.error).slice(0, 120)}) — ${rescueChunksOk}/${chunks.length} chunk(s) re-asked, ${rescueFilled} field(s) recovered`,
+          outcome: rescueFilled > 0 ? "ok" : "noop",
+        }]);
+        console.log(
+          `[v8/fields-rescue] batch-2 lost its fields (${r2.error.slice(0, 60)}…) — ` +
+            `${rescueChunksOk}/${chunks.length} chunk(s) re-asked, ${rescueFilled} field(s) recovered`,
+        );
+      } else {
+        batch2RescueErrors.push("batch2_fields_rescue_failed");
+      }
+    }
+
     // ── Services rescue rung (fresh-5 round 2, Aug 2026) ─────────────────
     // On first-contact makes the paid batch-2 turn keeps ending with
     // `services: []` — the raw payloads (CX-30/Sierra/Jeep/Palisade) all show
@@ -3918,7 +4192,6 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     // would discard the real fields it returned). Not run on timeout
     // (r2 undefined): the late collector applies the paid batch's result.
     // Disable: PARTS_SERVICES_RESCUE=off.
-    const batch2RescueErrors: string[] = [];
     if (r2 && process.env.PARTS_SERVICES_RESCUE !== "off") {
       const applicableCount = services.filter((s) => s.is_applicable).length;
       if (applicableCount === 0) {
@@ -3961,6 +4234,15 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               }
             }
             batch2RescueErrors.push("applicable_services_rescue_used");
+            await recordDecisions(ctx, [{
+              vehicleConfigId: String(args.vehicleConfigId),
+              runId: String(args.runId),
+              stage: "batch2",
+              decisionKey: "services_rescue",
+              chosen: "re_asked",
+              reason: `batch-2 returned zero applicable services — synchronous services-only re-ask restored ${rescuedApplicable} applicable row(s)`,
+              outcome: "ok",
+            }]);
             console.log(
               `[v8/services-rescue] batch-2 services empty — rescue returned ` +
                 `${services.length} rows (${rescuedApplicable} applicable), filled ${rescueFilled} price/labor fields`,
@@ -5183,6 +5465,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
               `${refuted.length} refuted, ` +
               `${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
           );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "verify",
+            decisionKey: "fitment_verify_pass1",
+            chosen: `${verdicts.filter((vd) => vd.verdict === "confirmed").length} confirmed / ${refuted.length} refuted / ${verdicts.filter((vd) => vd.verdict === "uncertain").length} uncertain`,
+            reason: `finalize-time adversarial verify over ${toVerify.length} core part(s) under the ${VERIFY_MAX_PARTS}-part cap`,
+            evidence: verdicts.map((vd) => `${vd.roleKey}:${vd.oem}:${vd.verdict}`),
+            outcome: refuted.length > 0 ? "rejected" : "ok",
+          }]);
           // Proportional skepticism (batch-5 fix): deletion is destructive, so
           // the evidence bar to delete scales with the part's independent
           // support. A single Haiku verdict may delete a WEAKLY-supported part
@@ -5807,6 +6099,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
           // indistinguishable in the audit — the same ambiguity that hid the
           // batch-2 keystone bug. This tag makes the sweep queryable.
           fitmentRefutedErrors.push(`fitment_verify_pass2:checked:${sweep.length}`);
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "verify",
+            decisionKey: "fitment_verify_pass2",
+            chosen: `${verdicts2.filter((v) => v.verdict === "confirmed").length} confirmed / ${refuted2.length} refuted / ${verdicts2.filter((v) => v.verdict === "uncertain").length} uncertain`,
+            reason: `adversarial verify over ${sweep.length} role-resource part(s) — confirmed survivals were previously unrecorded (only refutes persisted)`,
+            evidence: verdicts2.map((vd) => `${vd.roleKey}:${vd.oem}:${vd.verdict}`),
+            outcome: refuted2.length > 0 ? "rejected" : "ok",
+          }]);
           const byOem = new Map(sweep.map((c) => [c.oem.toUpperCase(), c]));
           const hard2 = refuted2.filter((r) => {
             const c = byOem.get(r.oem.toUpperCase());
@@ -6492,8 +6794,16 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         const byAxle: Partial<Record<RotorAxle, RotorAxleResolution>> =
           Object.fromEntries(rotorResolutions.map((r) => [r.axle, r]));
         const verdict = validateRotorResolution({
-          front: { minMm: byAxle.front?.minMm, nominalMm: byAxle.front?.nominalMm },
-          rear: { minMm: byAxle.rear?.minMm, nominalMm: byAxle.rear?.nominalMm },
+          front: {
+            minMm: byAxle.front?.minMm,
+            nominalMm: byAxle.front?.nominalMm,
+            derived: byAxle.front?.outcome === "derived_15pct",
+          },
+          rear: {
+            minMm: byAxle.rear?.minMm,
+            nominalMm: byAxle.rear?.nominalMm,
+            derived: byAxle.rear?.outcome === "derived_15pct",
+          },
         });
         const rotorPatch: {
           rotor_front_min_thickness_mm?: number;
@@ -6696,6 +7006,17 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
     const completionGateStatus = computeEnrichmentStatus(completionGateInput);
     const completionGateExplain = explainGateDecision(completionGateInput);
     console.log(`[v8] Completion gate → ${completionGateStatus}: ${completionGateExplain}`);
+    await recordDecisions(ctx, [{
+      vehicleConfigId: String(args.vehicleConfigId),
+      runId: String(args.runId),
+      stage: "gate",
+      decisionKey: "gate_decision",
+      chosen: completionGateStatus,
+      reason: completionGateExplain,
+      evidence: [...missingCoreRoleStrings, ...axlePairGapStrings].slice(0, 10),
+      outcome: completionGateStatus === "complete" ? "ok" : "held",
+      flags: `trigger=finalize;fill=${Math.round(fillRate)};q=${quotability?.pct ?? "?"}`,
+    }]);
     lateSanityFlags.push(
       buildLateSanityFlag(
         "completion_gate",
@@ -6792,6 +7113,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       field_gaps: finalGaps,
       quotability,
     });
+
+    // Ops alert (Sep 2026): a batch-2 error-out (an ended `errored`/`expired`
+    // result, or the 3h timeout) used to be visible only in the console — the
+    // CR-V mellow-cat case was found by chance. Emit one deduped
+    // notification_outbox row per run, mirroring portalStats.evaluateSlo's
+    // channel:"slack" convention (see _alertEnrichmentErrorOut for the
+    // no-dispatcher-yet caveat). Kill switch: ENRICH_ERROROUT_ALERT=off.
+    if ((r2?.error || timedOut) && process.env.ENRICH_ERROROUT_ALERT !== "off") {
+      try {
+        const unpricedCoreRoles = (quotability?.services ?? []).reduce(
+          (n: number, s: any) =>
+            n + Math.max(0, (s.core_with_fitment ?? 0) - (s.core_with_price ?? 0)),
+          0,
+        );
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations._alertEnrichmentErrorOut,
+          {
+            runId: args.runId,
+            vehicleConfigId: args.vehicleConfigId,
+            label: `${args.year} ${args.make} ${args.model} ${args.trim}`.trim(),
+            batchId: args.batchId,
+            error: timedOut ? "batch2_timeout" : String(r2?.error ?? "unknown"),
+            quotabilityPct: quotability?.pct,
+            unpricedCoreRoles,
+          },
+        );
+      } catch (e) {
+        console.warn("[v8] error-out alert enqueue failed (non-fatal):", e);
+      }
+    }
 
     // Trace: finalize stage — the run's terminal snapshot.
     await traceStep(ctx, {
@@ -7195,52 +7546,14 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       console.warn("[v8] EPA economy refresh trigger failed (non-fatal):", e);
     }
 
-    // ── Agent research: rotor minimums (round 19) ───────────────────────────
+    // ── Agent research: rotor minimums — RETIRED (Aug 2026) ────────────────
     //
-    // LAST RESORT, and only on positive evidence that the deterministic path
-    // produced nothing: fires solely when BOTH axles are still null after the
-    // rotor resolver, its adapters, and the whole run have had their turn.
-    //
-    // Round 19 measured the need — 0 of 12 axles populated, and 0 across ~30
-    // vehicles over five rounds, with `brembo` absent from adapters_seen on
-    // every one. This is the tool filter's criterion: data we cannot get today.
-    //
-    // Scheduled and never awaited: one agent task runs ~226s (measured), far
-    // beyond what this action's remaining budget can absorb. It writes CLAIMS
-    // only — the rotor resolver's existing double validation still decides
-    // whether any of it becomes a stored minimum, which is what stops an
-    // aftermarket retailer's product dimension being promoted to a
-    // manufacturer discard spec.
-    //
-    // Off unless ENRICHMENT_AGENT=on, so this costs nothing until switched on.
-    try {
-      const cfgForRotor: any = await ctx.runQuery(
-        internal.vehicleEnrichment.v3queries.getVehicleConfigById,
-        { vehicleConfigId: args.vehicleConfigId },
-      );
-      const rotorStillMissing =
-        cfgForRotor?.rotor_front_min_thickness_mm == null &&
-        cfgForRotor?.rotor_rear_min_thickness_mm == null;
-      if (rotorStillMissing && process.env.ENRICHMENT_AGENT === "on") {
-        await ctx.scheduler.runAfter(
-          30_000,
-          internal.vehicleEnrichment.agentResearch.researchRotorMinimums,
-          {
-            vehicleConfigId: args.vehicleConfigId,
-            runId: args.runId,
-            year: args.year,
-            make: args.make,
-            model: args.model,
-            trim: args.trim ?? null,
-            engineCode: vehicle.engineCode ?? null,
-            displacement: args.displacement ?? null,
-          },
-        );
-        console.log("[v8] agent rotor research scheduled (both axles still null)");
-      }
-    } catch (e) {
-      console.warn("[v8] agent rotor research trigger failed (non-fatal):", e);
-    }
+    // The dedicated rotor-minimum research rung is gone: across five rounds it
+    // found 0 published minimums on ~30 vehicles, because the web publishes
+    // nominals, not discard limits. The minimum is now DERIVED as a 15% wear
+    // threshold off the sourced nominal inside resolveRotorMinimums (operator
+    // policy, validated in mechanic interviews) — no search can beat
+    // arithmetic on a number we already have.
 
     // ── Agent research: roles the deterministic path EXHAUSTED ─────────────
     //

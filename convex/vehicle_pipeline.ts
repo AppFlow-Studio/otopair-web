@@ -19,6 +19,8 @@ import type { Id } from "./_generated/dataModel";
 import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
+import { decodeProvider } from "./lib/decodeProvider";
+import { carApiVinDecode, extractCarApiFields } from "./lib/carApi";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
@@ -113,19 +115,30 @@ export const processVin = internalAction({
   handler: async (ctx, args): Promise<ProcessVinResult | null> => {
     try {
       // ════════════════════════════════════════════════════════════
-      // SOURCE 1: Vehicle Databases API (primary — paid, structured)
+      // SOURCE 1: structured decode — VDB (default) or CarAPI, flag-gated by
+      // PARTS_DECODE_PROVIDER. Both map to the same extractVDBFields shape and
+      // feed the identical merge below; NHTSA + the engine-code chain are
+      // provider-agnostic. Vehicle IMAGES stay on VDB regardless
+      // (lib/vehicle_image.ts) — this flag is decode-only.
       // ════════════════════════════════════════════════════════════
-      const vdbRaw = await advancedVinDecode(args.vin);
-      const vdb = vdbRaw ? extractVDBFields(vdbRaw) : null;
+      const decodeProviderName = decodeProvider();
+      let vdb: ReturnType<typeof extractVDBFields> | null = null;
+      if (decodeProviderName === "carapi") {
+        const carApiRaw = await carApiVinDecode(args.vin);
+        vdb = carApiRaw ? extractCarApiFields(carApiRaw) : null;
+      } else {
+        const vdbRaw = await advancedVinDecode(args.vin);
+        vdb = vdbRaw ? extractVDBFields(vdbRaw) : null;
+      }
 
       if (vdb) {
-        console.log(`[decode] VDB: ${vdb.year} ${vdb.make} ${vdb.model} ${vdb.trim}`);
-        console.log(`[decode] VDB engine: ${vdb.engineDescription ?? "?"} | code=${vdb.engineCode ?? "none"}`);
-        console.log(`[decode] VDB trans: ${vdb.transType ?? "?"} ${vdb.transSpeeds ?? "?"}spd`);
-        console.log(`[decode] VDB tires: ${vdb.frontTireSize ?? "?"} / ${vdb.rearTireSize ?? "?"} @ ${vdb.frontTirePressure ?? "?"}/${vdb.rearTirePressure ?? "?"} PSI`);
-        console.log(`[decode] VDB battery: ${vdb.cca ?? "?"} CCA | torque: ${vdb.wheelTorque ?? "?"} lb-ft | drive: ${vdb.drivetrain ?? "?"}`);
+        console.log(`[decode] ${decodeProviderName}: ${vdb.year} ${vdb.make} ${vdb.model} ${vdb.trim}`);
+        console.log(`[decode] ${decodeProviderName} engine: ${vdb.engineDescription ?? "?"} | code=${vdb.engineCode ?? "none"}`);
+        console.log(`[decode] ${decodeProviderName} trans: ${vdb.transType ?? "?"} ${vdb.transSpeeds ?? "?"}spd`);
+        console.log(`[decode] ${decodeProviderName} tires: ${vdb.frontTireSize ?? "?"} / ${vdb.rearTireSize ?? "?"} @ ${vdb.frontTirePressure ?? "?"}/${vdb.rearTirePressure ?? "?"} PSI`);
+        console.log(`[decode] ${decodeProviderName} battery: ${vdb.cca ?? "?"} CCA | torque: ${vdb.wheelTorque ?? "?"} lb-ft | drive: ${vdb.drivetrain ?? "?"}`);
       } else {
-        console.log("[decode] VDB unavailable — NHTSA only");
+        console.log(`[decode] ${decodeProviderName} unavailable — NHTSA only`);
       }
 
       // ════════════════════════════════════════════════════════════

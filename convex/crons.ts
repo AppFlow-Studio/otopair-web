@@ -164,6 +164,29 @@ crons.interval(
   (internal as any).email_dispatcher.dispatchPendingEmails,
 );
 
+// Ops alerts: drain pending `channel:"slack"` notification_outbox rows (SLO
+// breaches, enrichment error-outs, canonical-shortcut nudges) to the ops Slack
+// channel. Before this cron those rows had no dispatcher and sat pending
+// forever (see notifications.ts). No-op/stub unless SLACK_WEBHOOK_URL (or
+// SLACK_BOT_TOKEN + SLACK_ALERT_CHANNEL) is set; a stale-on-enable guard in the
+// dispatcher keeps the first run from dumping backlog into the channel.
+crons.interval(
+  "dispatch-pending-slack",
+  { minutes: 1 },
+  (internal as any).slack_dispatcher.dispatchPendingSlack,
+);
+
+// Data API self-serve enrich-run ledger: reconcile each active run (queued /
+// enriching) against its config's live enrichment_status, flipping it to
+// enriching / complete / failed and enqueuing the owner's completion email.
+// 2 min is plenty against the 7-40 min pipeline; DB-only, never spends.
+crons.interval(
+  "reconcile-data-api-enrich-runs",
+  { minutes: 2 },
+  internal.dataApiEnrich.reconcileEnrichRuns,
+  {},
+);
+
 // Pre-Job Approval: expire 24h-stale customer approval cycles. Pre-job
 // expiry captures the $20 deposit forfeit; mid-job expiry just freezes the
 // ceiling at the prior approved set price.
@@ -230,6 +253,26 @@ crons.daily(
   {},
 );
 
+// Cohort dispatcher (Sep 2026): route the fleet's STORED missing_roles to the
+// proven repair lanes — curated fluid rung for atf_fluid/coolant, per-config
+// role repair for everything else — stalest-first over a fresh stamp column
+// (cohort_dispatched_at). Exists because those lanes only ever fired inside
+// per-config heals, so configs enriched before a lane shipped never met it
+// (ATF cohort 89→81 in the week after the fluid catalog landed). Dark unless
+// PARTS_COHORT_DISPATCH_BUDGET (configs/night) is set > 0. 08:00 UTC —
+// BEFORE role repair (08:15), whose target selection skips configs this
+// dispatched within ~20h (lifetime research attempts are capped at 3/role;
+// a same-night double-run burns them on an unchanged world). Fluid parts
+// written here get priced by the TARGETED backfill the dispatcher schedules
+// per write — not by the 09:00 refresh, whose backfill leg needs its own
+// env and walks oem_parts blind.
+crons.daily(
+  "cohort-dispatch-known-gaps",
+  { hourUTC: 8, minuteUTC: 0 },
+  (internal as any).vehicleEnrichment.cohortDispatch.nightly,
+  {},
+);
+
 // Fleet role repair (Wave 2): nightly census of configs whose latest run
 // shows missing binding core roles, scheduling the batch repair over the
 // worst under PARTS_ROLE_REPAIR_FLEET_BUDGET (0 = census-only, no spend).
@@ -265,6 +308,23 @@ crons.daily(
   { hourUTC: 9, minuteUTC: 30 },
   internal.vehicleEnrichment.fitmentQuarantine.runQuarantineScan,
   { dryRun: false },
+);
+
+// Zero-price sweep (Sep 2026): the price cron above only re-verifies parts
+// that already HAVE a price row, and NEVER-priced parts are otherwise touched
+// only by post-run epilogues — so a finished config's unpriced parts were
+// reachable by nothing (price-only cohort: 76 configs frozen a week with lit
+// budgets). Walks configs stalest-first (price_sweep_at stamp), finds
+// fitment-present/price-missing services in the latest quotability snapshot,
+// and dispatches the existing targeted backfill (whose epilogue re-asks the
+// completion gate). Dark unless PARTS_PRICE_SWEEP_BUDGET (parts/night) is set
+// > 0. 10:00 UTC — AFTER the 09:00 refresh and 09:30 quarantine, so the two
+// Firecrawl budget windows never stack.
+crons.daily(
+  "sweep-never-priced-parts",
+  { hourUTC: 10, minuteUTC: 0 },
+  (internal as any).vehicleEnrichment.priceBackfillSweep.nightly,
+  {},
 );
 
 // Labor times: fold freshly-recorded shop data into the labor median every 6h.
@@ -365,6 +425,16 @@ crons.interval(
   { hours: 168 },
   (internal as any).vehicleEnrichment.partIndex.refreshIndexedMakes,
   { limit: 10 },
+);
+
+// Otofacts Car Data API billing: settle reserved enrich credits against run
+// outcome — complete → commit (report meter for overage), failed/timed-out →
+// refund. So a failed enrich is never charged. Spec: CARDATA_BILLING_SPEC.md.
+crons.interval(
+  "otofacts-reconcile-enrich-ledger",
+  { minutes: 5 },
+  internal.dataApiBilling.reconcileEnrichLedger,
+  {},
 );
 
 export default crons;

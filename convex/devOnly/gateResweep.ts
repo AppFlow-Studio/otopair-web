@@ -39,7 +39,7 @@ export const resweepByVins = internalAction({
       try {
         const r: any = await ctx.runAction(
           internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-          { vehicleConfigId: found.vehicleConfigId, dryRun: args.dryRun },
+          { vehicleConfigId: found.vehicleConfigId, dryRun: args.dryRun, trigger: "gate_resweep" },
         );
         results.push({
           vin,
@@ -73,7 +73,7 @@ export const resweepByConfigIds = internalAction({
       try {
         const r: any = await ctx.runAction(
           internal.vehicleEnrichment.completionReevaluate.reevaluateGate,
-          { vehicleConfigId: configId, dryRun: args.dryRun },
+          { vehicleConfigId: configId, dryRun: args.dryRun, trigger: "gate_resweep" },
         );
         results.push({ configId: String(configId), ...r });
       } catch (e: any) {

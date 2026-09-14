@@ -1,0 +1,482 @@
+{
+  "carApiInRange": true,
+  "inFleet": false,
+  "label": "2020 TOYOTA Camry",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": "In-Line",
+        "bodyType": "Sedan/Saloon",
+        "brakeType": null,
+        "camType": "Dual Overhead Cam (DOHC)",
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "In-Line",
+        "displacement": 2.5,
+        "doors": 4,
+        "drivetrain": "4x2",
+        "engineCode": null,
+        "engineDescription": "A25A-FKS",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 205,
+        "make": "TOYOTA",
+        "model": "Camry",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": null,
+        "transSpeeds": null,
+        "transType": null,
+        "trim": "SE 4dr Sedan (2.5L 4cyl 8A)",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2020,\"make\":\"TOYOTA\",\"model\":\"Camry\",\"trim\":\"XSE\",\"specs\":{\"active_safety_system_note\":null,\"adaptive_cruise_control_acc\":\"Standard\",\"adaptive_driving_beam_adb\":\"Standard\",\"antilock_braking_system_abs\":\"Standard\",\"auto_reverse_system_for_windows_and_sunroofs\":\"Standard\",\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":\"Standard\",\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":\"2\",\"backup_camera\":\"Standard\",\"base_price\":null,\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":\"Not Applicable\",\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":null,\"body_class\":\"Sedan/Saloon\",\"brake_system_description\":null,\"brake_system_type\":null,\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":\"Not Applicable\",\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":\"Standard\",\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":\"All Rows\",\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":\"Standard\",\"destination_market\":null,\"displacement_cc\":\"2487\",\"displacement_ci\":\"152\",\"displacement_l\":\"2.5\",\"doors\":\"4\",\"drive_type\":\"4x2\",\"dynamic_brake_support_dbs\":\"Standard\",\"electrification_level\":null,\"electronic_stability_control_esc\":\"Standard\",\"engine_brake_hp_from\":\"205\",\"engine_brake_hp_to\":null,\"engine_configuration\":\"In-Line\",\"engine_manufacturer\":\"Toyota\",\"engine_model\":\"A25A-FKS\",\"engine_number_of_cylinders\":\"4\",\"engine_power_kw\":null,\"engine_stroke_cycles\":\"4\",\"entertainment_system\":\"CD + Stereo\",\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":\"Standard\",\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"gross_vehicle_weight_rating_to\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"headlamp_light_source\":null,\"keyless_ignition\":null,\"knee_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":\"Standard\",\"lane_keeping_assistance_lka\":\"Standard\",\"manufacturer_name\":\"TOYOTA MOTOR MANUFACTURING, KENTUCKY, INC.\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":\"2\",\"number_of_seats\":\"5\",\"number_of_wheels\":\"4\",\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":\"PORT+DIRECT\",\"other_motorcycle_info\":null,\"other_restraint_system_info\":null,\"other_trailer_info\":null,\"parking_assist\":null,\"pedestrian_automatic_emergency_braking_paeb\":\"Standard\",\"plant_city\":\"GEORGETOWN\",\"plant_company_name\":\"Toyota Motor Manufacturing, Kentucky, Inc.\",\"plant_country\":\"UNITED STATES (USA)\",\"plant_state\":\"KENTUCKY\",\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":null,\"semiautomatic_headlamp_beam_switching\":\"Standard\",\"series\":\"AXVA70L/GSV70L/AXVH70L\",\"series2\":null,\"side_air_bag_locations\":\"All Rows\",\"steering_location\":\"Left-Hand Drive (LHD)\",\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Direct\",\"top_speed_mph\":null,\"track_width_inches\":null,\"traction_control\":\"Standard\",\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":null,\"transmission_style\":null,\"trim\":\"XSE\",\"trim2\":null,\"turbo\":null,\"valve_train_design\":\"Dual Overhead Cam (DOHC)\",\"vehicle_descriptor\":\"4T1K61AK*LU\",\"vehicle_type\":\"PASSENGER CAR\",\"wheel_size_front_inches\":null,\"wheel_size_rear_inches\":null,\"wheelbase_inches_from\":\"111.20\",\"wheelbase_inches_to\":null,\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":8862,\"make_model_id\":84,\"year\":2020,\"name\":\"SE\",\"description\":\"SE 4dr Sedan (2.5L 4cyl 8A)\",\"msrp\":26170,\"invoice\":23815,\"created\":\"2023-06-29T21:00:02-04:00\",\"modified\":\"2023-06-29T21:00:02-04:00\",\"make_model\":{\"id\":84,\"make_id\":22,\"name\":\"Camry\",\"make\":{\"id\":22,\"name\":\"Toyota\"}},\"make_model_submodel\":{\"id\":73505,\"oem_make_model_id\":4779,\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"submodel\":\"SE\"}},{\"id\":8863,\"make_model_id\":84,\"year\":2020,\"name\":\"SE\",\"description\":\"SE 4dr Sedan AWD (2.5L 4cyl 8A)\",\"msrp\":27570,\"invoice\":25089,\"created\":\"2023-06-29T21:00:02-04:00\",\"modified\":\"2023-06-29T21:00:02-04:00\",\"make_model\":{\"id\":84,\"make_id\":22,\"name\":\"Camry\",\"make\":{\"id\":22,\"name\":\"Toyota\"}},\"make_model_submodel\":{\"id\":73505,\"oem_make_model_id\":4779,\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"submodel\":\"SE\"}},{\"id\":8869,\"make_model_id\":84,\"year\":2020,\"name\":\"XSE\",\"description\":\"XSE 4dr Sedan (2.5L 4cyl 8A)\",\"msrp\":30005,\"invoice\":27304,\"created\":\"2023-06-29T21:00:02-04:00\",\"modified\":\"2023-06-29T21:00:02-04:00\",\"make_model\":{\"id\":84,\"make_id\":22,\"name\":\"Camry\",\"make\":{\"id\":22,\"name\":\"Toyota\"}},\"make_model_submodel\":{\"id\":73509,\"oem_make_model_id\":4779,\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"submodel\":\"XSE\"}},{\"id\":8870,\"make_model_id\":84,\"year\":2020,\"name\":\"XSE\",\"description\":\"XSE 4dr Sedan AWD (2.5L 4cyl 8A)\",\"msrp\":31405,\"invoice\":28578,\"created\":\"2023-06-29T21:00:02-04:00\",\"modified\":\"2023-06-29T21:00:02-04:00\",\"make_model\":{\"id\":84,\"make_id\":22,\"name\":\"Camry\",\"make\":{\"id\":22,\"name\":\"Toyota\"}},\"make_model_submodel\":{\"id\":73509,\"oem_make_model_id\":4779,\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"submodel\":\"XSE\"}}]},\"trims\":null,\"engines\":null,\"bodies\":null}"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "Sedan",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": null,
+        "displacement": 2.5,
+        "doors": 4,
+        "drivetrain": "FWD",
+        "engineCode": null,
+        "engineDescription": "2.5L I4",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Unleaded",
+        "horsepower": null,
+        "make": "Toyota",
+        "model": "Camry",
+        "mpgCity": 28,
+        "mpgCombined": 32,
+        "mpgHighway": 39,
+        "packages": [
+          "50 State Emissions",
+          "Special Color",
+          "Panoramic Glass Roof",
+          "Two-Tone Midnight Black Metallic Roof"
+        ],
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "XSE",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"fullVIN\",\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"trim\":\"XSE\",\"body_type\":\"Sedan\",\"vehicle_type\":\"Car\",\"transmission\":\"Automatic\",\"drivetrain\":\"FWD\",\"fuel_type\":\"Unleaded\",\"engine\":\"2.5L I4\",\"engine_size\":2.5,\"doors\":4,\"cylinders\":4,\"made_in\":\"USA\",\"overall_height\":\"57.9\",\"overall_length\":\"192.7\",\"overall_width\":\"72.4\",\"std_seating\":\"5\",\"highway_mpg\":39,\"city_mpg\":28,\"powertrain_type\":\"Combustion\"},\"neovin\":{\"vin\":\"4T1K61AK6LU317285\",\"squish_vin\":\"4T1K61AK_LU\",\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"vehicle_type\":\"Car\",\"listing_confidence\":\"mc_build_specs\",\"trim\":\"XSE\",\"trim_confidence\":\"mc_build_specs|cf_heading|exact_match\",\"version\":\"2.5 Auto XSE\",\"version_confidence\":\"single|bs|price|exact_match\",\"transmission\":\"Automatic\",\"transmission_confidence\":\"mc_build_specs|orig|exact_match\",\"transmission_description\":\"Automatic With Manual Mode Trans\",\"record_confidence\":95,\"record_source\":\"build_specs\",\"drivetrain\":\"FWD\",\"powertrain_type\":\"Combustion\",\"engine\":\"2.5L I4\",\"fuel_type\":\"Unleaded\",\"doors\":4,\"body_type\":\"Sedan\",\"width\":72.4,\"height\":57.9,\"length\":192.7,\"city_mpg\":28,\"highway_mpg\":39,\"manufacturer_code\":\"2548\",\"msrp\":29875,\"msrp_label\":\"oem_msrp\",\"mc_msrp\":34291,\"oem_msrp\":34291,\"original_msrp\":34321,\"delivery_charges\":955,\"installed_options_msrp\":1985,\"combined_msrp\":32815,\"interior_color\":{\"code\":\"LB30\",\"name\":\"Cockpit Red Leather\",\"msrp\":\"\",\"confidence\":\"1.0\",\"base\":\"Red\"},\"exterior_color\":{\"code\":\"2PS\",\"name\":\"Wind Chill/Midnight Black\",\"msrp\":\"500\",\"confidence\":\"1.0\",\"base\":\"White\"},\"country\":\"USA\",\"seating_capacity\":5,\"combined_mpg\":32,\"rating\":{\"safety\":{\"front\":5,\"side\":0,\"overall\":5},\"rollover\":0,\"roof_strength\":\"Good\"},\"warranty\":{\"total\":{\"duration\":36,\"distance\":36000},\"powertrain\":{\"duration\":60,\"distance\":60000},\"anti_corrosion\":{\"duration\":60,\"distance\":9999999},\"roadside_assistance\":{\"duration\":24,\"distance\":9999999}},\"options_packages\":\"FE,PC,PR,TX\",\"installed_options_details\":[{\"code\":\"FE\",\"name\":\"50 State Emissions\",\"msrp\":\"0\",\"type\":\"O\",\"confidence\":\"High\",\"verified\":null,\"rule\":\"Unspecified\",\"sale_price\":\"0\"},{\"code\":\"PC\",\"name\":\"Special Color\",\"msrp\":\"425\",\"type\":\"O\",\"confidence\":\"High\",\"verified\":false,\"rule\":\"Excludes\",\"sale_price\":\"425\"},{\"code\":\"PR\",\"name\":\"Panoramic Glass Roof\",\"msrp\":\"1060\",\"type\":\"O\",\"confidence\":\"High\",\"verified\":null,\"rule\":\"Unspecified\",\"sale_price\":\"1060\"},{\"code\":\"TX\",\"name\":\"Two-Tone Midnight Black Metallic Roof\",\"msrp\":\"500\",\"type\":\"O\",\"confidence\":\"High\",\"verified\":false,\"rule\":\"Excludes\",\"sale_price\":\"500\"}],\"features\":{\"PR\":[{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Glass Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Front Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"One-Touch Opening Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Remote Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sliding Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sunshade Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Tilting Sunroof-Front\"}],\"PC\":[{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Multi-Coat Paint\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Pearl\"}],\"TX\":[{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Two-Tone Paint\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Metallic\"}],\"STANDARD\":[{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"ABS Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes-4\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Ventilated Disc Brakes-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Electronic Brake Distribution\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Electronic Hand Brake\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Automatic Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning-Number of Zones\",\"description\":\"Dual Zone Air Conditioning\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbags-Number Of\",\"description\":\"10 Airbags\"},{\"category\":\"Suspension\",\"feature_type\":\"Alternate Suspension Type\",\"description\":\"Sport Suspension\"},{\"category\":\"Interior\",\"feature_type\":\"Ambient Lighting\",\"description\":\"Ambient Lighting\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti Collision System\",\"description\":\"Activates Brake Lights\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti Collision System\",\"description\":\"Automatic Braking\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti Collision System\",\"description\":\"Brakes At Low Speed\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti Collision System\",\"description\":\"Pedestrian & Cyclist Avoidance System\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti Collision System\",\"description\":\"Visual/Acoustic Warning\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti-Theft Protection\",\"description\":\"Anti-Theft Protection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Mobile Integration\",\"description\":\"Apps Control\"},{\"category\":\"Infotainment\",\"feature_type\":\"Mobile Integration\",\"description\":\"Android Auto\"},{\"category\":\"Infotainment\",\"feature_type\":\"Mobile Integration\",\"description\":\"Apple Carplay\"},{\"category\":\"Infotainment\",\"feature_type\":\"Mobile Integration\",\"description\":\"Mobile Integration\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio-CD Player\",\"description\":\"CD Player-Reads MP3\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio-CD Player\",\"description\":\"CD Player-In Dash\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio system\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Digital Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"RDS Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Satellite Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Built-in Apps\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio System\",\"description\":\"Premium Brand Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Blind Spot Monitor\",\"description\":\"Active Without Turn Signal\"},{\"category\":\"Exterior\",\"feature_type\":\"Body Style\",\"description\":\"Short Wheelbase\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brake Assist\",\"description\":\"Brake Assist\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Light\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Garage Door Opener\",\"description\":\"Coming Home Device\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Garage Door Opener\",\"description\":\"Garage Door Opener\"},{\"category\":\"Infotainment\",\"feature_type\":\"Connection To Entertainment Devices\",\"description\":\"AUX Jack Front\"},{\"category\":\"Infotainment\",\"feature_type\":\"Connection To Entertainment Devices\",\"description\":\"Front USB Connection\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-NHTSA\",\"description\":\"Frontal Crash Rating-5\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-NHTSA\",\"description\":\"Rollover Rating-5\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-NHTSA\",\"description\":\"Side Impact-5\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-NHTSA\",\"description\":\"Standard-NHTSA\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Moderate Overlap Front Test-Good\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Rear Crash Protect/Head Restraint Rating-Good\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Roof Strength Test-Good\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Side Impact-Good\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Small Overlap Front - Driver-Good\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Standard-IIHS\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Crash Test Results-IIHS\",\"description\":\"Top Safety Pick Status-TSP Plus\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Cruise Control\",\"description\":\"Adaptive Cruise Control\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Cruise Control\",\"description\":\"Cruise Control\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Auto Highbeam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Infotainment\",\"feature_type\":\"Display Screen\",\"description\":\"Display Screen-Dashboard Center 1\"},{\"category\":\"Infotainment\",\"feature_type\":\"Display Screen\",\"description\":\"Display Screen-Dashboard Center 1 (8 in)\"},{\"category\":\"Infotainment\",\"feature_type\":\"Display Screen\",\"description\":\"Touch Screen-Dashboard Center 1\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Turn Signal In Mirror\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Type\",\"description\":\"Passenger Door-Front Hinged\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Type\",\"description\":\"Rear Driver Door-Front Hinged\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Type\",\"description\":\"Rear Passenger Door-Front Hinged\"},{\"category\":\"Transmission\",\"feature_type\":\"Driven Wheels\",\"description\":\"FWD\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Driver Modes\",\"description\":\"Selectable Driver Modes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Driver Modes\",\"description\":\"Driver Modes Includes Engine Mapping\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Suspension\",\"description\":\"Electronic Traction Control\"},{\"category\":\"Engine\",\"feature_type\":\"Engine Configuration\",\"description\":\"In-Line\"},{\"category\":\"Engine\",\"feature_type\":\"Engine Displacement (Liters)\",\"description\":\"Engine Displacement (2.5 Liters)\"},{\"category\":\"Engine\",\"feature_type\":\"Engine Cylinders\",\"description\":\"4-Cyl\"},{\"category\":\"Exterior\",\"feature_type\":\"Exterior Door Handles\",\"description\":\"Body Color Exterior Door Handles\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Intelligent Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Knee Airbags\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Rear Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": "In-Line",
+        "bodyType": "Sedan/Saloon",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "In-Line",
+        "displacement": 2.5,
+        "doors": 4,
+        "drivetrain": "4x2",
+        "engineCode": "A25A-FKS",
+        "engineDescription": "A25A-FKS",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 205,
+        "make": "TOYOTA",
+        "model": "Camry",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": null,
+        "transSpeeds": null,
+        "transType": null,
+        "trim": "XSE",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 4T1K61AK6LU317285\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"\",\"AdaptiveCruiseControl\":\"Standard\",\"AdaptiveDrivingBeam\":\"Standard\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"All Rows\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"1st Row (Driver and Passenger)\",\"AirBagLocSeatCushion\":\"\",\"AirBagLocSide\":\"All Rows\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"Not Applicable\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"\",\"BodyCabType\":\"Not Applicable\",\"BodyClass\":\"Sedan/Saloon\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"Standard\",\"CIB\":\"Standard\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"2487\",\"DisplacementCI\":\"152\",\"DisplacementL\":\"2.5\",\"Doors\":\"4\",\"DriveType\":\"4x2\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"In-Line\",\"EngineCycles\":\"4\",\"EngineCylinders\":\"4\",\"EngineHP\":\"205\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"Toyota\",\"EngineModel\":\"A25A-FKS\",\"EntertainmentSystem\":\"CD + Stereo\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"Standard\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"GVWR_to\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"KeylessIgnition\":\"\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"Standard\",\"LaneKeepSystem\":\"Standard\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"TOYOTA\",\"MakeID\":\"448\",\"Manufacturer\":\"TOYOTA MOTOR MANUFACTURING, KENTUCKY, INC.\",\"ManufacturerId\":\"1088\",\"Model\":\"Camry\",\"ModelID\":\"2469\",\"ModelYear\":\"2020\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"4-door sedan, hardtop\",\"NCSAMake\":\"Toyota\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"Camry\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"PORT+DIRECT\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"Standard\",\"PlantCity\":\"GEORGETOWN\",\"PlantCompanyName\":\"Toyota Motor Manufacturing, Kentucky, Inc.\",\"PlantCountry\":\"UNITED STATES (USA)\",\"PlantState\":\"KENTUCKY\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"2\",\"Seats\":\"5\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"AXVA70L/GSV70L/AXVH70L\",\"Series2\":\"\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"\",\"TransmissionStyle\":\"\",\"Trim\":\"XSE\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"4T1K61AK6LU317285\",\"ValveTrainDesign\":\"Dual Overhead Cam (DOHC)\",\"VehicleDescriptor\":\"4T1K61AK*LU\",\"VehicleType\":\"PASSENGER CAR\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"111.20\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"\",\"WheelSizeRear\":\"\",\"WheelieMitigation\":\"\",\"Wheels\":\"4\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "I",
+        "bodyType": "Sedan",
+        "brakeType": "4-Wheel Disc",
+        "camType": "DOHC",
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "I-4",
+        "displacement": 2.5,
+        "doors": 4,
+        "drivetrain": "4x2",
+        "engineCode": "STDEN",
+        "engineDescription": "2.5L I-4 DOHC 16-Valve",
+        "frontRotorDia": 12,
+        "frontTirePressure": 35,
+        "frontTireSize": "235/40R19",
+        "fuelType": "Gasoline",
+        "horsepower": 206,
+        "make": "Toyota",
+        "model": "Camry",
+        "mpgCity": 27,
+        "mpgCombined": 31,
+        "mpgHighway": 38,
+        "packages": [],
+        "rearRotorDia": 11.1,
+        "rearTirePressure": 35,
+        "rearTireSize": "235/40R19",
+        "steeringType": null,
+        "transDescription": "8 speed automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "XSE",
+        "wheelTorque": 76,
+        "year": 2020
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"4T1K61AK6LU317285\",\"year\":2020,\"make\":\"Toyota\",\"model\":\"Camry\",\"trim\":\"XSE\",\"style\":\"4dr Front-Wheel Drive Sedan Automatic\",\"trim_and_style\":\"XSE 4dr Front-Wheel Drive Sedan Automatic\",\"summary\":\"The 2020 Toyota Camry XSE comes equipped with a powerful Dynamic Force 2.5L I-4 206hp engine, paired with an 8-speed automatic transmission with overdrive. Safety is a top priority with this vehicle, featuring 4-wheel anti-lock brakes (ABS), side seat mounted airbags, curtain 1st and 2nd row overhead airbags, rear side-impact airbag, driver and passenger knee airbag, and an airbag occupancy sensor. Enjoy optimal comfort with automatic air conditioning and cruise control. The Camry XSE also boasts 19\\\" aluminum wheels and cutting-edge technology such as Full-Speed Range Dynamic Radar Cruise Control (DRCC) distance pacing, ABS, driveline traction control, and electronic stability.\",\"price\":{\"base_msrp\":\"30,005\",\"delivery_charges\":\"995\",\"invoice_price\":\"27,304\",\"total_price\":\"31,000\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Midsize Car\",\"rear_door_type\":\"\",\"body_type\":\"Sedan\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,895\",\"unit\":\"mm\"},{\"value\":\"192.72\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,839\",\"unit\":\"mm\"},{\"value\":\"72.4\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"72.4\",\"unit\":\"in\"},{\"value\":\"1,838.96\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,445\",\"unit\":\"mm\"},{\"value\":\"56.89\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"62.2\",\"unit\":\"in\"},{\"value\":\"1,579.88\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"62.6\",\"unit\":\"in\"},{\"value\":\"1,590.04\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,824\",\"unit\":\"mm\"},{\"value\":\"111.18\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"2,843\",\"unit\":\"l\"},{\"value\":\"100.4\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"15.1\",\"unit\":\"cu.ft\"},{\"value\":\"427.59\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"973\",\"unit\":\"mm\"},{\"value\":\"38.3\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"965\",\"unit\":\"mm\"},{\"value\":\"38\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,466\",\"unit\":\"mm\"},{\"value\":\"57.7\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,415\",\"unit\":\"mm\"},{\"value\":\"55.7\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,069\",\"unit\":\"mm\"},{\"value\":\"42.1\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"965\",\"unit\":\"mm\"},{\"value\":\"38\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"428\",\"unit\":\"l\"},{\"value\":\"15\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"428\",\"unit\":\"l\"},{\"value\":\"15\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"3,395\",\"unit\":\"lb\"},{\"value\":\"1,539.68\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"3,395\",\"unit\":\"lb\"},{\"value\":\"1,539.68\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"926.1\",\"unit\":\"lb\"},{\"value\":\"420\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"38\",\"unit\":\"ft\"},{\"value\":\"11.58\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"19\",\"unit\":\"ft\"},{\"value\":\"5.79\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"12\",\"unit\":\"in\"},{\"value\":\"304.8\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"11.1\",\"unit\":\"in\"},{\"value\":\"281.94\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"19 X 8 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"19 X 8 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"Compact \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"76\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":2.5,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"6,600\",\"unit\":\"rpm\"},{\"value\":\"206\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"5,000\",\"unit\":\"rpm\"},{\"value\":\"186\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"87.4\",\"unit\":\"mm\"},{\"value\":\"3.44\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"103.4\",\"unit\":\"mm\"},{\"value\":\"4.07\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"16\",\"unit\":\"gal\"},{\"value\":\"60.56\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"352\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"512\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Rack-Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"4-Wheel Disc\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"\",\"max_alternator_capacity_amps\":\"\"}},{\"suspensions\":{\"front_type\":\"Strut\",\"front_type_extended\":\"Strut\",\"rear_type\":\"Multi-Link\",\"rear_type_extended\":\"Multi-Link\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"Steel\"}},{\"tires\":{\"front_tire_size\":\"235/40R19\",\"rear_tire_size\":\"235/40R19\",\"spare_tire_size\":\"Compact\",\"type\":\"All-season\",\"front_tire_pressure_psi\":\"35\",\"rear_tire_pressure_psi\":\"35\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Regular Unleaded I-4\",\"code\":\"STDEN\",\"cylinders_configuration\":\"I-4\",\"displacement\":2500,\"compressor\":\"\",\"drivetype\":\"4x2\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"16\",\"compression\":\"13\",\"variable_intake_manifold\":\"\",\"block_type\":\"I\",\"block_material\":\"\",\"cam_type\":\"DOHC\"}},{\"fuel\":{\"type\":\"Gasoline\",\"standard_fuel_economy_type\":\"\",\"grade\":\"Regular Unleaded\"}},{\"mpg\":{\"epa_city_economy\":\"27\",\"epa…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "SE 4dr Sedan (2.5L 4cyl 8A)",
+          "marketcheck": "XSE",
+          "nhtsa": "XSE",
+          "vdb": "XSE"
+        }
+      },
+      {
+        "field": "engineCode",
+        "values": {
+          "nhtsa": "A25A-FKS",
+          "vdb": "STDEN"
+        }
+      },
+      {
+        "field": "cylindersConfiguration",
+        "values": {
+          "carapi": "In-Line",
+          "nhtsa": "In-Line",
+          "vdb": "I-4"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "carapi": "4x2",
+          "marketcheck": "FWD",
+          "nhtsa": "4x2",
+          "vdb": "4x2"
+        }
+      },
+      {
+        "field": "horsepower",
+        "values": {
+          "carapi": "205",
+          "nhtsa": "205",
+          "vdb": "206"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "carapi": "Sedan/Saloon",
+          "marketcheck": "Sedan",
+          "nhtsa": "Sedan/Saloon",
+          "vdb": "Sedan"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "present",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "absent",
+          "transSpeeds": "absent",
+          "transType": "absent",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 43,
+          "present": 15,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 32,
+          "present": 6,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "present",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 49,
+          "present": 17,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "absent",
+          "transSpeeds": "absent",
+          "transType": "absent",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 43,
+          "present": 15,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 84,
+          "present": 16,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "present",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 86,
+          "present": 30,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "4T1K61AK6LU317285",
+  "year": 2020
+}

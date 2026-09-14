@@ -52,6 +52,7 @@ export type InspectionField =
   | {
       type: "measure";
       key: string;
+      phase: InspectionPhase;
       label: string;
       default: string;
       unit: string;
@@ -66,6 +67,7 @@ export type InspectionField =
   | {
       type: "tri";
       key: string;
+      phase: InspectionPhase;
       label: string;
       default: TriValue;
       section?: string;
@@ -73,6 +75,7 @@ export type InspectionField =
   | {
       type: "descriptors";
       key: string;
+      phase: InspectionPhase;
       label: string;
       options: string[];
       default: string[];
@@ -81,6 +84,7 @@ export type InspectionField =
   | {
       type: "text";
       key: string;
+      phase: InspectionPhase;
       label: string;
       default?: string;
       /** Only surfaced on the vehicle's first Otopair visit. */
@@ -90,6 +94,7 @@ export type InspectionField =
   | {
       type: "select";
       key: string;
+      phase: InspectionPhase;
       label: string;
       options: SelectOption[];
       default?: string;
@@ -101,6 +106,7 @@ export type InspectionField =
        *  represent which of several lights is lit. */
       type: "lights";
       key: string;
+      phase: InspectionPhase;
       label: string;
       section?: string;
     };
@@ -144,6 +150,21 @@ export type FieldUnavailableStatus =
   | "not_visible"
   | "not_applicable";
 export type InspectionPhotoTag = "general" | "rotor_stamp";
+
+/**
+ * Which half of the split inspection a field belongs to.
+ *
+ * "pre" — the ground-level pre-check: car on the ground, hood and doors open,
+ *   eyes and hands only, plus the one tool exception (a pocket tread-depth or
+ *   tire-pressure gauge). Runs before Start Job, off the clock.
+ * "mpi" — anything needing the lift, a wheel off, or any other measuring tool
+ *   (micrometer, load tester). Runs after Start Job so the mechanic is paid
+ *   for measurement time, and so job status matches physical reality.
+ *
+ * Spec v2 §1.1. This is a property of the physical act, never of the booked
+ * service — required-ness is the per-service axis (isFieldRequiredForZone).
+ */
+export type InspectionPhase = "pre" | "mpi";
 
 export type ZoneId =
   | "FL"
@@ -251,16 +272,20 @@ export function classifyInspectionMeasure(
   field: Extract<InspectionField, { type: "measure" }>,
   measures: Record<string, string | undefined>,
   select: Record<string, string | number | undefined>,
+  /** Resolved rotor minimum for THIS corner (from effectiveRotorRef). Used only
+   *  for rotor fields; when omitted the field's static ref is used. */
+  rotorRefOverride?: number | null,
 ): ClassifyResult {
   const raw = measures[field.key];
   if (field.classify !== "rotor") {
     return classify(field.classify, raw, field.ref);
   }
+  const ref = rotorRefOverride != null ? rotorRefOverride : field.ref;
   const entered = parseFloat(String(raw ?? ""));
-  if (!Number.isFinite(entered)) return classify("rotor", raw, field.ref);
+  if (!Number.isFinite(entered)) return classify("rotor", raw, ref);
   const unit: RotorUnit = select.rotor_unit === "in" ? "in" : "mm";
   const millimeters = rotorValueToMicrometers(entered, unit) / 1000;
-  return classify("rotor", millimeters, field.ref);
+  return classify("rotor", millimeters, ref);
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +326,7 @@ function cornerFields(opts: {
     {
       type: "measure",
       key: "tread",
+      phase: "pre",
       label: "Tire tread depth",
       default: "",
       unit: '/32"',
@@ -312,6 +338,7 @@ function cornerFields(opts: {
     {
       type: "measure",
       key: "psi",
+      phase: "pre",
       label: "Tire air pressure",
       default: "",
       unit: "psi",
@@ -322,6 +349,7 @@ function cornerFields(opts: {
     {
       type: "tri",
       key: "wear",
+      phase: "pre",
       label: "Tire wear / overall condition",
       default: "g",
       section: "Tire",
@@ -329,6 +357,7 @@ function cornerFields(opts: {
     {
       type: "text",
       key: "tire_brand",
+      phase: "pre",
       label: "Tire brand",
       firstVisitOnly: true,
       section: "Tire",
@@ -336,6 +365,7 @@ function cornerFields(opts: {
     {
       type: "text",
       key: "tire_model",
+      phase: "pre",
       label: "Tire model",
       firstVisitOnly: true,
       section: "Tire",
@@ -343,6 +373,7 @@ function cornerFields(opts: {
     {
       type: "text",
       key: "tire_size",
+      phase: "pre",
       label: `Installed tire size (${opts.axle} axle)`,
       firstVisitOnly: true,
       section: "Tire",
@@ -350,6 +381,7 @@ function cornerFields(opts: {
     {
       type: "select",
       key: "run_flat",
+      phase: "pre",
       label: "Run-flat tire",
       options: [
         { value: "yes", label: "Yes" },
@@ -360,6 +392,7 @@ function cornerFields(opts: {
     {
       type: "select",
       key: "tire_type",
+      phase: "pre",
       label: "Tire type",
       options: TIRE_TYPE_OPTIONS,
       section: "Tire",
@@ -367,6 +400,7 @@ function cornerFields(opts: {
     {
       type: "tri",
       key: "brake_visual",
+      phase: "pre",
       label: "Brake visual state",
       default: "g",
       section: "Brakes · visual",
@@ -374,6 +408,7 @@ function cornerFields(opts: {
     {
       type: "measure",
       key: "pad_inner",
+      phase: "mpi",
       label: "Inner brake pad thickness",
       default: "",
       unit: "mm",
@@ -384,6 +419,7 @@ function cornerFields(opts: {
     {
       type: "measure",
       key: "pad_outer",
+      phase: "mpi",
       label: "Outer brake pad thickness",
       default: "",
       unit: "mm",
@@ -394,6 +430,7 @@ function cornerFields(opts: {
     {
       type: "select",
       key: "pad_method",
+      phase: "mpi",
       label: "Pad measurement method",
       options: [
         { value: "gauge", label: "Brake lining gauge" },
@@ -406,6 +443,7 @@ function cornerFields(opts: {
     {
       type: "select",
       key: "rotor_applicable",
+      phase: "mpi",
       label: "Applicable rotor present",
       options: [
         { value: "yes", label: "Yes" },
@@ -416,6 +454,7 @@ function cornerFields(opts: {
     {
       type: "measure",
       key: "rotor",
+      phase: "mpi",
       label: "Brake rotor thickness",
       default: "",
       unit: "mm",
@@ -427,6 +466,7 @@ function cornerFields(opts: {
     {
       type: "select",
       key: "rotor_tool",
+      phase: "mpi",
       label: "Rotor measurement tool",
       options: [
         { value: "micrometer", label: "Micrometer" },
@@ -438,23 +478,25 @@ function cornerFields(opts: {
     {
       type: "descriptors",
       key: "desc",
+      phase: "mpi",
       label: "Brake rotor surface issues",
       options: ["none", "scored", "pitted", "rusted", "warped", "grooved"],
       default: [],
       section: "Brakes · wheel off",
     },
-    { type: "tri", key: "caliper", label: "Caliper slides / boots", default: "g", section: "Brakes · wheel off" },
-    { type: "tri", key: "brake_hose", label: "Brake hose condition", default: "g", section: "Brakes · wheel off" },
+    { type: "tri", key: "caliper", phase: "mpi", label: "Caliper slides / boots", default: "g", section: "Brakes · wheel off" },
+    { type: "tri", key: "brake_hose", phase: "mpi", label: "Brake hose condition", default: "g", section: "Brakes · wheel off" },
     {
       type: "text",
       key: "pad_brand",
+      phase: "mpi",
       label: "Brake pad brand / type",
       firstVisitOnly: true,
       section: "Brakes · wheel off",
     },
-    { type: "tri", key: "steering_play", label: "Steering-linkage play", default: "g", section: "Lift · wheel off" },
-    { type: "tri", key: "ball_joint_play", label: "Ball-joint play", default: "g", section: "Lift · wheel off" },
-    { type: "tri", key: "wheel_bearing_play", label: "Wheel-bearing play", default: "g", section: "Lift · wheel off" },
+    { type: "tri", key: "steering_play", phase: "mpi", label: "Steering-linkage play", default: "g", section: "Lift · wheel off" },
+    { type: "tri", key: "ball_joint_play", phase: "mpi", label: "Ball-joint play", default: "g", section: "Lift · wheel off" },
+    { type: "tri", key: "wheel_bearing_play", phase: "mpi", label: "Wheel-bearing play", default: "g", section: "Lift · wheel off" },
   ];
 }
 
@@ -463,6 +505,37 @@ function cornerFields(opts: {
  */
 export const DEFAULT_FRONT_ROTOR_MIN = 23.0;
 export const DEFAULT_REAR_ROTOR_MIN = 8.0;
+
+/**
+ * Per-axle rotor minimum thickness (mm) for a specific vehicle — the
+ * enrichment-derived replace-at figure (nominal × 0.85, the 15%-wear
+ * threshold). Either axle may be null when enrichment couldn't source a
+ * nominal; grading then falls back to the static default baked into the field.
+ * See convex/vehicleEnrichment/utils/rotorSpecResource.deriveRotorMinMm.
+ */
+export type RotorMinByAxle = {
+  front?: number | null;
+  rear?: number | null;
+};
+
+/**
+ * The rotor minimum the inspection should grade a corner against: the
+ * per-vehicle enrichment minimum for that axle when known, otherwise the
+ * field's static fallback (DEFAULT_FRONT/REAR_ROTOR_MIN). Front corners read
+ * the front-axle minimum, rear corners the rear.
+ */
+export function effectiveRotorRef(
+  zoneId: ZoneId,
+  fieldRef: number | null | undefined,
+  rotorMin?: RotorMinByAxle | null,
+): number | null {
+  const fallback = typeof fieldRef === "number" ? fieldRef : null;
+  const isFront = zoneId === "FL" || zoneId === "FR";
+  const perVehicle = isFront ? rotorMin?.front : rotorMin?.rear;
+  return typeof perVehicle === "number" && Number.isFinite(perVehicle)
+    ? perVehicle
+    : fallback;
+}
 
 export const INSPECTION_NAV_ZONE_IDS: Exclude<ZoneId, "OWNER">[] = [
   "FL",
@@ -481,6 +554,15 @@ export function nextInspectionZoneAfterCompletion(zoneId: ZoneId) {
   return currentIndex < 0
     ? null
     : INSPECTION_NAV_ZONE_IDS[currentIndex + 1] ?? null;
+}
+
+/** Briefly show copy confirmation before opening the copied-to wheel. */
+export function scheduleCopyDestinationNavigation(
+  destination: CornerZoneId,
+  openZone: (zoneId: CornerZoneId) => void,
+) {
+  const timer = window.setTimeout(() => openZone(destination), 1_000);
+  return () => window.clearTimeout(timer);
 }
 
 export const INSPECTION_ZONES: InspectionZone[] = [
@@ -523,16 +605,17 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Engine bay",
     short: "Engine",
     fields: [
-      { type: "lights", key: "warning_lights", label: "Dashboard warning lights", section: "Every-visit checks" },
-      { type: "tri", key: "oil_condition", label: "Engine oil condition", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "oil_level", label: "Engine oil level", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "cool_condition", label: "Coolant condition", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "cool_level", label: "Coolant level", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "washer", label: "Washer-fluid level", default: "g", section: "Every-visit checks" },
-      { type: "select", key: "bf_level", label: "Brake fluid level", options: BF_LEVEL_OPTIONS, section: "Every-visit checks" },
+      { type: "lights", key: "warning_lights", phase: "pre", label: "Dashboard warning lights", section: "Every-visit checks" },
+      { type: "tri", key: "oil_condition", phase: "pre", label: "Engine oil condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "oil_level", phase: "pre", label: "Engine oil level", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "cool_condition", phase: "pre", label: "Coolant condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "cool_level", phase: "pre", label: "Coolant level", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "washer", phase: "pre", label: "Washer-fluid level", default: "g", section: "Every-visit checks" },
+      { type: "select", key: "bf_level", phase: "pre", label: "Brake fluid level", options: BF_LEVEL_OPTIONS, section: "Every-visit checks" },
       {
         type: "select",
         key: "bf_leak",
+        phase: "pre",
         label: "Any brake fluid leaks?",
         options: [
           { value: "no", label: "No" },
@@ -540,16 +623,17 @@ export const INSPECTION_ZONES: InspectionZone[] = [
         ],
         section: "Every-visit checks",
       },
-      { type: "tri", key: "bf_condition", label: "Brake fluid condition", default: "g", section: "Every-visit checks" },
-      { type: "tri", key: "trans", label: "Transmission fluid", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "ps", label: "Power steering fluid", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "af", label: "Engine air filter", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "cf", label: "Cabin air filter", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "belt", label: "Drive belts", default: "g", section: "Fluid & filter eye-check" },
-      { type: "tri", key: "hose", label: "Hoses", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "bf_condition", phase: "pre", label: "Brake fluid condition", default: "g", section: "Every-visit checks" },
+      { type: "tri", key: "trans", phase: "pre", label: "Transmission fluid", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "ps", phase: "pre", label: "Power steering fluid", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "af", phase: "pre", label: "Engine air filter", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "cf", phase: "pre", label: "Cabin air filter", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "belt", phase: "pre", label: "Drive belts", default: "g", section: "Fluid & filter eye-check" },
+      { type: "tri", key: "hose", phase: "pre", label: "Hoses", default: "g", section: "Fluid & filter eye-check" },
       {
         type: "measure",
         key: "batt",
+        phase: "mpi",
         label: "Battery load test",
         default: "",
         unit: "CCA",
@@ -558,14 +642,14 @@ export const INSPECTION_ZONES: InspectionZone[] = [
         hint: "vs rated CCA",
         section: "Battery & electrical",
       },
-      { type: "tri", key: "term", label: "Battery terminals / cables", default: "g", section: "Battery & electrical" },
+      { type: "tri", key: "term", phase: "pre", label: "Battery terminals / cables", default: "g", section: "Battery & electrical" },
       // Fluid specs — preserves the detailed fluids capture from the old form.
-      { type: "text", key: "oil_viscosity", label: "Engine oil viscosity", section: "Fluid specifications" },
-      { type: "text", key: "oil_type", label: "Engine oil type", section: "Fluid specifications" },
-      { type: "text", key: "coolant_type", label: "Coolant type", section: "Fluid specifications" },
-      { type: "text", key: "brake_fluid_type", label: "Brake fluid type", section: "Fluid specifications" },
-      { type: "text", key: "transmission_fluid_type", label: "Transmission fluid type", section: "Fluid specifications" },
-      { type: "text", key: "power_steering_fluid_type", label: "Power-steering fluid type", section: "Fluid specifications" },
+      { type: "text", key: "oil_viscosity", phase: "pre", label: "Engine oil viscosity", section: "Fluid specifications" },
+      { type: "text", key: "oil_type", phase: "pre", label: "Engine oil type", section: "Fluid specifications" },
+      { type: "text", key: "coolant_type", phase: "pre", label: "Coolant type", section: "Fluid specifications" },
+      { type: "text", key: "brake_fluid_type", phase: "pre", label: "Brake fluid type", section: "Fluid specifications" },
+      { type: "text", key: "transmission_fluid_type", phase: "pre", label: "Transmission fluid type", section: "Fluid specifications" },
+      { type: "text", key: "power_steering_fluid_type", phase: "pre", label: "Power-steering fluid type", section: "Fluid specifications" },
     ],
   },
   {
@@ -573,11 +657,11 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Underbody",
     short: "Underbody",
     fields: [
-      { type: "tri", key: "leaks", label: "Fluid leaks or drips", default: "g" },
-      { type: "tri", key: "cv", label: "Torn CV boots", default: "g" },
-      { type: "tri", key: "strut", label: "Leaking struts", default: "g" },
-      { type: "tri", key: "exh", label: "Exhaust leaks / broken hangers", default: "g" },
-      { type: "tri", key: "damage", label: "Undercarriage damage", default: "g" },
+      { type: "tri", key: "leaks", phase: "mpi", label: "Fluid leaks or drips", default: "g" },
+      { type: "tri", key: "cv", phase: "mpi", label: "Torn CV boots", default: "g" },
+      { type: "tri", key: "strut", phase: "mpi", label: "Leaking struts", default: "g" },
+      { type: "tri", key: "exh", phase: "mpi", label: "Exhaust leaks / broken hangers", default: "g" },
+      { type: "tri", key: "damage", phase: "mpi", label: "Undercarriage damage", default: "g" },
     ],
   },
   {
@@ -585,10 +669,10 @@ export const INSPECTION_ZONES: InspectionZone[] = [
     label: "Front · lights, glass, wipers",
     short: "Front",
     fields: [
-      { type: "tri", key: "lamp", label: "Headlights / hazards / tail", default: "g" },
-      { type: "tri", key: "glass", label: "Windshield — chips / cracks", default: "g" },
-      { type: "tri", key: "wipe", label: "Wiper blades", default: "g" },
-      { type: "tri", key: "horn", label: "Horn", default: "g" },
+      { type: "tri", key: "lamp", phase: "pre", label: "Headlights / hazards / tail", default: "g" },
+      { type: "tri", key: "glass", phase: "pre", label: "Windshield — chips / cracks", default: "g" },
+      { type: "tri", key: "wipe", phase: "pre", label: "Wiper blades", default: "g" },
+      { type: "tri", key: "horn", phase: "pre", label: "Horn", default: "g" },
     ],
   },
   {
@@ -606,12 +690,71 @@ export const INSPECTION_ZONES_BY_ID: Record<ZoneId, InspectionZone> =
     return acc;
   }, {} as Record<ZoneId, InspectionZone>);
 
+/**
+ * Phase for the handful of keys that are persisted and validated but never
+ * appear in a zone's `fields` array, so they have no `phase` of their own:
+ * the detailed-tread sub-readings and the rotor unit toggle. The tread rows
+ * are pocket-gauge work (pre); the rotor unit belongs to the micrometer
+ * reading it formats (mpi).
+ */
+const VIRTUAL_FIELD_PHASES: Record<string, InspectionPhase> = {
+  tread_inner: "pre",
+  tread_center: "pre",
+  tread_outer: "pre",
+  tread_mode: "pre",
+  rotor_unit: "mpi",
+};
+
+const FIELD_PHASE_BY_ZONE: Record<string, InspectionPhase> = (() => {
+  const map: Record<string, InspectionPhase> = {};
+  for (const zone of INSPECTION_ZONES) {
+    for (const field of zone.fields) map[`${zone.id}.${field.key}`] = field.phase;
+  }
+  return map;
+})();
+
+/**
+ * Whether a field is asked during the given phase. Unknown keys answer `true`:
+ * the OWNER zone is built at runtime from skipped onboarding questions (never
+ * blocking, and answerable at either phase), and answering `false` for a key
+ * we don't recognise would silently drop it from both phases.
+ */
+export function isFieldInPhase(
+  zoneId: ZoneId,
+  fieldKey: string,
+  phase: InspectionPhase,
+): boolean {
+  const known =
+    FIELD_PHASE_BY_ZONE[`${zoneId}.${fieldKey}`] ?? VIRTUAL_FIELD_PHASES[fieldKey];
+  return known === undefined || known === phase;
+}
+
+/**
+ * Zone completion, scoped to a phase. A corner marked complete during the
+ * pre-check has not been seen with the wheel off, so it must re-open — and
+ * re-gate — when the MPI phase starts. Rows written before the phase split
+ * carry no `donePhase`; they were pre-check completions.
+ */
+export function isZoneDoneForPhase(
+  zone: ZoneState | undefined,
+  phase: InspectionPhase,
+): boolean {
+  if (!zone?.done) return false;
+  return (zone.donePhase ?? "pre") === phase;
+}
+
 // ---------------------------------------------------------------------------
 // Inspection runtime state
 // ---------------------------------------------------------------------------
 
 export type ZoneState = {
   done: boolean;
+  /** Which phase the zone was marked complete in. A corner finished during the
+   *  pre-check is NOT complete for the MPI phase — its wheel-off rows haven't
+   *  been seen yet — so the phase gates compare against this rather than
+   *  reading `done` alone. Absent on rows written before the phase split;
+   *  those are pre-check completions. See isZoneDoneForPhase. */
+  donePhase?: InspectionPhase;
   /** Local edit marker; only explicit user edits should block save/submit. */
   dirty: boolean;
   measures: Record<string, string>;
@@ -651,6 +794,62 @@ export type InspectionState = {
   template_version: string;
   zones: Partial<Record<ZoneId, ZoneState>>;
 };
+
+// ---------------------------------------------------------------------------
+// NYS state-inspection safety items
+// ---------------------------------------------------------------------------
+// Some inspection fields are state-mandated safety items: a red (non-functional)
+// reading is an *automatic* NYS inspection failure, and the item is mandatory —
+// the mechanic can't mark it "unavailable" to skip it. A failed item also drives
+// the two-stage repair flow (diagnose before a replacement can be approved).
+//
+// Locked Aug 2026 (parking-lot item): horn. A non-functional horn fails the
+// state inspection; a 15–20 min diagnostic (fuse / clock spring / horn unit)
+// must clear before a horn replacement can be approved. Extend this list as
+// more items are locked.
+export const NYS_SAFETY_FIELDS: ReadonlyArray<{ zoneId: ZoneId; fieldKey: string }> = [
+  { zoneId: "FRT", fieldKey: "horn" },
+];
+
+export function isNysSafetyField(zoneId: ZoneId, fieldKey: string): boolean {
+  return NYS_SAFETY_FIELDS.some(
+    (f) => f.zoneId === zoneId && f.fieldKey === fieldKey,
+  );
+}
+
+/**
+ * NYS safety items are mandatory — they can never be marked
+ * unavailable/skipped. Everything else stays skippable as before.
+ */
+export function canMarkFieldUnavailable(zoneId: ZoneId, fieldKey: string): boolean {
+  return !isNysSafetyField(zoneId, fieldKey);
+}
+
+/**
+ * NYS state-inspection failures currently present in the inspection: safety
+ * items read as red (non-functional). Drives the "automatic inspection
+ * failure" banner and the diagnostic-first repair flow. Empty array = the
+ * safety items inspected so far all pass.
+ */
+export function deriveStateInspectionFailures(
+  state: InspectionState,
+): Array<{ zoneId: ZoneId; fieldKey: string; label: string }> {
+  const out: Array<{ zoneId: ZoneId; fieldKey: string; label: string }> = [];
+  for (const { zoneId, fieldKey } of NYS_SAFETY_FIELDS) {
+    const zone = state.zones[zoneId];
+    if (!zone) continue;
+    // Mandatory items can't be marked unavailable, but guard against legacy
+    // data that has a status set anyway.
+    if (zone.statuses[fieldKey]) continue;
+    if (zone.tri[fieldKey] === "r") {
+      const field = INSPECTION_ZONES_BY_ID[zoneId]?.fields.find(
+        (f) => f.key === fieldKey,
+      );
+      out.push({ zoneId, fieldKey, label: field?.label ?? fieldKey });
+    }
+  }
+  return out;
+}
 
 export function emptyZoneState(): ZoneState {
   return {
@@ -713,6 +912,10 @@ export type BrakeAxleScope = {
 };
 
 export type ZoneCompletionContext = {
+  /** Which half of the split inspection is being filled. Derived from the
+   *  booking's MPI sub-state — the server derives it from stored state and
+   *  never trusts a client-supplied value (see convex/bookings.ts). */
+  phase: InspectionPhase;
   serviceNames: string[];
   brakeScope: BrakeAxleScope;
   tireReplacementPositions?: ReadonlyArray<CornerZoneId>;
@@ -757,26 +960,63 @@ export const OPPOSITE_CORNER: Record<CornerZoneId, CornerZoneId> = {
  * position-specific evidence — as are done/dirty, which patchInspectionZone
  * re-derives (it clears `done` so the copied-into corner is re-reviewed).
  */
-export function cornerCopyPatch(source: ZoneState): Partial<ZoneState> {
+/**
+ * What mirrors between corners, per phase (Spec v2 §5).
+ *
+ * Only identity — facts about the wheel or the part fitted, which really are
+ * the same on the sibling corner. Every measured or observed value is
+ * excluded: copying them is how a staggered setup ended up recorded as 40/43
+ * psi on both axles (Aug 20), and how one corner's pad reading could stand in
+ * for a corner nobody looked at.
+ */
+export const CORNER_COPY_FIELDS: Record<InspectionPhase, readonly string[]> = {
+  // Sidewall identity. Never tread, psi or wear — those are per-wheel readings.
+  pre: ["tire_brand", "tire_model", "tire_size", "tire_type", "run_flat"],
+  // "Nobody runs pads on one side", so brand/type mirrors. rotor_applicable is
+  // a vehicle fact (disc vs drum), not a reading, and it gates the rotor rows —
+  // without it the sibling corner shows no rotor fields until re-answered.
+  // Never pad_inner, pad_outer, rotor or desc.
+  mpi: ["pad_brand", "rotor_applicable"],
+};
+
+/**
+ * Deep-copies the mirrorable values from a corner into a zone patch for
+ * {@link patchInspectionZone}, scoped to the phase being filled. Photos are
+ * excluded — they're position-specific evidence — as are done/dirty, which
+ * patchInspectionZone re-derives (it clears `done` so the copied-into corner
+ * is re-reviewed).
+ */
+export function cornerCopyPatch(
+  source: ZoneState,
+  destination: ZoneState,
+  phase: InspectionPhase,
+): Partial<ZoneState> {
+  const allowed = new Set(CORNER_COPY_FIELDS[phase]);
+  // patchInspectionZone shallow-merges, so each bucket must be returned whole:
+  // the destination's own readings underneath, the copied fields laid over.
+  const merge = <T,>(
+    into: Record<string, T>,
+    from: Record<string, T>,
+  ): Record<string, T> => ({
+    ...into,
+    ...Object.fromEntries(
+      Object.entries(from).filter(([key]) => allowed.has(key)),
+    ),
+  });
   return {
-    measures: { ...source.measures },
-    tri: { ...source.tri },
+    measures: merge(destination.measures, source.measures),
+    tri: merge(destination.tri, source.tri),
     descriptors: Object.fromEntries(
-      Object.entries(source.descriptors).map(([key, values]) => [
-        key,
-        [...values],
-      ]),
+      Object.entries(merge(destination.descriptors, source.descriptors)).map(
+        ([key, values]) => [key, [...values]],
+      ),
     ),
-    text: { ...source.text },
-    select: { ...source.select },
-    statuses: { ...source.statuses },
-    methods: { ...source.methods },
-    lights: Object.fromEntries(
-      Object.entries(source.lights).map(([key, entries]) => [
-        key,
-        entries.map((entry) => ({ ...entry })),
-      ]),
-    ),
+    text: merge(destination.text, source.text),
+    select: merge(destination.select, source.select),
+    // Carry a skip marker only for a field that was itself copied, so "not
+    // visible" on the source can't silently mark an uncopied row answered.
+    statuses: merge(destination.statuses, source.statuses),
+    methods: merge(destination.methods, source.methods),
   };
 }
 
@@ -914,6 +1154,9 @@ export function isFieldRequiredForZone(
   fieldKey: string,
   context: ZoneCompletionContext,
 ): boolean {
+  // Out-of-phase fields can never block. Placed ahead of every service rule so
+  // one guard covers validation, the server re-check and the UI rail alike.
+  if (!isFieldInPhase(zoneId, fieldKey, context.phase)) return false;
   if (CORNER_IDS.includes(zoneId as CornerZoneId)) {
     const flags = getBookingServiceFlags(context.serviceNames);
     const isReplacementTire =
@@ -995,6 +1238,7 @@ export function isFieldApplicableToZone(
   fieldKey: string,
   context: ZoneCompletionContext,
 ): boolean {
+  if (!isFieldInPhase(zoneId, fieldKey, context.phase)) return false;
   if (!CORNER_IDS.includes(zoneId as CornerZoneId)) return true;
   // The whole identity block appears together on a tier-5 corner. Applicability
   // can't delegate to isFieldRequiredForZone any more: since D3 the optional
@@ -1040,8 +1284,10 @@ export function patchInspectionZone(
     next.dirty = false;
   } else if (patch.done === false) {
     next.dirty = zoneHasInput(zoneId, next);
+    next.donePhase = undefined;
   } else {
     next.done = false;
+    next.donePhase = undefined;
     next.dirty = true;
   }
   return {
@@ -1192,6 +1438,11 @@ export function validateZoneForCompletion(
   }
 
   for (const field of zone.fields) {
+    // A field from the other half of the inspection isn't on screen, so the
+    // mechanic can't act on a complaint about it — neither a "required" block
+    // nor a bad-value rejection. Its value is still persisted and gets checked
+    // when its own phase comes around.
+    if (field.phase !== validationContext.phase) continue;
     const required = isFieldRequiredForZone(zoneId, field.key, validationContext);
     if (zs.statuses[field.key]) continue;
     if (field.type === "measure") {
@@ -1271,11 +1522,31 @@ export function validateZoneForCompletion(
  * services. All other zones remain optional but available. The OWNER zone is
  * never blocking (the mechanic may not have answers for skipped questions).
  */
-export function requiredZonesForBooking(serviceNames: string[]): ZoneId[] {
-  const flags = getBookingServiceFlags(serviceNames);
-  const required = new Set<ZoneId>([...CORNER_IDS, "ENG", "FRT"]);
-  if (flags.hasWheelAlignment) required.add("UND");
-  return INSPECTION_ZONES.filter((z) => required.has(z.id)).map((z) => z.id);
+/**
+ * The zones that must be marked complete before the given phase's gate opens.
+ *
+ * Derived rather than listed: a zone is required for a phase when it has at
+ * least one field that is both in that phase and required for this booking.
+ * That keeps the zone set and the field set from drifting — change
+ * isFieldRequiredForZone and this follows automatically.
+ *
+ * In practice: pre = the four corners (tread/pressure/wear/brake visual are
+ * always required) + ENG + FRT; UND never appears, being wholly MPI. MPI =
+ * only the corners whose wheel actually comes off, ENG when a battery load
+ * test is booked, and UND on a wheel alignment. FRT never appears in MPI.
+ */
+export function requiredZonesForBooking(
+  context: ZoneCompletionContext,
+): ZoneId[] {
+  return INSPECTION_ZONES.filter(
+    (zone) =>
+      !zone.dynamic &&
+      zone.fields.some(
+        (field) =>
+          field.phase === context.phase &&
+          isFieldRequiredForZone(zone.id, field.key, context),
+      ),
+  ).map((zone) => zone.id);
 }
 
 // ---------------------------------------------------------------------------
@@ -1288,7 +1559,7 @@ export type Findings = { attention: Finding[]; monitor: Finding[] };
 
 export function gatherFindings(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; rotorMin?: RotorMinByAxle | null },
 ): Findings {
   const attention: Finding[] = [];
   const monitor: Finding[] = [];
@@ -1306,7 +1577,11 @@ export function gatherFindings(
         if (s === "r") attention.push({ label: field.label, zone: zone.label });
         else if (s === "y") monitor.push({ label: field.label, zone: zone.label });
       } else if (field.type === "measure" && field.classify) {
-        const res = classifyInspectionMeasure(field, zs.measures, zs.select);
+        const rotorRef =
+          field.classify === "rotor"
+            ? effectiveRotorRef(zone.id, field.ref, opts?.rotorMin)
+            : undefined;
+        const res = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
         if (res.lvl === "bad")
           attention.push({ label: `${field.label} · ${res.txt}`, zone: zone.label });
         else if (res.lvl === "warn")
@@ -1359,6 +1634,7 @@ function minDefined(a: number | null, b: number | null): number | null {
 function deriveRotorCondition(
   state: InspectionState,
   context?: ZoneCompletionContext,
+  rotorMin?: RotorMinByAxle | null,
 ): RotorCondition | null {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   let worst: RotorCondition | null = null;
@@ -1383,7 +1659,12 @@ function deriveRotorCondition(
     let rotorInspected = false;
     if (rotorField && rotorField.type === "measure" && !zs.statuses.rotor) {
       rotorInspected = (zs.measures.rotor ?? "").trim() !== "";
-      const res = classifyInspectionMeasure(rotorField, zs.measures, zs.select);
+      const res = classifyInspectionMeasure(
+        rotorField,
+        zs.measures,
+        zs.select,
+        effectiveRotorRef(id, rotorField.ref, rotorMin),
+      );
       if (res.lvl === "bad") bump("needs_attention");
     }
     const desc = zs.statuses.desc ? [] : (zs.descriptors["desc"] ?? []);
@@ -1403,6 +1684,9 @@ export type DerivePrejobOptions = {
   flaggedVehicleSpecs?: boolean;
   nextMechanicTip?: string | null;
   completionContext?: ZoneCompletionContext;
+  /** Per-vehicle rotor minimums so the derived rotor_condition grades against
+   *  the enrichment figure, not the static fallback. */
+  rotorMin?: RotorMinByAxle | null;
 };
 
 export function derivePrejobFromInspection(
@@ -1595,7 +1879,7 @@ export function derivePrejobFromInspection(
             front_pad_mm: frontPad,
             rear_pad_mm: rearPad,
             // Unavailable visual results stay unknown rather than becoming green.
-            rotor_condition: deriveRotorCondition(state, opts.completionContext),
+            rotor_condition: deriveRotorCondition(state, opts.completionContext, opts.rotorMin),
             rotor_thickness: Object.keys(rotorThickness).length
               ? rotorThickness
               : null,
@@ -1717,6 +2001,7 @@ function measuresAcrossCorners(
   state: InspectionState,
   key: string,
   onlyDone = false,
+  rotorMin?: RotorMinByAxle | null,
 ): { values: number[]; worst: GradeLevel; min: number | null; ref?: number | null } {
   const corners: ZoneId[] = ["FL", "FR", "RL", "RR"];
   const rank: Record<GradeLevel, number> = { none: 0, ok: 1, warn: 2, bad: 3 };
@@ -1744,7 +2029,11 @@ function measuresAcrossCorners(
         : entered;
     values.push(value);
     min = min == null ? value : Math.min(min, value);
-    const res = classifyInspectionMeasure(field, zs.measures, zs.select);
+    const rotorRef =
+      field.classify === "rotor"
+        ? effectiveRotorRef(id, field.ref, rotorMin)
+        : undefined;
+    const res = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
     if (rank[res.lvl] > rank[worst]) worst = res.lvl;
   }
   return { values, worst, min };
@@ -1786,10 +2075,11 @@ const URGENCY_RANK: Record<SuggestedRecUrgency, number> = {
  */
 export function deriveSuggestedRecommendations(
   state: InspectionState,
-  opts?: { onlyCompletedZones?: boolean },
+  opts?: { onlyCompletedZones?: boolean; rotorMin?: RotorMinByAxle | null },
 ): SuggestedRecommendation[] {
   const raw: RawSuggestion[] = [];
   const onlyDone = !!opts?.onlyCompletedZones;
+  const rotorMin = opts?.rotorMin ?? null;
   const gradeUrgency = (lvl: GradeLevel): SuggestedRecUrgency | null =>
     lvl === "bad" ? "soon" : lvl === "warn" ? "within_3_months" : null;
   const triUrgency = (v: TriValue | undefined): SuggestedRecUrgency | null =>
@@ -1818,7 +2108,7 @@ export function deriveSuggestedRecommendations(
     });
   }
 
-  const rotor = measuresAcrossCorners(state, "rotor", onlyDone);
+  const rotor = measuresAcrossCorners(state, "rotor", onlyDone, rotorMin);
   const rotorUrg = gradeUrgency(rotor.worst);
   if (rotorUrg) {
     raw.push({
@@ -2069,13 +2359,30 @@ export function deriveSuggestedRecommendations(
       { key: "lamp", label: "Headlight / Hazard / Tail Light Repair" },
       { key: "glass", label: "Windshield Repair" },
       { key: "wipe", label: "Wiper Blade Replacement" },
-      { key: "horn", label: "Horn Repair" },
     ];
     for (const f of frtFields) {
       const urg = frt.statuses[f.key] ? null : triUrgency(frt.tri[f.key]);
       if (urg) {
         raw.push({ groupKey: f.key, match: [], label: f.label, urgency: urg, reason: `${f.label} flagged on eye-check` });
       }
+    }
+    // Horn is an NYS safety item on a two-stage repair flow (locked Aug 2026):
+    // a non-functional horn is an automatic state-inspection failure, and a
+    // 15–20 min diagnostic (fuse / clock spring / horn unit) must clear before
+    // a replacement service can be approved. So the recommendation is always
+    // the diagnostic — never a direct horn swap.
+    const hornTri = frt.statuses.horn ? undefined : frt.tri.horn;
+    if (hornTri === "r" || hornTri === "y") {
+      raw.push({
+        groupKey: "horn",
+        match: [],
+        label: "Horn Diagnostic",
+        urgency: hornTri === "r" ? "soon" : "within_3_months",
+        reason:
+          hornTri === "r"
+            ? "Non-functional horn — automatic NYS inspection failure. 15–20 min diagnostic (fuse / clock spring / horn unit) required before a replacement service can be approved."
+            : "Intermittent horn — 15–20 min diagnostic (fuse / clock spring / horn unit) before any replacement.",
+      });
     }
   }
 
@@ -2261,7 +2568,10 @@ export function specPrefillFromPassport(
   return out;
 }
 
-export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
+export function formatZonesForPdf(
+  storedZones: StoredZone[],
+  opts?: { rotorMin?: RotorMinByAxle | null },
+): PdfZone[] {
   const byId = new Map(storedZones.map((z) => [z.zone_id, z]));
   const out: PdfZone[] = [];
 
@@ -2285,10 +2595,15 @@ export function formatZonesForPdf(storedZones: StoredZone[]): PdfZone[] {
       if (field.type === "measure") {
         const raw = stored.measures?.[field.key];
         if (raw == null || String(raw).trim() === "") continue;
+        const rotorRef =
+          field.classify === "rotor"
+            ? effectiveRotorRef(zone.id, field.ref, opts?.rotorMin)
+            : undefined;
         const res = classifyInspectionMeasure(
           field,
           stored.measures ?? {},
           stored.select ?? {},
+          rotorRef,
         );
         const unit =
           field.classify === "rotor"

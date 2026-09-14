@@ -199,6 +199,27 @@ export async function discoverPriceUrls(
     }
   }
 
+  // ── Leg 1b: RockAuto part search, by URL construction ─────────────────
+  //
+  // Service-brand SKUs (ACDelco 17D/18A-series on legacy GM cars — the 2008
+  // G6 finding, Aug 27 2026) are indexed by NO dealer storefront: RP stores
+  // key on the automaker's part numbers, and open-web retailers list the
+  // same product under sibling SKU systems ("171-1004" for 17D1004), so the
+  // OEM echo correctly refuses their pages. RockAuto's partsearch URL
+  // answers by the exact SKU, deterministically, no search call spent.
+  // Placed AFTER the validated stores but BEFORE the open web: on the first
+  // live pass the SERP filled all three extractor slots with junk (a Yamaha
+  // site and a phone-parts store outranked everything for "10-9825") and
+  // the deterministic URL never got a slot. The standard extractor still
+  // gauges the page — this adds a candidate, never a shortcut around
+  // verification.
+  if (urls.length < 3 && args.oem) {
+    urls.push(
+      `https://www.rockauto.com/en/partsearch/?partnum=${encodeURIComponent(args.oem)}`,
+    );
+    seenDomains.add("rockauto.com");
+  }
+
   // ── Leg 2: open web ───────────────────────────────────────────────────
   let results: Array<{ url: string }> = [];
   try {
@@ -231,5 +252,6 @@ export async function discoverPriceUrls(
       console.warn(`[priceDiscovery] fallback query failed for "${args.oem}" (non-fatal): ${e}`);
     }
   }
+
   return urls;
 }

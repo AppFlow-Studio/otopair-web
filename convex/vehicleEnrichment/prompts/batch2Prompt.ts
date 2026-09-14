@@ -88,10 +88,11 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   rear_brake_pad_oem: "OEM rear brake pad part number",
   rotor_front_oem: "OEM front brake rotor part number",
   rotor_rear_oem: "OEM rear brake rotor part number",
-  // NOTE: the rotor DISCARD MINIMUM is deliberately NOT gap-fillable here — this
-  // contract has no slot for the verbatim label, and an unlabelled minimum is
-  // indistinguishable from a nominal (see getNullFields in v3pipeline.ts). Only
-  // the nominal, which is never graded against, may be filled from this path.
+  // NOTE: the rotor DISCARD MINIMUM is not an extraction field at all — the
+  // stored minimum is DERIVED as a 15% wear threshold off the nominal
+  // (rotorSpecResource.deriveRotorMinMm). The nominal below is therefore the
+  // load-bearing number: it must be the NEW thickness, never a worn or
+  // minimum figure, or the derived threshold inherits the error.
   rotor_front_nominal_thickness_mm:
     "Front brake rotor NOMINAL (new) thickness in mm — the SECOND number in a '330x22mm' size string (the first is the diameter). This is NOT a minimum: do not return a discard/minimum figure here, and never derive one from it.",
   rotor_rear_nominal_thickness_mm:
@@ -164,11 +165,9 @@ export const FIELD_DESCRIPTIONS: Record<string, string> = {
   brake_wear_sensor_front_oem: "OEM front brake pad wear sensor part number (electronic wear-indicator vehicles only; null otherwise)",
   brake_wear_sensor_rear_oem: "OEM rear brake pad wear sensor part number (electronic wear-indicator vehicles only; null otherwise)",
 
-  // Rotor DISCARD minimums — normally excluded from gap-fill re-asks entirely
-  // (GAP_FILL_EXCLUDED_FIELDS: this contract has no slot for the verbatim
-  // label). Descriptions exist for completeness; they repeat the guardrail.
-  rotor_front_min_thickness_mm: "Front brake rotor DISCARD/minimum thickness in mm — ONLY a value the source explicitly labels minimum/discard; never derive it from the nominal",
-  rotor_rear_min_thickness_mm: "Rear brake rotor DISCARD/minimum thickness in mm — same rule as front; null when the rear axle has drum brakes",
+  // Rotor DISCARD minimums are NOT extraction fields (Aug 2026): the minimum
+  // is derived as a 15% wear threshold off the nominal. No descriptions here —
+  // a description would invite a re-ask path to resurrect the hunt.
 
   // Per-part retail prices (per-unit, current sale price — see system rule 1)
   oil_change_price: "Total OEM parts cost in USD for an oil change (filter + drain plug gasket + oil at capacity)",

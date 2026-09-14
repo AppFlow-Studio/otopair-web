@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Fingerprint,
   Gauge,
   History,
   MessageSquare,
@@ -729,6 +730,40 @@ function EmailCopyButton({ email }: { email: string }) {
   );
 }
 
+// Pill button that copies the whole vehicle-config block (YMMT · engine/spec ·
+// VIN) so the mechanic can paste it straight into a parts-sourcing system —
+// mirrors the "Copy details" affordance on the quote-submission panel.
+function CopyConfigButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* clipboard unavailable — ignore */
+        }
+      }}
+      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      title="Copy vehicle config"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" /> Copied
+        </>
+      ) : (
+        <>
+          <Copy className="h-3 w-3" aria-hidden="true" /> Copy config
+        </>
+      )}
+    </button>
+  );
+}
+
 export function VehiclePassportCard({
   job,
   passport,
@@ -759,6 +794,19 @@ export function VehiclePassportCard({
     passport?.passport.modifications?.has_mods === true
       ? (passport.passport.modifications.affected_systems ?? [])
       : null;
+
+  // Vehicle config — YMMT + engine/trim/chassis spec, resolved server-side.
+  // `vehicle_spec_label` bundles the engine code (e.g. "2.4L K24Z6 · EX trim ·
+  // RW1 chassis"); the copy block is a self-contained paste for parts sourcing.
+  const configTitle = passport?.vehicle_label ?? job.vehicle;
+  const configSpecLabel = passport?.vehicle_spec_label ?? null;
+  const configCopyText = [
+    configTitle,
+    ...(configSpecLabel ? [configSpecLabel] : []),
+    ...(job.vin ? [`VIN: ${job.vin}`] : []),
+  ]
+    .filter(Boolean)
+    .join("\n");
 
   return (
     <div className={cn("space-y-4", className)}>
@@ -836,6 +884,38 @@ export function VehiclePassportCard({
 
       {/* Flat sections */}
       <div className="divide-y divide-border">
+        {/* Vehicle config — copy-paste YMMT + engine code + VIN */}
+        <div className="py-3.5">
+          <div className="mb-2 flex items-center justify-between gap-3">
+            <span className="inline-flex items-center gap-2.5">
+              <Fingerprint className="h-4 w-4 text-primary" aria-hidden="true" />
+              <span className="text-sm font-semibold text-foreground">
+                Vehicle config
+              </span>
+            </span>
+            <CopyConfigButton text={configCopyText} />
+          </div>
+          <p className="text-sm font-medium text-foreground">{configTitle}</p>
+          {configSpecLabel ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {configSpecLabel}
+            </p>
+          ) : (
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Engine / trim spec not available yet
+            </p>
+          )}
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+              VIN
+            </span>
+            <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+              {job.vin || "—"}
+            </span>
+            {job.vin ? <VinCopyButton vin={job.vin} /> : null}
+          </div>
+        </div>
+
         {/* Customer */}
         <div className="py-3.5">
           <div className="mb-2 flex items-center justify-between gap-3">

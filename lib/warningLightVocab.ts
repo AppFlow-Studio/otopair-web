@@ -8,8 +8,11 @@
  * last touched it:
  *   • LEGACY sentinel-prefixed — `[status, ...lights]` where `status` is one of
  *     `no_all_clear | check_engine | other | not_sure | different_light`.
- *     Written by the onboarding stepper (convex/vehicles.ts) +
- *     autoCompleteNewVehicleOnboarding.
+ *     Written by the onboarding stepper (convex/vehicles.ts). Historical
+ *     note: `autoCompleteNewVehicleOnboarding` also used to write
+ *     `["no_all_clear"]` on the driver's behalf; that was removed by
+ *     Quick Check v2 §3 — the lights question is now always asked, for
+ *     every car.
  *   • FLAT code-set — a bare list of light-id codes, no sentinel. Written by the
  *     quarterly check-in (convex/checkin.ts) and by Oto (convex/vehicleTruth.ts
  *     applyVehicleTruth, which raw-appends).
@@ -307,7 +310,24 @@ const ALIAS_TO_CANONICAL: Readonly<Record<string, string>> = {
   TPMS: "tpms",
   tire_pressure: "tpms",
   oil: "oil_pressure",
-  not_sure: "not_sure_which",
+  // `not_sure` is deliberately NOT here. It is the stepper's answer to "Any
+  // dashboard warning lights on right now?" — i.e. "I don't know whether one
+  // is on" — and it is a bare sentinel like `no_all_clear`, not a light.
+  //
+  // It used to alias to `not_sure_which`, which is a different answer
+  // entirely: that one comes from the FOLLOW-UP question ("Which warning
+  // lights are on?", reached only after the user says "Yes, something else")
+  // where the option reads "I'm not sure which one". There the user has
+  // confirmed a light IS on. Conflating the two turned "I haven't checked"
+  // into an active fault: a NOW-tier "Unidentified warning light" card, a
+  // 6-point reserve penalty, and a weight-25 overdue row in the Upkeep
+  // average. Ahmad, 2026-08-27: "I put 'not sure' when asked if there is a
+  // warning light. I didn't say there's one that I can't identify."
+  //
+  // The backend already read it this way — convex/vehicles.ts filters
+  // `not_sure` out alongside `no_all_clear` and `different_light`, and
+  // convex/oto/vehicleHealth.ts documents `["not_sure"]` as a sentinel array.
+  // This alias was the only place that disagreed.
 };
 
 /**

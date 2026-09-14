@@ -68,6 +68,29 @@ const WARNING_LIGHT_LABELS: Record<string, string> = {
   not_sure_which: "Unspecified warning light (driver wasn't sure which)",
 };
 
+/**
+ * Coerce a `lastServiceDate`-shaped value into a numeric epoch. The schema
+ * allows `v.optional(v.union(v.string(), v.number()))`, and downstream
+ * arithmetic (`now - record.lastServiceDate` in utils/maintenanceStatus.ts)
+ * turns a stray string into NaN, which silently scores the row as "no
+ * anchor" — a serviced car reading as unknown, no throw and no log. Applied
+ * at THIS boundary so every reader downstream can assume `number | undefined`.
+ *
+ * Non-numeric-but-parseable strings ("2026-08-31", ISO 8601, etc.) become
+ * their epoch equivalent; unparseable strings + non-finite numbers return
+ * undefined (same shape "no anchor" as omitting the field entirely).
+ *
+ * Mirrors the fix mobile applied at their hook boundary (2026-08-31). No
+ * writer on web actually stores a string today, so this is cheap insurance
+ * against a future writer + against Convex accepting either shape by design.
+ */
+function toEpoch(value: string | number | undefined): number | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? undefined : parsed;
+}
+
 function describeKnownIssues(knownIssues?: string[]): string[] | undefined {
   // Format- and vocabulary-agnostic: canonicalWarningLights scans the whole
   // array (so the flat Oto/check-in shape works, not just the sentinel-prefixed
@@ -388,11 +411,18 @@ async function loadVehicleContextForUser(
   const recPenalty = (owner as any).health_score_rec_penalty as number | undefined;
 
   // Normalize raw records into the builder's input shape. lastServiceDate is
-  // stored as union(string|number); we only feed numeric values forward.
+  // stored as union(string|number) — schema says so and Convex will accept
+  // either — so the boundary must coerce every incoming value into a number
+  // before it reaches `now - record.lastServiceDate` arithmetic downstream.
+  //
+  // Mobile terminal, 2026-08-31: silent NaN scoring is the specific hazard —
+  // a string date propagates NaN into the ratio and the item scores as
+  // "no anchor" (unknown) with no throw and no log. The previous coarse
+  // `typeof === "number"` guard silently dropped parseable date strings
+  // too, treating them as no-record. `toEpoch` promotes them properly.
   const recordInputs: MaintenanceRecordInput[] = records.map((rec) => ({
     type: rec.type,
-    lastServiceDate:
-      typeof rec.lastServiceDate === "number" ? rec.lastServiceDate : undefined,
+    lastServiceDate: toEpoch(rec.lastServiceDate ?? undefined),
     lastServiceMileage: rec.lastServiceMileage ?? undefined,
     customInputs: (rec.customInputs ?? undefined) as Record<string, unknown> | undefined,
     confirmedHealthyAt: rec.confirmedHealthyAt ?? undefined,

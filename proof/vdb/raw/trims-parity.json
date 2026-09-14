@@ -1,0 +1,283 @@
+[
+  {
+    "make": "Chevrolet",
+    "model": "Silverado 1500",
+    "providers": {
+      "carapi": {
+        "bodiesCount": 42,
+        "engineSpecFields": [
+          "size",
+          "cylinders",
+          "horsepower_hp",
+          "engine_type",
+          "cam_type",
+          "valves",
+          "fuel_type",
+          "drive_type",
+          "transmission"
+        ],
+        "enginesCount": 42,
+        "note": "OEM YMMT catalog: /trims/v2 + /engines/v2 + /bodies/v2 (free, 2015–2020)",
+        "ok": true,
+        "sampleTrims": [
+          "Custom 4dr Double Cab SB (4.3L 6cyl 6A)",
+          "Custom 4dr Double Cab 4WD SB (4.3L 6cyl 6A)",
+          "Custom 4dr Crew Cab 5.8 ft. SB (4.3L 6cyl 6A)",
+          "Custom 4dr Crew Cab 6.6 ft. SB (4.3L 6cyl 6A)",
+          "Custom 4dr Crew Cab 4WD 5.8 ft. SB (4.3L 6cyl 6A)",
+          "Custom 4dr Crew Cab 4WD 6.6 ft. SB (4.3L 6cyl 6A)"
+        ],
+        "trimsCount": 42
+      },
+      "marketcheck": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "trims from live-inventory facets (market, not OEM); engine specs + options only per-VIN via NeoVIN",
+        "ok": true,
+        "sampleTrims": [
+          "LT (1514)",
+          "RST (934)",
+          "Custom (637)",
+          "LTZ (618)",
+          "LT Trail Boss (445)",
+          "High Country (327)",
+          "Work Truck (251)",
+          "Custom Trail Boss (23)"
+        ],
+        "trimsCount": 8
+      },
+      "vdb": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "no YMMT trims/ymm-specs endpoint in our plan (400 record-not-found on doc example); trim + options only per-VIN via advanced-vin-decode",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      }
+    },
+    "year": 2019
+  },
+  {
+    "make": "Toyota",
+    "model": "Camry",
+    "providers": {
+      "carapi": {
+        "bodiesCount": 17,
+        "engineSpecFields": [
+          "size",
+          "cylinders",
+          "horsepower_hp",
+          "engine_type",
+          "cam_type",
+          "valves",
+          "fuel_type",
+          "drive_type",
+          "transmission"
+        ],
+        "enginesCount": 17,
+        "note": "OEM YMMT catalog: /trims/v2 + /engines/v2 + /bodies/v2 (free, 2015–2020)",
+        "ok": true,
+        "sampleTrims": [
+          "LE 4dr Sedan (2.5L 4cyl gas/electric hybrid CVT)",
+          "SE 4dr Sedan (2.5L 4cyl gas/electric hybrid CVT)",
+          "XLE 4dr Sedan (2.5L 4cyl gas/electric hybrid CVT)",
+          "L 4dr Sedan (2.5L 4cyl 8A)",
+          "LE 4dr Sedan (2.5L 4cyl 8A)",
+          "LE 4dr Sedan AWD (2.5L 4cyl 8A)"
+        ],
+        "trimsCount": 17
+      },
+      "marketcheck": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "trims from live-inventory facets (market, not OEM); engine specs + options only per-VIN via NeoVIN",
+        "ok": true,
+        "sampleTrims": [
+          "SE (688)",
+          "LE (540)",
+          "XSE (350)",
+          "XLE (124)",
+          "SE Nightshade (69)",
+          "TRD (10)",
+          "L (2)"
+        ],
+        "trimsCount": 7
+      },
+      "vdb": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "no YMMT trims/ymm-specs endpoint in our plan (400 record-not-found on doc example); trim + options only per-VIN via advanced-vin-decode",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      }
+    },
+    "year": 2020
+  },
+  {
+    "make": "Honda",
+    "model": "Accord",
+    "providers": {
+      "carapi": {
+        "bodiesCount": 13,
+        "engineSpecFields": [
+          "size",
+          "cylinders",
+          "horsepower_hp",
+          "engine_type",
+          "cam_type",
+          "valves",
+          "fuel_type",
+          "drive_type",
+          "transmission"
+        ],
+        "enginesCount": 13,
+        "note": "OEM YMMT catalog: /trims/v2 + /engines/v2 + /bodies/v2 (free, 2015–2020)",
+        "ok": true,
+        "sampleTrims": [
+          "EX 4dr Sedan (1.5L 4cyl Turbo CVT)",
+          "EX-L 4dr Sedan (1.5L 4cyl Turbo CVT)",
+          "EX-L 4dr Sedan (2.0L 4cyl Turbo 10A)",
+          "4dr Sedan (2.0L 4cyl gas/electric hybrid CVT)",
+          "EX 4dr Sedan (2.0L 4cyl gas/electric hybrid CVT)",
+          "EX-L 4dr Sedan (2.0L 4cyl gas/electric hybrid CVT)"
+        ],
+        "trimsCount": 13
+      },
+      "marketcheck": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "trims from live-inventory facets (market, not OEM); engine specs + options only per-VIN via NeoVIN",
+        "ok": true,
+        "sampleTrims": [
+          "Sport (927)",
+          "LX (471)",
+          "EX-L (220)",
+          "EX (170)",
+          "Touring (96)",
+          "Hybrid Touring (80)",
+          "Hybrid EX-L (48)",
+          "Hybrid EX (41)"
+        ],
+        "trimsCount": 9
+      },
+      "vdb": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "no YMMT trims/ymm-specs endpoint in our plan (400 record-not-found on doc example); trim + options only per-VIN via advanced-vin-decode",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      }
+    },
+    "year": 2019
+  },
+  {
+    "make": "Ford",
+    "model": "F-150",
+    "providers": {
+      "carapi": {
+        "bodiesCount": 44,
+        "engineSpecFields": [
+          "size",
+          "cylinders",
+          "horsepower_hp",
+          "engine_type",
+          "cam_type",
+          "valves",
+          "fuel_type",
+          "drive_type",
+          "transmission"
+        ],
+        "enginesCount": 44,
+        "note": "OEM YMMT catalog: /trims/v2 + /engines/v2 + /bodies/v2 (free, 2015–2020)",
+        "ok": true,
+        "sampleTrims": [
+          "King Ranch 4dr SuperCrew 5.5 ft. SB (5.0L 8cyl 10A)",
+          "King Ranch 4dr SuperCrew 6.5 ft. SB (5.0L 8cyl 10A)",
+          "King Ranch 4dr SuperCrew 4WD 5.5 ft. SB (5.0L 8cyl 10A)",
+          "King Ranch 4dr SuperCrew 4WD 6.5 ft. SB (5.0L 8cyl 10A)",
+          "Lariat 4dr SuperCab 6.5 ft. SB (2.7L 6cyl Turbo 10A)",
+          "Lariat 4dr SuperCab 8 ft. LB (2.7L 6cyl Turbo 10A)"
+        ],
+        "trimsCount": 44
+      },
+      "marketcheck": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "trims from live-inventory facets (market, not OEM); engine specs + options only per-VIN via NeoVIN",
+        "ok": true,
+        "sampleTrims": [
+          "XLT (3585)",
+          "XL (1616)",
+          "Lariat (1265)",
+          "Raptor (663)",
+          "Platinum (413)",
+          "King Ranch (223)",
+          "Limited (120)",
+          "Police Responder (4)"
+        ],
+        "trimsCount": 8
+      },
+      "vdb": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "no YMMT trims/ymm-specs endpoint in our plan (400 record-not-found on doc example); trim + options only per-VIN via advanced-vin-decode",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      }
+    },
+    "year": 2018
+  },
+  {
+    "make": "BMW",
+    "model": "3 Series",
+    "providers": {
+      "carapi": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "OEM YMMT catalog: /trims/v2 + /engines/v2 + /bodies/v2 (free, 2015–2020)",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      },
+      "marketcheck": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "trims from live-inventory facets (market, not OEM); engine specs + options only per-VIN via NeoVIN",
+        "ok": true,
+        "sampleTrims": [
+          "328i (411)",
+          "320i (174)",
+          "340i (69)",
+          "335i (11)",
+          "328d (9)",
+          "330e (6)",
+          "Base (1)"
+        ],
+        "trimsCount": 7
+      },
+      "vdb": {
+        "bodiesCount": 0,
+        "engineSpecFields": [],
+        "enginesCount": 0,
+        "note": "no YMMT trims/ymm-specs endpoint in our plan (400 record-not-found on doc example); trim + options only per-VIN via advanced-vin-decode",
+        "ok": false,
+        "sampleTrims": [],
+        "trimsCount": 0
+      }
+    },
+    "year": 2016
+  }
+]

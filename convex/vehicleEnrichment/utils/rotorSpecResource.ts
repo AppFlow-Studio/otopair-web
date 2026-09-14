@@ -1,34 +1,32 @@
 // =============================================================================
 // convex/vehicleEnrichment/utils/rotorSpecResource.ts
 //
-// Tiered resolution of the OEM rotor DISCARD minimum, per axle.
+// Per-axle rotor minimum-thickness resolution — DERIVED, not searched.
 //
-//   already_present     an existing value stands (a human's always wins)
-//   sourced_markdown    deterministic parse of cached page markdown
-//   sourced_manual      the manufacturer's OWN manual, via the claim ledger —
-//                       graded oem_spec, not warn-capped
-//   sourced_catalog     an aftermarket disc catalogue (Brembo/Centric) —
-//                       graded oem_spec_flagged, warn-capped
-//   derived_from_nominal ESTIMATE from the nominal — env-gated OFF by default
-//   nominal_only        nominal found, no minimum: honest gap, not an estimate
-//   not_applicable      drum axle (na_role_keys) — never alarm on it
-//   never_found         nothing at all
+// Policy (operator decision, Aug 2026, validated in mechanic interviews):
+// the pipeline sources the NOMINAL (new/original OEM) thickness only, and the
+// replace-at minimum is computed as a 15% wear threshold off that original —
+// past ~15% loss of original thickness, thermal dissipation degrades and
+// braking goes spongy (Abdul confirmed both the method and the physics).
 //
-// Deliberately NOT a research tier. roleResource.ts's Haiku web-search loop
-// exists because a missing part number makes a service unquotable; a missing
-// rotor minimum only makes the inspection honestly ungraded, and the number is
-// cast on the rotor hat where the mechanic is already standing. A human with a
-// source link — or a mechanic with a flashlight — is both cheaper and more
-// trustworthy than a second model call for a number that decides whether we
-// tell a customer their brakes need replacing.
+//   minimum = nominal × 0.85, rounded to 0.1 mm
 //
-// `sourced_manual` (Aug 2026) is not a departure from that. It costs no new
-// search and no new model call: the manual is already resolved, already stored,
-// and already being read for capacities — the specs pass simply asks four more
-// questions of a document it was opening anyway, and the answer is filed as
-// evidence through the same ledger as everything else. What made rotor
-// minimums sparse was never the absence of a research rung; it was that the one
-// document class which actually prints a discard limit was never asked.
+// This replaces the old min-hunting ladder (markdown discard parse → manual /
+// catalogue claims → gated 1.5 mm allowance). That ladder was measured near
+// useless — the dedicated research rung found 0 published minimums across ~30
+// vehicles, and retail pages print `330x22mm` nominals, essentially never a
+// discard limit. The one number the web reliably publishes IS the nominal, so
+// that is the only number enrichment asks for now.
+//
+//   already_present     an existing value stands (a human's always wins, and
+//                       previously stored minimums — human, manual-sourced, or
+//                       derived — are never churned)
+//   derived_15pct       minimum computed from a known nominal (the standard)
+//   nominal_only        kill-switch path only: derivation disabled, nominal
+//                       known, no minimum stored
+//   nominal_missing     no nominal from any source — THE gap this module can
+//                       report now; closing it means finding the nominal
+//   not_applicable      drum axle (na_role_keys) / no rotor fitment
 //
 // Pure module: no ctx, no network. Shared by the pipeline finalize and the
 // backfill action so the two can never drift.
@@ -40,24 +38,29 @@ export type RotorAxle = "front" | "rear";
 
 export type RotorMinOutcome =
   | "already_present"
-  | "sourced_markdown"
-  /** Discard minimum read from an aftermarket disc catalogue (Brembo et al.)
-   *  via the claim ledger. A real, label-verified discard spec — but for THAT
-   *  manufacturer's disc, which can differ from the OEM rotor's stamped
-   *  minimum (Camry XV70 front: Brembo 25mm vs Toyota 26mm). Ranks below
-   *  markdown-sourced OEM text and is graded as an estimate, never a clean
-   *  spec. See the quality stamp in resolveRotorMinimums. */
-  | "sourced_catalog"
-  /** Discard minimum read from the MANUFACTURER'S OWN manual via the claim
-   *  ledger. This is the authoritative number for the OEM rotor — the same
-   *  figure cast on the hat — so unlike `sourced_catalog` it is graded a clean
-   *  `oem_spec` and is not warn-capped. Outranks the catalogue tier and is
-   *  outranked only by an OEM page's own discard text and by a human. */
-  | "sourced_manual"
-  | "derived_from_nominal"
+  | "derived_15pct"
   | "nominal_only"
-  | "not_applicable"
-  | "never_found";
+  | "nominal_missing"
+  | "not_applicable";
+
+/**
+ * Wear threshold from mechanic interviews (Aug 2026): once a rotor has lost
+ * ~15% of its original thickness, thermal dissipation degrades and braking
+ * goes spongy. The stored minimum is therefore 85% of the OEM original.
+ */
+export const ROTOR_WEAR_LIMIT_FRACTION = 0.15;
+
+/** vehicle_configs.rotor_*_min_quality for a derived minimum. The inspection
+ *  grades against it exactly like a spec (classify() compares measured vs ref);
+ *  the passport source tag still reports it as computed, never as the
+ *  manufacturer's printed figure. */
+export const DERIVED_15PCT_QUALITY = "derived_15pct_wear";
+
+/** min = nominal × (1 − 15%), to 0.1 mm. Exported so the validator and any
+ *  display code share one arithmetic. */
+export function deriveRotorMinMm(nominalMm: number): number {
+  return Math.round(nominalMm * (1 - ROTOR_WEAR_LIMIT_FRACTION) * 10) / 10;
+}
 
 /** Values a human supplied. The pipeline must never overwrite these. */
 const HUMAN_QUALITIES: ReadonlySet<string> = new Set([
@@ -108,68 +111,39 @@ export function computeAxlesWithFitment(
 }
 
 /**
- * Derivation is OFF unless explicitly enabled
- * (`npx convex env set ENRICHMENT_ROTOR_MIN_DERIVE on`).
- *
- * The nominal-to-minimum allowance is NOT a universal constant — real specs run
- * roughly 1.0-3.0 mm and vary by manufacturer and by vented-vs-solid
- * construction — so any fleet-wide number is wrong on a meaningful share of
- * vehicles. Enable only once telemetry shows how often nominal fills and the
- * minimum doesn't.
+ * Derivation is the STANDARD — on unless explicitly killed
+ * (`npx convex env set ENRICHMENT_ROTOR_MIN_DERIVE off`). The flag survives
+ * only as the pipeline-reversibility kill switch.
  */
 export function rotorMinDeriveEnabled(): boolean {
   return (
-    String(process.env.ENRICHMENT_ROTOR_MIN_DERIVE ?? "").toLowerCase() === "on"
+    String(process.env.ENRICHMENT_ROTOR_MIN_DERIVE ?? "on").toLowerCase() !==
+    "off"
   );
 }
 
-/**
- * Conservative on purpose. A LARGER allowance produces a LOWER minimum, which
- * passes worn rotors — a safety failure. A smaller allowance produces a higher
- * minimum, which over-flags — but a derived minimum is warn-capped in
- * classify() and can never auto-suggest replacement, so that direction is
- * already contained. When only one error is survivable, take the contained one.
- */
-export const DERIVE_ALLOWANCE_MM = 1.5;
-
-/** A discard minimum reconciled from the claim ledger, per axle. Supplied only
- *  when the ledger reached a consensus; a conflict_tie must arrive as absent,
- *  because a tie means no value at all. */
+/** Nominal figures reconciled from the claim ledger, per axle. The minMm
+ *  field survives for compatibility with older claim rows but is no longer
+ *  consulted — minimums are derived, never sourced. */
 export type CatalogRotorClaim = {
   minMm?: number | null;
   nominalMm?: number | null;
-  /** Verbatim label the value was read under, e.g. "Min. thickness". */
+  /** Verbatim label the value was read under. */
   observedLabel?: string | null;
   sourceUrl?: string | null;
-  /**
-   * WHICH KIND of source won the ledger's consensus for this value.
-   *
-   * `"manual"` when the manufacturer's own documentation backed the winner —
-   * the caller reads `ClaimConsensus.families` for `owners_manual` — and
-   * `"catalog"` (the default, so existing callers are unchanged) for an
-   * aftermarket disc catalogue.
-   *
-   * This is not cosmetic. The two produce different STORED QUALITIES and
-   * therefore different behaviour in the inspection grader: a manual figure is
-   * `oem_spec` and can drive a replace recommendation, while a catalogue figure
-   * is `oem_spec_flagged` and is warn-capped because it is Brembo's spec for
-   * Brembo's disc, which can differ from the OEM rotor the car is wearing
-   * (Camry XV70 front: 25 mm vs 26 mm).
-   */
   provenance?: "manual" | "catalog";
 };
 
 export type ResolveRotorInput = {
-  /** Cached parts-page markdown for this vehicle, if any. */
+  /** Cached parts-page markdown for this vehicle, if any — read for NOMINAL
+   *  figures (`330x22mm` retail size strings). */
   markdown?: string | null;
   existing: Partial<Record<RotorAxle, ExistingRotorSpec>>;
   /** vehicle_configs.na_role_keys — a drum axle is not a gap. */
   naRoleKeys?: readonly string[];
   /** Axles that actually carry a rotor fitment. Omitted ⇒ assume both. */
   axlesWithFitment?: readonly RotorAxle[];
-  /** Aftermarket-catalogue minimums from the claim ledger, per axle. Consulted
-   *  only AFTER the markdown parse fails, never before: OEM page text outranks
-   *  a third-party disc spec. */
+  /** Claim-ledger figures per axle — consulted for their NOMINAL only. */
   catalogClaims?: Partial<Record<RotorAxle, CatalogRotorClaim>>;
 };
 
@@ -216,84 +190,36 @@ export function resolveRotorMinimums(
     if (na.has(ROTOR_ROLE_KEY[axle]) || !fitted.has(axle)) {
       return still("not_applicable");
     }
+    // Any stored minimum stands — humans, pre-policy sourced specs, and prior
+    // derivations alike. Stability over churn; a fleet re-derive is a
+    // deliberate backfill run, not a side effect of every finalize.
     if (curMin != null) return still("already_present");
 
-    const nominal = curNominal ?? parsed.nominalMm;
+    // Nominal from any source: stored column, cached page markdown, or the
+    // claim ledger (manual / catalogue rows read for capacities anyway).
+    const nominal =
+      curNominal ?? parsed.nominalMm ?? num(input.catalogClaims?.[axle]?.nominalMm);
 
-    if (parsed.discardMinMm != null) {
-      return {
-        axle,
-        outcome: "sourced_markdown",
-        minMm: parsed.discardMinMm,
-        nominalMm: nominal,
-        quality: "oem_spec",
-        observedLabel: parsed.observedLabel,
-        sourceUrl: cur.sourceUrl ?? null,
-        changed: true,
-      };
+    if (nominal == null) return still("nominal_missing");
+
+    if (!rotorMinDeriveEnabled()) {
+      // Kill-switch path: know the nominal, store no minimum.
+      return still("nominal_only", { nominalMm: nominal, changed: curNominal == null });
     }
 
-    // Claim-ledger minimum (manufacturer's manual, or an aftermarket disc
-    // catalogue). Ranked BELOW the markdown parse — an OEM page's own discard
-    // text always wins — and above deriving a number from nominal, because
-    // this is a real published minimum read under a real discard label rather
-    // than an arithmetic guess.
-    //
-    // The GRADE depends on who said it, and the difference is load-bearing:
-    //
-    //   manual  → "oem_spec". The manufacturer's own figure for the OEM rotor,
-    //             which is the number cast on the hat. Not warn-capped: this
-    //             may drive a replace recommendation, because it is the same
-    //             thing the mechanic would read with the rotor in hand.
-    //   catalog → "oem_spec_flagged". Brembo's discard spec for Brembo's disc,
-    //             and the vehicle may be wearing the OEM rotor whose stamped
-    //             minimum differs (Camry XV70 front: 25 mm vs 26 mm).
-    //             classify() warn-caps a flagged value so it can never
-    //             auto-sell a rotor job — but it CAN stop grading a rotor
-    //             against nothing, which is what a null minimum does.
-    const catalog = input.catalogClaims?.[axle];
-    const catalogMin = num(catalog?.minMm);
-    if (catalogMin != null) {
-      const catalogNominal = nominal ?? num(catalog?.nominalMm);
-      // A minimum that meets or exceeds its own nominal is incoherent — refuse
-      // both rather than store a figure that condemns every healthy rotor.
-      if (catalogNominal == null || catalogMin < catalogNominal) {
-        const fromManual = catalog?.provenance === "manual";
-        return {
-          axle,
-          outcome: fromManual ? "sourced_manual" : "sourced_catalog",
-          minMm: catalogMin,
-          nominalMm: catalogNominal,
-          quality: fromManual ? "oem_spec" : "oem_spec_flagged",
-          observedLabel: catalog?.observedLabel ?? null,
-          sourceUrl: catalog?.sourceUrl ?? cur.sourceUrl ?? null,
-          changed: true,
-        };
-      }
-    }
-
-    if (nominal != null) {
-      if (!rotorMinDeriveEnabled()) {
-        // Honest gap: we know the new thickness and NOT the minimum. Saying so
-        // beats inventing a number that looks sourced.
-        return still("nominal_only", { nominalMm: nominal, changed: curNominal == null });
-      }
-      const derived = Math.round((nominal - DERIVE_ALLOWANCE_MM) * 100) / 100;
-      if (derived > 0) {
-        return {
-          axle,
-          outcome: "derived_from_nominal",
-          minMm: derived,
-          nominalMm: nominal,
-          quality: "derived_from_nominal",
-          observedLabel: null,
-          sourceUrl: null,
-          changed: true,
-        };
-      }
-    }
-
-    return still("never_found");
+    const derived = deriveRotorMinMm(nominal);
+    if (derived <= 0) return still("nominal_missing");
+    return {
+      axle,
+      outcome: "derived_15pct",
+      minMm: derived,
+      nominalMm: nominal,
+      quality: DERIVED_15PCT_QUALITY,
+      observedLabel: null,
+      // The minimum is our arithmetic, not a page's text — no source URL.
+      sourceUrl: null,
+      changed: true,
+    };
   });
 }
 
@@ -302,8 +228,8 @@ export function rotorGapReason(outcome: RotorMinOutcome): string | null {
   switch (outcome) {
     case "nominal_only":
       return "rotor_min_nominal_only";
-    case "never_found":
-      return "rotor_min_never_found";
+    case "nominal_missing":
+      return "rotor_nominal_never_found";
     case "not_applicable":
       return "rotor_min_not_applicable";
     default:
@@ -314,31 +240,22 @@ export function rotorGapReason(outcome: RotorMinOutcome): string | null {
 /**
  * enrichment_runs.errors entry, or null when there is nothing to report.
  * First token is what directorEnrichment.tallyFlags buckets on.
+ * `derived_15pct` deliberately returns null: it is the standard resolution,
+ * not an anomaly — an error tally full of normal outcomes hides real ones.
  */
 export function rotorErrorTag(r: RotorAxleResolution): string | null {
   switch (r.outcome) {
     case "nominal_only":
       return `rotor_min:nominal_only:${r.axle}:${r.nominalMm ?? "?"}`;
-    case "never_found":
-      return `rotor_min:missing:${r.axle}`;
-    case "derived_from_nominal":
-      return `rotor_min:estimated:${r.axle}:${r.minMm ?? "?"}`;
-    case "sourced_catalog":
-      // Not a gap — a real minimum landed — but it is a third-party disc spec
-      // graded as an estimate, so it stays visible in the run's error tally
-      // rather than reading as a clean OEM resolution.
-      return `rotor_min:catalog:${r.axle}:${r.minMm ?? "?"}`;
-    // `sourced_manual` deliberately returns null: the manufacturer's own
-    // discard figure is a clean resolution and has no business in an error
-    // tally. It is the outcome this whole tier exists to produce.
-    case "sourced_manual":
-      return null;
+    case "nominal_missing":
+      return `rotor_min:missing_nominal:${r.axle}`;
     default:
       return null;
   }
 }
 
-/** completionGate rotorMinGaps input — axles with a fitment but no minimum. */
+/** completionGate rotorMinGaps input — axles with a fitment but no minimum.
+ *  With derivation standard, a gap here means the NOMINAL is missing. */
 export function rotorMinGaps(
   resolutions: readonly RotorAxleResolution[],
 ): string[] {

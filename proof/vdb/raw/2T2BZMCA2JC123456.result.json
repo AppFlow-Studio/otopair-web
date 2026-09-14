@@ -1,0 +1,487 @@
+{
+  "carApiInRange": true,
+  "inFleet": false,
+  "label": "2018 LEXUS RX",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": "V-Shaped",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-Shaped",
+        "displacement": 3.5,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": null,
+        "engineDescription": "2GR-FKS",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 295,
+        "make": "LEXUS",
+        "model": "RX",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "350 4dr SUV (3.5L 6cyl 8A)",
+        "wheelTorque": null,
+        "year": 2018
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2018,\"make\":\"LEXUS\",\"model\":\"RX\",\"trim\":\"350\",\"specs\":{\"active_safety_system_note\":\"Intuitive Parking Assist: Optional\",\"adaptive_cruise_control_acc\":\"Standard\",\"adaptive_driving_beam_adb\":\"Standard\",\"antilock_braking_system_abs\":\"Standard\",\"auto_reverse_system_for_windows_and_sunroofs\":\"Standard\",\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":\"Standard\",\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":\"2\",\"backup_camera\":\"Standard\",\"base_price\":null,\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":null,\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":\"Optional\",\"body_class\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"brake_system_description\":null,\"brake_system_type\":null,\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":null,\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":\"Standard\",\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":\"All Rows\",\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":\"Standard\",\"destination_market\":null,\"displacement_cc\":\"3500.0\",\"displacement_ci\":\"213.5831043315629938\",\"displacement_l\":\"3.5\",\"doors\":\"4\",\"drive_type\":\"4WD/4-Wheel Drive/4x4\",\"dynamic_brake_support_dbs\":\"Standard\",\"electrification_level\":null,\"electronic_stability_control_esc\":\"Standard\",\"engine_brake_hp_from\":\"295\",\"engine_brake_hp_to\":null,\"engine_configuration\":\"V-Shaped\",\"engine_manufacturer\":null,\"engine_model\":\"2GR-FKS\",\"engine_number_of_cylinders\":\"6\",\"engine_power_kw\":null,\"engine_stroke_cycles\":null,\"entertainment_system\":null,\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":\"Standard\",\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 1D: 5,001 - 6,000 lb (2,268 - 2,722 kg)\",\"gross_vehicle_weight_rating_to\":null,\"headlamp_light_source\":null,\"keyless_ignition\":\"Standard\",\"knee_air_bag_locations\":\"Driver Seat Only\",\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":\"Standard\",\"lane_keeping_assistance_lka\":\"Standard\",\"manufacturer_name\":\"TOYOTA MOTOR MANUFACTURING CANADA\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":null,\"number_of_seats\":null,\"number_of_wheels\":null,\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":\"PORT+DIRECT\",\"other_motorcycle_info\":null,\"other_restraint_system_info\":null,\"other_trailer_info\":null,\"parking_assist\":\"Optional\",\"pedestrian_automatic_emergency_braking_paeb\":\"Standard\",\"plant_city\":\"CAMBRIDGE\",\"plant_company_name\":\"Toyota Motor Manufacturing, Canada, Inc.\",\"plant_country\":\"CANADA\",\"plant_state\":\"ONTARIO\",\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":\"Passenger Seat Only\",\"semiautomatic_headlamp_beam_switching\":\"Standard\",\"series\":\"GYL25L/GGL25L/GGL20L/GYL26L/GGL21L/GGL26L\",\"series2\":\"Wagon Body Type\",\"side_air_bag_locations\":\"All Rows\",\"steering_location\":\"Left-Hand Drive (LHD)\",\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Direct\",\"top_speed_mph\":null,\"track_width_inches\":null,\"traction_control\":\"Standard\",\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":\"8\",\"transmission_style\":\"Automatic\",\"trim\":\"350/350 F Sport\",\"trim2\":null,\"turbo\":null,\"valve_train_design\":null,\"vehicle_descriptor\":\"2T2BZMCA*JC\",\"vehicle_type\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"wheel_size_front_inches\":null,\"wheel_size_rear_inches\":null,\"wheelbase_inches_from\":null,\"wheelbase_inches_to\":null,\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":14069,\"make_model_id\":276,\"year\":2018,\"name\":\"350\",\"description\":\"350 4dr SUV (3.5L 6cyl 8A)\",\"msrp\":43470,\"invoice\":40644,\"created\":\"2023-06-29T21:02:19-04:00\",\"modified\":\"2023-06-29T21:02:19-04:00\",\"make_model\":{\"id\":276,\"make_id\":33,\"name\":\"RX\",\"make\":{\"id\":33,\"name\":\"Lexus\"}},\"make_model_submodel\":{\"id\":69683,\"oem_make_model_id\":6588,\"year\":2018,\"make\":\"Lexus\",\"model\":\"RX350\",\"submodel\":\"Base\"}},{\"id\":14070,\"make_model_id\":276,\"year\":2018,\"name\":\"350\",\"description\":\"350 4dr SUV AWD (3.5L 6cyl 8A)\",\"msrp\":44870,\"invoice\":41953,\"created\":\"2023-06-29T21:02:19-04:00\",\"modified\":\"2023-06-29T21:02:19-04:00\",\"make_model\":{\"id\":276,\"make_id\":33,\"name\":\"RX\",\"make\":{\"id\":33,\"name\":\"Lexus\"}},\"make_model_submodel\":{\"id\":69683,\"oem_make_model_id\":6588,\"year\":2018,\"make\":\"Lexus\",\"model\":\"RX350\",\"submodel\":\"Base\"}}]},\"trims\":null,\"engines\":null,\"bodies\":null}"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "SUV",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 5,
+        "drivetrain": "4WD",
+        "engineCode": null,
+        "engineDescription": "3.5L V6",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Unleaded",
+        "horsepower": null,
+        "make": "Lexus",
+        "model": "RX",
+        "mpgCity": 21,
+        "mpgCombined": null,
+        "mpgHighway": 28,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "350",
+        "wheelTorque": null,
+        "year": 2018
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2018,\"make\":\"Lexus\",\"model\":\"RX\",\"trim\":\"350\",\"body_type\":\"SUV\",\"vehicle_type\":\"Truck\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"fuel_type\":\"Unleaded\",\"engine\":\"3.5L V6\",\"doors\":5,\"made_in\":\"USA\",\"overall_height\":\"67.7\",\"overall_length\":\"192.5\",\"overall_width\":\"75.6\",\"std_seating\":\"5\",\"highway_mpg\":28,\"city_mpg\":21},\"neovin\":{\"vin\":\"2T2BZMCA2JC123456\",\"updated_at\":1787841921,\"updated_at_date\":\"2026-08-27T14:45:21.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"2T2BZMCA_JC\",\"year\":\"2018\",\"make\":\"Lexus\",\"model\":\"RX\",\"trim\":\"350\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"engine\":\"3.5L V6\",\"fuel_type\":\"Unleaded\",\"body_type\":\"SUV\",\"body_subtype\":\"\",\"doors\":\"5\",\"weight\":\"5864\",\"width\":\"75.6\",\"height\":\"67.7\",\"length\":\"192.5\",\"city_mpg\":\"21\",\"highway_mpg\":\"28\",\"combined_mpg\":\"24\",\"electric_range\":\"\",\"seating_capacity\":\"5\",\"msrp\":\"44670\",\"delivery_charges\":\"995\",\"vehicle_type\":\"Truck\",\"powertrain_type\":\"Combustion\",\"overall_safety_rating\":\"5\",\"side_safety_rating\":\"5\",\"front_safety_rating\":\"4\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"50000\",\"total_warranty_duration\":\"48\",\"powertrain_warranty_duration\":\"72\",\"powertrain_warranty_distance\":\"70000\",\"anti_corrosion_warranty_duration\":\"72\",\"anti_corrosion_warranty_distance\":\"9999999\",\"roadside_assistance_warranty_duration\":\"48\",\"roadside_assistance_warranty_distance\":\"9999999\",\"country\":\"USA\",\"version_name\":\"350 AWD\",\"manufacturer_code\":\"9424\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"9 Speakers\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"Subwoofer\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"Surround Sound Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Projector Beam Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-Low Beam\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Auto High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Exterior\",\"feature_type\":\"Fog Lights\",\"description\":\"Front Fog Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio-Disc Player\",\"description\":\"CD Player\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Digital Media Card\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Digital Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Rear Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Knee Airbags\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Season Tires\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Cover/Rear Parcel Shelf\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Light\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Card Key Power Locks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Includes Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Automatic Locking\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti-Theft Protection\",\"description\":\"Anti-Theft Protection\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Mica\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints-3\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Active Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Rear Seat Belts Pre-Tensioners\"},{\"category\":\"Exterior\",\"feature_type\":\"Skid Plate\",\"description\":\"Fuel Tank Skid Plate\"},{\"category\":\"Exterior\",\"feature_type\":\"Skid Plate\",\"description\":\"Transfer Case Skid Plate\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Executive SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Synthetic Leather Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Compact SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Driver Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Passenger Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Electrically Adjustable\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Reclining Electric Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Electric Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Front Seat Power Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Electric Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Reclining Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Alloy & Leather Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Steering Wheel Telescopic Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Electric Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Easy Entry Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Vehicle Speed Proportional Power Steering\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Rear Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Strut Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Wishbone Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Rear Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Automatic Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"8 Speed Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Mode Select\",\"description\":\"Automatic Only Mode Select\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Manual Mode\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Description\",\"description\":\"Automatic With Manual Mode Trans\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Micro Filter\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning-Number of Zones\",\"description\":\"Dual Zone Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Automatic Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Auto Dimming Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Tilt for Reverse\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Turn Signal In Mirror\"},{\"category\":\"Exterior\",\"feature_type\":\"Spoiler\",\"description\":\"Roof Spoiler\"},{\"category\":\"Exterior\",\"feature_type\":\"Rear Window\",\"description\":\"Rear Window Defogger\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rear Windshield Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Automatic Intermittent Wipe\"},{\"category\":\"Exterior\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rain Sensing Windsheild Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Windshield Wiper De-Icer\"},{\"category\":\"Exterior\",\"feature_type\":\"Glass\",\"description\":\"Tinted Glass\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Comfort & Co…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": "V-Shaped",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-Shaped",
+        "displacement": 3.5,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": "2GR-FKS",
+        "engineDescription": "2GR-FKS",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 295,
+        "make": "LEXUS",
+        "model": "RX",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "350/350 F Sport",
+        "wheelTorque": null,
+        "year": 2018
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 2T2BZMCA2JC123456\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"Intuitive Parking Assist: Optional\",\"AdaptiveCruiseControl\":\"Standard\",\"AdaptiveDrivingBeam\":\"Standard\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"All Rows\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"Driver Seat Only\",\"AirBagLocSeatCushion\":\"Passenger Seat Only\",\"AirBagLocSide\":\"All Rows\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"Optional\",\"BodyCabType\":\"\",\"BodyClass\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"Standard\",\"CIB\":\"Standard\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"3500.0\",\"DisplacementCI\":\"213.58310433156\",\"DisplacementL\":\"3.5\",\"Doors\":\"4\",\"DriveType\":\"4WD/4-Wheel Drive/4x4\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"V-Shaped\",\"EngineCycles\":\"\",\"EngineCylinders\":\"6\",\"EngineHP\":\"295\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"\",\"EngineModel\":\"2GR-FKS\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"Standard\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 1D: 5,001 - 6,000 lb (2,268 - 2,722 kg)\",\"GVWR_to\":\"\",\"KeylessIgnition\":\"Standard\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"Standard\",\"LaneKeepSystem\":\"Standard\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"LEXUS\",\"MakeID\":\"515\",\"Manufacturer\":\"TOYOTA MOTOR MANUFACTURING CANADA\",\"ManufacturerId\":\"1085\",\"Model\":\"RX\",\"ModelID\":\"2214\",\"ModelYear\":\"2018\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"Compact Utility (Utility Vehicle Categories \\\"Small\\\" and \\\"Midsize\\\")\",\"NCSAMake\":\"Lexus\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"RX330/350/400h/450h\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"PORT+DIRECT\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"Optional\",\"PedestrianAutomaticEmergencyBraking\":\"Standard\",\"PlantCity\":\"CAMBRIDGE\",\"PlantCompanyName\":\"Toyota Motor Manufacturing, Canada, Inc.\",\"PlantCountry\":\"CANADA\",\"PlantState\":\"ONTARIO\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"\",\"Seats\":\"\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"GYL25L/GGL25L/GGL20L/GYL26L/GGL21L/GGL26L\",\"Series2\":\"Wagon Body Type\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"8\",\"TransmissionStyle\":\"Automatic\",\"Trim\":\"350/350 F Sport\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"2T2BZMCA2JC123456\",\"ValveTrainDesign\":\"\",\"VehicleDescriptor\":\"2T2BZMCA*JC\",\"VehicleType\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"\",\"WheelSizeRear\":\"\",\"WheelieMitigation\":\"\",\"Wheels\":\"\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "V",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": "4-Wheel Disc",
+        "camType": "DOHC",
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-6",
+        "displacement": 3.5,
+        "doors": 4,
+        "drivetrain": "4x4",
+        "engineCode": "STDEN",
+        "engineDescription": "3.5L V6 DOHC 24V VVT-iW",
+        "frontRotorDia": 12.9,
+        "frontTirePressure": 36,
+        "frontTireSize": "235/55R20",
+        "fuelType": "Gasoline",
+        "horsepower": 295,
+        "make": "Lexus",
+        "model": "RX 350",
+        "mpgCity": 19,
+        "mpgCombined": 22,
+        "mpgHighway": 26,
+        "packages": [],
+        "rearRotorDia": 13.3,
+        "rearTirePressure": 36,
+        "rearTireSize": "235/55R20",
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "F Sport",
+        "wheelTorque": 76,
+        "year": 2018
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"2T2BZMCA2JC123456\",\"year\":2018,\"make\":\"Lexus\",\"model\":\"RX 350\",\"trim\":\"F Sport\",\"style\":\"4dr All-wheel Drive Automatic\",\"trim_and_style\":\"F Sport 4dr All-wheel Drive Automatic\",\"summary\":\"The 2018 Lexus RX 350 F Sport boasts impressive standard features. Its powerful 3.5L V-6 295hp engine and 8-speed automatic transmission ensure an exhilarating drive. Equipped with safety in mind, this vehicle includes 4-wheel anti-lock brakes, side seat mounted airbags, curtain overhead airbags, and rear side-impact airbags. Additional safety features include driver and passenger knee airbags, an airbag occupancy sensor, and all-wheel drive. Designed for comfort, the RX 350 F Sport offers automatic air conditioning and 20\\\" aluminum wheels. With cruise control and All-Speed Dynamic Radar Cruise Control, it's ready to conquer any journey.\",\"price\":{\"base_msrp\":\"50,520\",\"delivery_charges\":\"1,025\",\"invoice_price\":\"47,255\",\"total_price\":\"51,545\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Small SUV 4WD\",\"rear_door_type\":\"\",\"body_type\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,890\",\"unit\":\"mm\"},{\"value\":\"192.52\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,895\",\"unit\":\"mm\"},{\"value\":\"74.61\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"74.6\",\"unit\":\"in\"},{\"value\":\"1,894.84\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,720\",\"unit\":\"mm\"},{\"value\":\"67.72\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"64.4\",\"unit\":\"in\"},{\"value\":\"1,635.76\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"64\",\"unit\":\"in\"},{\"value\":\"1,625.6\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,789\",\"unit\":\"mm\"},{\"value\":\"109.8\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"3,435\",\"unit\":\"l\"},{\"value\":\"121.3\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"1,001\",\"unit\":\"mm\"},{\"value\":\"39.4\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"993\",\"unit\":\"mm\"},{\"value\":\"39.1\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,468\",\"unit\":\"mm\"},{\"value\":\"57.8\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,463\",\"unit\":\"mm\"},{\"value\":\"57.6\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,120\",\"unit\":\"mm\"},{\"value\":\"44.1\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"965\",\"unit\":\"mm\"},{\"value\":\"38\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"521\",\"unit\":\"l\"},{\"value\":\"18\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"1,594\",\"unit\":\"l\"},{\"value\":\"56\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"56.3\",\"unit\":\"cu.ft\"},{\"value\":\"1,594.25\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"18.4\",\"unit\":\"cu.ft\"},{\"value\":\"521.03\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"18.4\",\"unit\":\"cu.ft\"},{\"value\":\"521.03\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"4,387\",\"unit\":\"lb\"},{\"value\":\"1,989.57\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"4,387\",\"unit\":\"lb\"},{\"value\":\"1,989.57\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"3,500\",\"unit\":\"lb\"},{\"value\":\"7,726.27\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"208\",\"unit\":\"mm\"},{\"value\":\"8.2\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"17\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"25\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"17\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"45.2\",\"unit\":\"ft\"},{\"value\":\"13.78\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"22.6\",\"unit\":\"ft\"},{\"value\":\"6.89\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"12.9\",\"unit\":\"in\"},{\"value\":\"327.66\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"13.3\",\"unit\":\"in\"},{\"value\":\"337.82\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"20 X 8 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"20 X 8 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"Compact \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"76\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":3.5,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"6,300\",\"unit\":\"rpm\"},{\"value\":\"295\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"4,700\",\"unit\":\"rpm\"},{\"value\":\"267\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"94\",\"unit\":\"mm\"},{\"value\":\"3.7\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"83\",\"unit\":\"mm\"},{\"value\":\"3.27\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"19.2\",\"unit\":\"gal\"},{\"value\":\"72.67\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"364.8\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"499.2\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Rack-Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"4-Wheel Disc\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"\",\"max_alternator_capacity_amps\":\"\"}},{\"suspensions\":{\"front_type\":\"Strut\",\"front_type_extended\":\"Strut\",\"rear_type\":\"Double Wishbone\",\"rear_type_extended\":\"Double Wishbone\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"Steel\"}},{\"tires\":{\"front_tire_size\":\"235/55R20\",\"rear_tire_size\":\"235/55R20\",\"spare_tire_size\":\"Compact\",\"type\":\"\",\"front_tire_pressure_psi\":\"36\",\"rear_tire_pressure_psi\":\"36\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Regular Unleaded V6\",\"code\":\"STDEN\",\"cylinders_configuration\":\"V-6\",\"displacement\":3500,\"compressor\":\"\",\"drivetype\":\"4x4\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"24\",\"compression\":\"11.8\",\"variable_intake_manifold\":\"\",\"block_type\":\"V\",\"block_material\":\"\",\"cam_type\":\"DOHC\"}},{\"fuel\":{\"type\":\"Gasoline\",\"standard_fuel_economy_type\":\"\",\"grade\":\"Re…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "model",
+        "values": {
+          "carapi": "RX",
+          "marketcheck": "RX",
+          "nhtsa": "RX",
+          "vdb": "RX 350"
+        }
+      },
+      {
+        "field": "doors",
+        "values": {
+          "carapi": "4",
+          "marketcheck": "5",
+          "nhtsa": "4",
+          "vdb": "4"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "350 4dr SUV (3.5L 6cyl 8A)",
+          "marketcheck": "350",
+          "nhtsa": "350/350 F Sport",
+          "vdb": "F Sport"
+        }
+      },
+      {
+        "field": "engineCode",
+        "values": {
+          "nhtsa": "2GR-FKS",
+          "vdb": "STDEN"
+        }
+      },
+      {
+        "field": "cylindersConfiguration",
+        "values": {
+          "carapi": "V-Shaped",
+          "nhtsa": "V-Shaped",
+          "vdb": "V-6"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "carapi": "4WD/4-Wheel Drive/4x4",
+          "marketcheck": "4WD",
+          "nhtsa": "4WD/4-Wheel Drive/4x4",
+          "vdb": "4x4"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "carapi": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "marketcheck": "SUV",
+          "nhtsa": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "vdb": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 47,
+          "present": 9,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 49,
+          "present": 17,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 47,
+          "present": 9,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 51,
+          "present": 18,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 84,
+          "present": 16,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "present",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 86,
+          "present": 30,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "2T2BZMCA2JC123456",
+  "year": 2018
+}

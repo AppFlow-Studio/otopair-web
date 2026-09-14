@@ -1,0 +1,486 @@
+{
+  "carApiInRange": true,
+  "inFleet": false,
+  "label": "2020 JEEP Grand Cherokee",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": "V-Shaped",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-Shaped",
+        "displacement": 3.6,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": null,
+        "engineDescription": null,
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 295,
+        "make": "JEEP",
+        "model": "Grand Cherokee",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "Limited 4dr SUV (3.6L 6cyl 8A)",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2020,\"make\":\"JEEP\",\"model\":\"Grand Cherokee\",\"trim\":\"Limited\",\"specs\":{\"active_safety_system_note\":null,\"adaptive_cruise_control_acc\":null,\"adaptive_driving_beam_adb\":null,\"antilock_braking_system_abs\":\"Standard\",\"auto_reverse_system_for_windows_and_sunroofs\":\"Standard\",\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":null,\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":\"2\",\"backup_camera\":\"Standard\",\"base_price\":\"32045.00\",\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":null,\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":\"Standard\",\"body_class\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"brake_system_description\":null,\"brake_system_type\":\"Hydraulic\",\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":null,\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":null,\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":null,\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":\"Standard\",\"destination_market\":null,\"displacement_cc\":\"3600.0\",\"displacement_ci\":\"219.6854787410362222\",\"displacement_l\":\"3.6\",\"doors\":\"4\",\"drive_type\":\"4WD/4-Wheel Drive/4x4\",\"dynamic_brake_support_dbs\":\"Standard\",\"electrification_level\":null,\"electronic_stability_control_esc\":\"Standard\",\"engine_brake_hp_from\":\"295\",\"engine_brake_hp_to\":null,\"engine_configuration\":\"V-Shaped\",\"engine_manufacturer\":\"FCA\",\"engine_model\":null,\"engine_number_of_cylinders\":\"6\",\"engine_power_kw\":null,\"engine_stroke_cycles\":null,\"entertainment_system\":null,\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":null,\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 2E: 6,001 - 7,000 lb (2,722 - 3,175 kg)\",\"gross_vehicle_weight_rating_to\":null,\"headlamp_light_source\":null,\"keyless_ignition\":\"Standard\",\"knee_air_bag_locations\":null,\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":null,\"lane_keeping_assistance_lka\":null,\"manufacturer_name\":\"FCA US LLC\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":\"2\",\"number_of_seats\":\"5\",\"number_of_wheels\":\"4\",\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":null,\"other_motorcycle_info\":null,\"other_restraint_system_info\":null,\"other_trailer_info\":null,\"parking_assist\":null,\"pedestrian_automatic_emergency_braking_paeb\":null,\"plant_city\":\"DETROIT\",\"plant_company_name\":\"Jefferson North Assembly\",\"plant_country\":\"UNITED STATES (USA)\",\"plant_state\":\"MICHIGAN\",\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":null,\"semiautomatic_headlamp_beam_switching\":\"Standard\",\"series\":null,\"series2\":null,\"side_air_bag_locations\":\"All Rows\",\"steering_location\":\"Left-Hand Drive (LHD)\",\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Direct\",\"top_speed_mph\":null,\"track_width_inches\":null,\"traction_control\":\"Standard\",\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":\"8\",\"transmission_style\":\"Automatic\",\"trim\":\"Limited\",\"trim2\":null,\"turbo\":null,\"valve_train_design\":null,\"vehicle_descriptor\":\"1C4RJFBG*LC\",\"vehicle_type\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"wheel_size_front_inches\":null,\"wheel_size_rear_inches\":null,\"wheelbase_inches_from\":\"114.70\",\"wheelbase_inches_to\":null,\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":7838,\"make_model_id\":246,\"year\":2020,\"name\":\"Limited\",\"description\":\"Limited 4dr SUV (3.6L 6cyl 8A)\",\"msrp\":39955,\"invoice\":38568,\"created\":\"2023-06-29T21:00:01-04:00\",\"modified\":\"2023-06-29T21:00:01-04:00\",\"make_model\":{\"id\":246,\"make_id\":30,\"name\":\"Grand Cherokee\",\"make\":{\"id\":30,\"name\":\"Jeep\"}},\"make_model_submodel\":{\"id\":72972,\"oem_make_model_id\":5543,\"year\":2020,\"make\":\"Jeep\",\"model\":\"Grand Cherokee\",\"submodel\":\"Limited\"}},{\"id\":7839,\"make_model_id\":246,\"year\":2020,\"name\":\"Limited\",\"description\":\"Limited 4dr SUV 4WD (3.6L 6cyl 8A)\",\"msrp\":41955,\"invoice\":40543,\"created\":\"2023-06-29T21:00:01-04:00\",\"modified\":\"2023-06-29T21:00:01-04:00\",\"make_model\":{\"id\":246,\"make_id\":30,\"name\":\"Grand Cherokee\",\"make\":{\"id\":30,\"name\":\"Jeep\"}},\"make_model_submodel\":{\"id\":72972,\"oem_make_model_id\":5543,\"year\":2020,\"make\":\"Jeep\",\"model\":\"Grand Cherokee\",\"submodel\":\"Limited\"}}]},\"trims\":null,\"engines\":null,\"bodies\":null}"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "SUV",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 5,
+        "drivetrain": "4WD",
+        "engineCode": null,
+        "engineDescription": "3.6L V6",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Unleaded",
+        "horsepower": null,
+        "make": "Jeep",
+        "model": "Grand Cherokee",
+        "mpgCity": 18,
+        "mpgCombined": null,
+        "mpgHighway": 25,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "Limited X",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2020,\"make\":\"Jeep\",\"model\":\"Grand Cherokee\",\"trim\":\"Limited X\",\"body_type\":\"SUV\",\"vehicle_type\":\"Truck\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"fuel_type\":\"Unleaded\",\"engine\":\"3.6L V6\",\"doors\":5,\"made_in\":\"USA\",\"overall_height\":\"69.3\",\"overall_length\":\"189.8\",\"overall_width\":\"76.5\",\"std_seating\":\"5\",\"highway_mpg\":25,\"city_mpg\":18},\"neovin\":{\"vin\":\"1C4RJFBG8LC234567\",\"updated_at\":1787841912,\"updated_at_date\":\"2026-08-27T14:45:12.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"1C4RJFBG_LC\",\"year\":\"2020\",\"make\":\"Jeep\",\"model\":\"Grand Cherokee\",\"trim\":\"Limited\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"engine\":\"3.6L V6\",\"fuel_type\":\"Unleaded\",\"body_type\":\"SUV\",\"body_subtype\":\"\",\"doors\":\"5\",\"weight\":\"6800\",\"width\":\"77.5\",\"height\":\"70.8\",\"length\":\"193.5\",\"city_mpg\":\"9\",\"highway_mpg\":\"28\",\"combined_mpg\":\"24\",\"electric_range\":\"\",\"seating_capacity\":\"5\",\"msrp\":\"41855\",\"delivery_charges\":\"1495\",\"vehicle_type\":\"Truck\",\"powertrain_type\":\"Combustion\",\"overall_safety_rating\":\"5\",\"side_safety_rating\":\"5\",\"front_safety_rating\":\"5\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"36000\",\"total_warranty_duration\":\"36\",\"powertrain_warranty_duration\":\"999\",\"powertrain_warranty_distance\":\"999999\",\"anti_corrosion_warranty_duration\":\"84\",\"anti_corrosion_warranty_distance\":\"9999999\",\"roadside_assistance_warranty_duration\":\"60\",\"roadside_assistance_warranty_distance\":\"60000\",\"country\":\"USA\",\"version_name\":\"Limited 4WD\",\"manufacturer_code\":\"WKJP74/2_H\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"6 Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Complex Surface Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"Halogen Headlights-Low Beam\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"Halogen Headlights-High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Exterior\",\"feature_type\":\"Fog Lights\",\"description\":\"Front Fog Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Digital Media Card\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Satellite Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Knee Airbags\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Terrain Tires\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Card Key Power Locks\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti-Theft Protection\",\"description\":\"Anti-Theft Protection\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Pearl\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Front Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Glass Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Electric Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Tilting Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sliding Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sunshade\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"One-Touch Opening Sunroof-Front\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints-3\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Active Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Large SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Leather Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Compact SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Driver Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Passenger Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Passenger Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Electrically Adjustable\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Driver Seat Memory\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Electric Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Front Seat Power Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Function\",\"description\":\"Heated Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Reclining Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Type\",\"description\":\"Leather Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Steering Wheel Telescopic Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Heated Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Rear Power Outlet\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"110/115 Volt Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Wishbone Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Multi-Link Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Rear Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Automatic Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"8 Speed Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Mode Select\",\"description\":\"Automatic Only Mode Select\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Manual Mode\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Low/High Gear Ranges\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Gear Change Paddles\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Description\",\"description\":\"Automatic With Manual Mode Trans\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Micro Filter\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning-Number of Zones\",\"description\":\"Dual Zone Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Automatic Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Auto Dimming Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Auto-Dimming Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Turn Signal In Mirror\"},{\"category\":\"Exterior\",\"feature_type\":\"Rear Window\",\"description\":\"Rear Window Defogger\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rear Windshield Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Variable Intermittent Wipe\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Width (8 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Width (8 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Spare Wheel\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Spacesaver Spare Wheel\"},{\"category\":\"Exterior\",\"feat…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": "V-Shaped",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": "Hydraulic",
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-Shaped",
+        "displacement": 3.6,
+        "doors": 4,
+        "drivetrain": "4WD/4-Wheel Drive/4x4",
+        "engineCode": null,
+        "engineDescription": null,
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 295,
+        "make": "JEEP",
+        "model": "Grand Cherokee",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "Limited",
+        "wheelTorque": null,
+        "year": 2020
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 1C4RJFBG8LC234567\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"\",\"AdaptiveCruiseControl\":\"\",\"AdaptiveDrivingBeam\":\"\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"\",\"AirBagLocSeatCushion\":\"\",\"AirBagLocSide\":\"All Rows\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"32045.00\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"Standard\",\"BodyCabType\":\"\",\"BodyClass\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"Hydraulic\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"\",\"CIB\":\"\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"3600.0\",\"DisplacementCI\":\"219.68547874103\",\"DisplacementL\":\"3.6\",\"Doors\":\"4\",\"DriveType\":\"4WD/4-Wheel Drive/4x4\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"V-Shaped\",\"EngineCycles\":\"\",\"EngineCylinders\":\"6\",\"EngineHP\":\"295\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"FCA\",\"EngineModel\":\"\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 2E: 6,001 - 7,000 lb (2,722 - 3,175 kg)\",\"GVWR_to\":\"\",\"KeylessIgnition\":\"Standard\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"\",\"LaneKeepSystem\":\"\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"JEEP\",\"MakeID\":\"483\",\"Manufacturer\":\"FCA US LLC\",\"ManufacturerId\":\"994\",\"Model\":\"Grand Cherokee\",\"ModelID\":\"1949\",\"ModelYear\":\"2020\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"Large utility (ANSI D16.1 Utility Vehicle Categories and \\\"Full Size\\\" and \\\"Large\\\")\",\"NCSAMake\":\"Jeep / Kaiser Jeep / Willys Jeep\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"Grand Cherokee (For 2014 on.  Use model 404 for model years prior to 2013.)\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"\",\"PlantCity\":\"DETROIT\",\"PlantCompanyName\":\"Jefferson North Assembly\",\"PlantCountry\":\"UNITED STATES (USA)\",\"PlantState\":\"MICHIGAN\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"2\",\"Seats\":\"5\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"\",\"Series2\":\"\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"8\",\"TransmissionStyle\":\"Automatic\",\"Trim\":\"Limited\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"1C4RJFBG8LC234567\",\"ValveTrainDesign\":\"\",\"VehicleDescriptor\":\"1C4RJFBG*LC\",\"VehicleType\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"114.70\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"\",\"WheelSizeRear\":\"\",\"WheelieMitigation\":\"\",\"Wheels\":\"4\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "V",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": "4-Wheel Disc",
+        "camType": null,
+        "cca": 650,
+        "chassisCode": null,
+        "cylinders": 6,
+        "cylindersConfiguration": "V-6",
+        "displacement": 3.6,
+        "doors": 4,
+        "drivetrain": "4x4",
+        "engineCode": "ERC",
+        "engineDescription": "3.6L V6 24V VVT UPG I w/ESS",
+        "frontRotorDia": 13,
+        "frontTirePressure": 33,
+        "frontTireSize": "265/50R20",
+        "fuelType": "Gasoline",
+        "horsepower": 360,
+        "make": "Jeep",
+        "model": "Grand Cherokee",
+        "mpgCity": 18,
+        "mpgCombined": 21,
+        "mpgHighway": 25,
+        "packages": [],
+        "rearRotorDia": 13,
+        "rearTirePressure": 33,
+        "rearTireSize": "265/50R20",
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 8,
+        "transType": "Automatic",
+        "trim": "Limited",
+        "wheelTorque": 130,
+        "year": 2020
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"1C4RJFBG8LC234567\",\"year\":2020,\"make\":\"Jeep\",\"model\":\"Grand Cherokee\",\"trim\":\"Limited\",\"style\":\"4dr 4x4 Automatic\",\"trim_and_style\":\"Limited 4dr 4x4 Automatic\",\"summary\":\"Experience the power and sophistication of the 2020 Jeep Grand Cherokee Limited. Equipped with a formidable Pentastar 3.6L V-6 293hp engine and seamless 8-speed automatic transmission with overdrive, this SUV delivers an exhilarating driving experience. Safety is a top priority with 4-wheel anti-lock brakes, side seat mounted airbags, curtain 1st and 2nd row overhead airbags, and a driver knee airbag. Stay on track with integrated navigation system and enjoy ultimate comfort with automatic air conditioning. The Grand Cherokee Limited also boasts 18\\\" aluminum wheels, cruise control, Selec-Terrain ABS, and driveline traction control.\",\"price\":{\"base_msrp\":\"41,955\",\"delivery_charges\":\"1,495\",\"invoice_price\":\"40,543\",\"total_price\":\"43,450\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Standard SUV 4WD\",\"rear_door_type\":\"\",\"body_type\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,821\",\"unit\":\"mm\"},{\"value\":\"189.8\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,943\",\"unit\":\"mm\"},{\"value\":\"76.5\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"76.5\",\"unit\":\"in\"},{\"value\":\"1,943.1\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,760\",\"unit\":\"mm\"},{\"value\":\"69.29\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"32.4\",\"unit\":\"in\"},{\"value\":\"822.96\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"63.9\",\"unit\":\"in\"},{\"value\":\"1,623.06\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"64.1\",\"unit\":\"in\"},{\"value\":\"1,628.14\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,916\",\"unit\":\"mm\"},{\"value\":\"114.8\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"2,985\",\"unit\":\"l\"},{\"value\":\"105.4\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"1,013\",\"unit\":\"mm\"},{\"value\":\"39.9\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"996\",\"unit\":\"mm\"},{\"value\":\"39.2\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,491\",\"unit\":\"mm\"},{\"value\":\"58.7\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,473\",\"unit\":\"mm\"},{\"value\":\"58\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,024\",\"unit\":\"mm\"},{\"value\":\"40.3\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"980\",\"unit\":\"mm\"},{\"value\":\"38.6\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"1,028\",\"unit\":\"l\"},{\"value\":\"36\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"1,934\",\"unit\":\"l\"},{\"value\":\"68\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"68.3\",\"unit\":\"cu.ft\"},{\"value\":\"1,934.05\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"36.3\",\"unit\":\"cu.ft\"},{\"value\":\"1,027.91\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"36.3\",\"unit\":\"cu.ft\"},{\"value\":\"1,027.91\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"4,746\",\"unit\":\"lb\"},{\"value\":\"2,152.38\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"4,746\",\"unit\":\"lb\"},{\"value\":\"2,152.38\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"3,500\",\"unit\":\"lb\"},{\"value\":\"7,726.27\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"1,411.2\",\"unit\":\"lb\"},{\"value\":\"640\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"282\",\"unit\":\"mm\"},{\"value\":\"11.1\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"218\",\"unit\":\"mm\"},{\"value\":\"8.6\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"36\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"27\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"23\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"37.1\",\"unit\":\"ft\"},{\"value\":\"11.31\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"18.55\",\"unit\":\"ft\"},{\"value\":\"5.65\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"3,500\",\"unit\":\"lb\"},{\"value\":\"1,587.3\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"350\",\"unit\":\"lb\"},{\"value\":\"158.73\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"3,500\",\"unit\":\"lb\"},{\"value\":\"1,587.3\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"350\",\"unit\":\"lb\"},{\"value\":\"158.73\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"3,500\",\"unit\":\"lb\"},{\"value\":\"1,587.3\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"13\",\"unit\":\"in\"},{\"value\":\"330.2\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"13\",\"unit\":\"in\"},{\"value\":\"330.2\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"18 X 8 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"18 X 8 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"Compact \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"130\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":3.6,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"5,150\",\"unit\":\"rpm\"},{\"value\":\"360\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"2,000\",\"unit\":\"rpm\"},{\"value\":\"420\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"99.5\",\"unit\":\"mm\"},{\"value\":\"3.92\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"90.9\",\"unit\":\"mm\"},{\"value\":\"3.58\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"24.6\",\"unit\":\"gal\"},{\"value\":\"93.11\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"442.8\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"615\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Rack-Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"4-Wheel Disc\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"650\",\"max_alternator_capacity_amps\":\"180\"}},{\"suspensions\":{\"front_type\":\"Short And Long Arm\",\"front_type_extended\":\"Short And Long Arm\",\"rear_type\":\"Multi-Link\",\"rear_type_extended\":\"Multi-Link\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"Steel\"}},{\"tires\":{\"front_tire_size\":\"265/50R20\",\"rear_tire_size\":\"265/50R20\",\"spare_tire_size\":\"Compact\",\"type\":\"All-terrain\",\"front_tire_pressure_psi\":\"33\",\"rear_tire_pressure_psi\":\"33\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Regular Unleaded V6\",\"code\":\"ERC\",\"cylinders_configuration\":\"V-6\",\"displacement\":3600,\"compressor\":\"\",\"drivetype\":\"4x4\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"24\",\"compression\":\"16.5\",\"variable_intake_manifold\":\"\",\"block_type\":\"V\",\"block_materi…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "doors",
+        "values": {
+          "carapi": "4",
+          "marketcheck": "5",
+          "nhtsa": "4",
+          "vdb": "4"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "Limited 4dr SUV (3.6L 6cyl 8A)",
+          "marketcheck": "Limited X",
+          "nhtsa": "Limited",
+          "vdb": "Limited"
+        }
+      },
+      {
+        "field": "cylindersConfiguration",
+        "values": {
+          "carapi": "V-Shaped",
+          "nhtsa": "V-Shaped",
+          "vdb": "V-6"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "carapi": "4WD/4-Wheel Drive/4x4",
+          "marketcheck": "4WD",
+          "nhtsa": "4WD/4-Wheel Drive/4x4",
+          "vdb": "4x4"
+        }
+      },
+      {
+        "field": "horsepower",
+        "values": {
+          "carapi": "295",
+          "nhtsa": "295",
+          "vdb": "360"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "carapi": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "marketcheck": "SUV",
+          "nhtsa": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "vdb": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]"
+        }
+      },
+      {
+        "field": "brakeType",
+        "values": {
+          "nhtsa": "Hydraulic",
+          "vdb": "4-Wheel Disc"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 47,
+          "present": 9,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 46,
+          "present": 16,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 53,
+          "present": 10,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 49,
+          "present": 17,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 89,
+          "present": 17,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "present",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 86,
+          "present": 30,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "1C4RJFBG8LC234567",
+  "year": 2020
+}

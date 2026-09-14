@@ -211,8 +211,16 @@ export const _backfillRotorMinimumsRun = internalMutation({
       Record<"front" | "rear", (typeof resolutions)[number]>
     >;
     const verdict = validateRotorResolution({
-      front: { minMm: byAxle.front?.minMm, nominalMm: byAxle.front?.nominalMm },
-      rear: { minMm: byAxle.rear?.minMm, nominalMm: byAxle.rear?.nominalMm },
+      front: {
+        minMm: byAxle.front?.minMm,
+        nominalMm: byAxle.front?.nominalMm,
+        derived: byAxle.front?.outcome === "derived_15pct",
+      },
+      rear: {
+        minMm: byAxle.rear?.minMm,
+        nominalMm: byAxle.rear?.nominalMm,
+        derived: byAxle.rear?.outcome === "derived_15pct",
+      },
     });
 
     // verified_fields still guards the write, so a director's or a mechanic's

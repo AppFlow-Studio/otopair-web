@@ -18,6 +18,9 @@ export default function SurveyDialogShell({
   contentClassName,
   hideHeader = false,
   sideRailSlotId,
+  sideGuide,
+  outerClassName,
+  disableEscape = false,
 }: {
   open: boolean;
   title: string;
@@ -31,6 +34,12 @@ export default function SurveyDialogShell({
   mobileFullBleed?: boolean;
   contentClassName?: string;
   hideHeader?: boolean;
+  /** Optional desktop-only content rendered in the right gutter. */
+  sideGuide?: ReactNode;
+  /** Extra responsive visibility classes for the dialog overlay. */
+  outerClassName?: string;
+  /** Lets a stacked dialog own Escape without closing the dialog beneath it. */
+  disableEscape?: boolean;
   /**
    * When set, an empty container with this id is rendered in the gutter just
    * left of the card (desktop only). Callers portal a floating rail into it so
@@ -39,7 +48,7 @@ export default function SurveyDialogShell({
   sideRailSlotId?: string;
 }) {
   useEffect(() => {
-    if (!open) return;
+    if (!open || disableEscape) return;
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -50,7 +59,7 @@ export default function SurveyDialogShell({
 
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [onClose, open]);
+  }, [disableEscape, onClose, open]);
 
   // Position the optional side-rail gutter slot just left of the card, vertically
   // centered on it. Fixed-positioned so it never affects the card's own layout,
@@ -59,16 +68,24 @@ export default function SurveyDialogShell({
   const [railBox, setRailBox] = useState<{ left: number; top: number } | null>(
     null,
   );
+  const [guideBox, setGuideBox] = useState<{ left: number; top: number } | null>(
+    null,
+  );
   useEffect(() => {
-    if (!open || !sideRailSlotId) return;
+    if (!open || (!sideRailSlotId && !sideGuide)) return;
     const card = cardRef.current;
     if (!card) return;
     const measure = () => {
       const rect = card.getBoundingClientRect();
-      if (rect.left > 56) {
+      if (sideRailSlotId && rect.left > 56) {
         setRailBox({ left: rect.left - 12, top: rect.top + rect.height / 2 });
       } else {
         setRailBox(null);
+      }
+      if (sideGuide && window.innerWidth - rect.right > 56) {
+        setGuideBox({ left: rect.right + 12, top: rect.top + rect.height / 2 });
+      } else {
+        setGuideBox(null);
       }
     };
     measure();
@@ -79,7 +96,7 @@ export default function SurveyDialogShell({
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [open, sideRailSlotId]);
+  }, [open, sideGuide, sideRailSlotId]);
 
   if (!open || typeof document === "undefined") return null;
 
@@ -91,7 +108,7 @@ export default function SurveyDialogShell({
     : `relative flex max-h-[min(94vh,920px)] w-full ${maxWidthClassName} flex-col overflow-hidden rounded-2xl border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)]`;
 
   return createPortal(
-    <div className={outerClass}>
+    <div className={`${outerClass} ${outerClassName ?? ""}`}>
       <div
         className="absolute inset-0 bg-[rgba(17,24,28,0.32)] backdrop-blur-[3px]"
         onClick={onClose}
@@ -106,6 +123,18 @@ export default function SurveyDialogShell({
               : { left: -9999, top: -9999 }
           }
         />
+      ) : null}
+      {sideGuide ? (
+        <div
+          className="pointer-events-none fixed z-[76] hidden -translate-y-1/2 2xl:block"
+          style={
+            guideBox
+              ? { left: guideBox.left, top: guideBox.top }
+              : { left: -9999, top: -9999 }
+          }
+        >
+          {sideGuide}
+        </div>
       ) : null}
       <div ref={cardRef} className={cardClass}>
         {hideHeader ? null : (

@@ -16,6 +16,7 @@ import { fmtDate } from '../Charts'
 import { TiresSection } from '../TiresSection'
 import { AdminActionPanel, ActionRow, Toast, ReasonPromptModal } from '../AdminActionPanel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
+import { TierRuleModal } from './pricing/TierRuleModal'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,6 +61,48 @@ const enrichmentChip = (status: string, fillRate?: number) => {
   const tone = ENRICHMENT_TONE[status] ?? 'slate'
   const pct = fillRate != null ? ` · ${fmtFillRate(fillRate)}` : ''
   return <Badge tone={tone} dot>{status}{pct}</Badge>
+}
+
+// Pricing tier chip. Colour groups the 7 tiers the way the shop-facing
+// labor-rate card does: mainstream / luxury / performance / exotic.
+const TIER_TONE: Record<string, 'slate' | 'blue' | 'orange' | 'purple'> = {
+  T1: 'slate',
+  T2a: 'blue', T2b: 'blue', T2c: 'blue',
+  T3a: 'orange', T3b: 'orange',
+  T4: 'purple',
+}
+
+/**
+ * `tier` = effective tier (persisted, else what the resolver would assign).
+ * `source` ending in "_detected" means it was computed live but not yet
+ * written to the config (persists on next quote / enrich). Null → the car
+ * matches no rule → "Needs review".
+ */
+const tierChip = (tier?: string | null, source?: string | null) => {
+  if (!tier) {
+    return (
+      <span title="No tier rule matches this vehicle — assign one to price it.">
+        <Badge tone="red" dot>Needs review</Badge>
+      </span>
+    )
+  }
+  const detected = !!source && source.endsWith('_detected')
+  return (
+    <span
+      title={
+        detected
+          ? 'Detected from rules — not yet saved (persists on next quote or enrichment)'
+          : `Source: ${source ?? 'stored'}`
+      }
+    >
+      <Badge
+        tone={TIER_TONE[tier] ?? 'slate'}
+        style={detected ? { opacity: 0.6, borderStyle: 'dashed' } : undefined}
+      >
+        {tier}
+      </Badge>
+    </span>
+  )
 }
 
 type OwnerRow = {
@@ -108,6 +151,7 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
   const [verifyOpen, setVerifyOpen] = useState(false)
   const [ownerEditing,      setOwnerEditing]      = useState<{ id: Id<'vehicle_owners'>; user: string } | null>(null)
   const [ownerSpecsEditing, setOwnerSpecsEditing] = useState<{ id: Id<'vehicle_owners'>; user: string } | null>(null)
+  const [tierRuleOpen,      setTierRuleOpen]      = useState(false)
   const [toast,      setToast]      = useState<string | null>(null)
   const serviceHistoryRef = useRef<HTMLDivElement>(null)
   const detail = useQuery(api.directorCars.carDetail, carId ? { id: carId } : 'skip')
@@ -272,6 +316,26 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
                   )}
                 </div>
               )}
+
+              <div style={{ marginBottom:18 }}>
+                <SectionTitle label="Pricing tier" />
+                <div style={{ display:'flex', flexDirection:'column', gap:8 }}>
+                  <Row k="Tier" v={tierChip(
+                    detail.vehicleConfig?.pricing_tier ?? null,
+                    detail.vehicleConfig?.pricing_tier_source ?? null,
+                  )} />
+                  {detail.vehicleConfig?.pricing_tier_source && (
+                    <Row k="Source" v={<span className="mono" style={{ fontSize:11 }}>{detail.vehicleConfig.pricing_tier_source}</span>} />
+                  )}
+                </div>
+                <div style={{ marginTop:10 }}>
+                  <Button size="sm" variant="primary" onClick={() => setTierRuleOpen(true)}>Set tier rule</Button>
+                </div>
+                <div style={{ marginTop:6, fontSize:11, color:'var(--slate-500)', lineHeight:1.4 }}>
+                  Creates a make / model / trim rule for this and every matching car. For a one-off
+                  per-car change use Pricing → Vehicle assignments.
+                </div>
+              </div>
 
               {detail.passport && (
                 <div style={{ marginBottom:18 }}>
@@ -448,6 +512,13 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
               onSaved={(n) => { setOwnerSpecsEditing(null); setToast(n > 0 ? `Saved ${n} owner-spec change${n === 1 ? '' : 's'}.` : 'No changes.') }} />
           )}
 
+          {/* Make/model/trim tier rule, prefilled from this car */}
+          <TierRuleModal
+            open={tierRuleOpen}
+            onClose={() => setTierRuleOpen(false)}
+            prefill={{ make: detail.make, model: detail.model, trim: detail.trim }}
+            onSaved={(msg) => { setTierRuleOpen(false); setToast(msg) }} />
+
           <Toast msg={toast} />
         </>
       )}
@@ -573,6 +644,9 @@ type CarRow = {
     confidence?:      number
     lastEnrichedAt?:  number
   }
+  pricing_tier?:   string | null
+  tier_effective?: string | null
+  tier_source?:    string | null
   createdAt?:   number
   updatedAt?:   number
 }
@@ -940,6 +1014,7 @@ export const TabCars = () => {
   const [q, setQ] = useState('')
   const [enrichFilter, setEnrichFilter] = useState('all')
   const [makeFilter,   setMakeFilter]   = useState('all')
+  const [tierFilter,   setTierFilter]   = useState('all')
   const [openId, setOpenId] = useState<Id<'vehicles'> | null>(null)
 
   useEffect(() => {
@@ -954,6 +1029,10 @@ export const TabCars = () => {
   const filtered = (cars ?? []).filter(c => {
     if (makeFilter !== 'all' && c.make !== makeFilter) return false
     if (enrichFilter !== 'all' && c.enrichment.status !== enrichFilter) return false
+    if (tierFilter !== 'all') {
+      if (tierFilter === 'needs_review') { if (c.tier_effective) return false }
+      else if (c.tier_effective !== tierFilter) return false
+    }
     if (q) {
       const needle = q.toLowerCase()
       const hay = [c.vin, c.ymm, c.ownerName, c.ownerEmail, c.make, c.model, c.trim].filter(Boolean).join(' ').toLowerCase()
@@ -971,7 +1050,22 @@ export const TabCars = () => {
     ]
   })()
 
-  const hasFilter = q || makeFilter !== 'all' || enrichFilter !== 'all'
+  const tierOptions = (() => {
+    const order = ['T1','T2a','T2b','T2c','T3a','T3b','T4']
+    const counts: Record<string, number> = {}
+    let needsReview = 0
+    for (const c of cars ?? []) {
+      if (c.tier_effective) counts[c.tier_effective] = (counts[c.tier_effective] ?? 0) + 1
+      else needsReview++
+    }
+    return [
+      { value:'all', label:'All tiers' },
+      ...order.filter(t => counts[t]).map(t => ({ value:t, label:`${t} (${counts[t]})` })),
+      ...(needsReview ? [{ value:'needs_review', label:`Needs review (${needsReview})` }] : []),
+    ]
+  })()
+
+  const hasFilter = q || makeFilter !== 'all' || enrichFilter !== 'all' || tierFilter !== 'all'
 
   return (
     <SectionAnchor id="cars" title="Cars"
@@ -984,9 +1078,11 @@ export const TabCars = () => {
           options={[{ value:'all', label:'All makes' }, ...makes.map(m => ({ value: m, label: m }))]} />
         <Select value={enrichFilter} onChange={e => setEnrichFilter(e.target.value)}
           options={enrichOptions} />
+        <Select value={tierFilter} onChange={e => setTierFilter(e.target.value)}
+          options={tierOptions} />
         <span style={{ flex:1 }} />
         {hasFilter && (
-          <Button size="sm" onClick={() => { setQ(''); setMakeFilter('all'); setEnrichFilter('all') }}>
+          <Button size="sm" onClick={() => { setQ(''); setMakeFilter('all'); setEnrichFilter('all'); setTierFilter('all') }}>
             <IconX size={12} /> Clear
           </Button>
         )}
@@ -1001,14 +1097,15 @@ export const TabCars = () => {
             <th style={{ ...tableStyles.th, textAlign:'right' }}>Mileage</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}># Bookings</th>
             <th style={tableStyles.th}>Enrichment</th>
+            <th style={tableStyles.th}>Tier</th>
             <th style={tableStyles.th}>Last enriched</th>
             <th style={{ ...tableStyles.th, textAlign:'right' }}>Actions</th>
           </tr></thead>
           <tbody>
             {cars === undefined
-              ? <tr><td colSpan={8} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
+              ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>Loading…</td></tr>
               : filtered.length === 0
-                ? <tr><td colSpan={8} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No vehicles match.</td></tr>
+                ? <tr><td colSpan={9} style={{ ...tableStyles.td, textAlign:'center', color:'var(--slate-400)', padding:32 }}>No vehicles match.</td></tr>
                 : filtered.map(c => (
                   <tr key={String(c.id)} onClick={() => setOpenId(c.id)} style={{ cursor:'pointer' }}>
                     <td style={tableStyles.td}>
@@ -1038,6 +1135,7 @@ export const TabCars = () => {
                     </td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} className="mono">{c.bookingCount}</td>
                     <td style={tableStyles.td}>{enrichmentChip(c.enrichment.status, c.enrichment.fillRate)}</td>
+                    <td style={tableStyles.td}>{tierChip(c.tier_effective, c.tier_source)}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{ageLabel(c.enrichment.lastEnrichedAt)}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right' }} onClick={e => e.stopPropagation()}>
                       <Button size="sm" onClick={() => setOpenId(c.id)}>View</Button>

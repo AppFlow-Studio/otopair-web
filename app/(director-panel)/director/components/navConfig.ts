@@ -42,7 +42,7 @@ export const NAV_GROUPS: NavGroup[] = [
   { section:'Catalog', items: [
     { id:'cars',         label:'Cars',            Icon:IconCar,      keywords:['vehicles','vins','makes','models'] },
     { id:'configs',      label:'Vehicle configs', Icon:IconSettings, keywords:['trims','fitment','engines','configurations'] },
-    { id:'enrichment',   label:'Enrichment',      Icon:IconRefresh,  keywords:['parts enrichment','runs','pipeline','scrape'] },
+    { id:'enrichment',   label:'Enrichment',      Icon:IconRefresh,  keywords:['parts enrichment','runs','pipeline','scrape','road to 1.0','quotability','census','cohorts','nightly legs'] },
     { id:'pricing',      label:'Pricing & tiers', Icon:IconBolt,     keywords:['price','tiers','labor rates','markup'] },
     { id:'serviceParts', label:'Service Parts',   Icon:IconTag,      keywords:['parts','catalog','oem parts','service parts'] },
     { id:'estimatorLabor', label:'Estimator & Labor', Icon:IconClock, keywords:['labor','estimator','hours','labour'] },

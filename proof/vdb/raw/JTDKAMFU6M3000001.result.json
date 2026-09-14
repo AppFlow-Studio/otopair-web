@@ -1,0 +1,451 @@
+{
+  "carApiInRange": false,
+  "inFleet": true,
+  "label": "2021 Toyota Prius (hybrid, 0W-16, eCVT)",
+  "providers": {
+    "carapi": {
+      "applicable": false,
+      "canonical": null,
+      "ok": false,
+      "rawSample": "{\"vin\":null,\"trims\":null,\"engines\":null,\"bodies\":null}",
+      "reason": "out_of_free_dataset_range_2015_2020 (year=2021)"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "Hatchback",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 5,
+        "drivetrain": "FWD",
+        "engineCode": null,
+        "engineDescription": "1.8L I4",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Unleaded",
+        "horsepower": null,
+        "make": "Toyota",
+        "model": "Prius",
+        "mpgCity": 60,
+        "mpgCombined": null,
+        "mpgHighway": 52,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "Limited",
+        "wheelTorque": null,
+        "year": 2021
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2021,\"make\":\"Toyota\",\"model\":\"Prius\",\"trim\":\"Limited\",\"body_type\":\"Hatchback\",\"vehicle_type\":\"Car\",\"transmission\":\"Automatic\",\"drivetrain\":\"FWD\",\"fuel_type\":\"Unleaded\",\"engine\":\"1.8L I4\",\"doors\":5,\"made_in\":\"USA\",\"overall_height\":\"58.7\",\"overall_length\":\"181.1\",\"overall_width\":\"70.2\",\"std_seating\":\"5\",\"highway_mpg\":52,\"city_mpg\":60},\"neovin\":{\"vin\":\"JTDKAMFU6M3000001\",\"updated_at\":1787841822,\"updated_at_date\":\"2026-08-27T14:43:42.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"JTDKAMFU_M3\",\"year\":\"2021\",\"make\":\"Toyota\",\"model\":\"Prius\",\"trim\":\"20th Anniversary Edition\",\"transmission\":\"Automatic\",\"drivetrain\":\"FWD\",\"engine\":\"1.8L I4\",\"fuel_type\":\"Unleaded\",\"body_type\":\"Hatchback\",\"body_subtype\":\"\",\"doors\":\"5\",\"weight\":\"\",\"width\":\"69.3\",\"height\":\"57.9\",\"length\":\"180\",\"city_mpg\":\"54\",\"highway_mpg\":\"50\",\"combined_mpg\":\"52\",\"electric_range\":\"\",\"seating_capacity\":\"5\",\"msrp\":\"29875\",\"delivery_charges\":\"995\",\"vehicle_type\":\"Car\",\"powertrain_type\":\"HEV\",\"overall_safety_rating\":\"5\",\"side_safety_rating\":\"5\",\"front_safety_rating\":\"4\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"36000\",\"total_warranty_duration\":\"36\",\"powertrain_warranty_duration\":\"60\",\"powertrain_warranty_distance\":\"60000\",\"anti_corrosion_warranty_duration\":\"60\",\"anti_corrosion_warranty_distance\":\"999999\",\"roadside_assistance_warranty_duration\":\"36\",\"roadside_assistance_warranty_distance\":\"999999\",\"country\":\"USA\",\"version_name\":\"20th Anniversary Edition FWD\",\"manufacturer_code\":\"1219\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"6 Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Projector Beam Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-Low Beam\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"LED Headlights-High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Auto High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"RDS Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Satellite Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Exterior\",\"feature_type\":\"Lights\",\"description\":\"Center High Mount Stop Light\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Intelligent Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Knee Airbags\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Rear Occupant Sensors\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Season Tires\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Cover/Rear Parcel Shelf\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Light\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Card Key Power Locks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Automatic Locking\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Pearl\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints-3\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Active Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Lower Medium\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Synthetic Leather Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Lower Mid\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Driver Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Passenger Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Passenger Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Electrically Adjustable\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Reclining Electric Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Manual Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Front Seat Power Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Type\",\"description\":\"Synthetic Leather Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Steering Wheel Telescopic Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Heated Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Strut Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Multi-Link Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Rear Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Automatic Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"CVT Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"Variable Speed\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Micro Filter\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Combustion Heater\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning-Number of Zones\",\"description\":\"Single Zone Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Automatic Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Remote Control Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Auto Dimming Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Spoiler\",\"description\":\"Rear Spoiler\"},{\"category\":\"Exterior\",\"feature_type\":\"Rear Window\",\"description\":\"Rear Window Defogger\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rear Windshield Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Automatic Intermittent Wipe\"},{\"category\":\"Exterior\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rain Sensing Windsheild Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Express Power Windows\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Diameter (17 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Diameter (17 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Width (7 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Width (7 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Two-Tone Wheels\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes-4\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Ventilated Disc Brakes-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"ABS Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Electronic Brake Distribution\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brake Assist\",\"description\":\"Brake Assist\"},{\"category\":\"Comfort &…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": "In-Line",
+        "bodyType": "Hatchback/Liftback/Notchback",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "In-Line",
+        "displacement": 1.8,
+        "doors": 5,
+        "drivetrain": "4x2",
+        "engineCode": "2ZR-FXE,1NM",
+        "engineDescription": "2ZR-FXE,1NM",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 96,
+        "make": "TOYOTA",
+        "model": "Prius",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Continuously Variable Transmission (CVT)",
+        "transSpeeds": null,
+        "transType": "Continuously Variable Transmission (CVT)",
+        "trim": "ZVW51L / ZVW55L",
+        "wheelTorque": null,
+        "year": 2021
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): JTDKAMFU6M3000001\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"\",\"AdaptiveCruiseControl\":\"Standard\",\"AdaptiveDrivingBeam\":\"\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"1st and 2nd Rows\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"Driver Seat Only\",\"AirBagLocSeatCushion\":\"Passenger Seat Only\",\"AirBagLocSide\":\"1st and 2nd Rows\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"Not Applicable\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"\",\"BodyCabType\":\"Not Applicable\",\"BodyClass\":\"Hatchback/Liftback/Notchback\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"Standard\",\"CIB\":\"Standard\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"1800.0\",\"DisplacementCI\":\"109.84273937051\",\"DisplacementL\":\"1.8\",\"Doors\":\"5\",\"DriveType\":\"4x2\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"Strong HEV (Hybrid Electric Vehicle)\",\"EngineConfiguration\":\"In-Line\",\"EngineCycles\":\"\",\"EngineCylinders\":\"4\",\"EngineHP\":\"96\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"\",\"EngineModel\":\"2ZR-FXE,1NM\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"Standard\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"Electric\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"GVWR_to\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"KeylessIgnition\":\"Standard\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"Standard\",\"LaneKeepSystem\":\"Standard\",\"LowerBeamHeadlampLightSource\":\"LED\",\"Make\":\"TOYOTA\",\"MakeID\":\"448\",\"Manufacturer\":\"TOYOTA MOTOR CORPORATION\",\"ManufacturerId\":\"1057\",\"Model\":\"Prius\",\"ModelID\":\"2209\",\"ModelYear\":\"2021\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"5-door/4-door hatchback\",\"NCSAMake\":\"Toyota\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"Prius *\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"Bluetooth, Auxiliary Audio Input, MP3 player\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"PORT / L4\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"Seat Belt: All seats      \",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"Standard\",\"PlantCity\":\"\",\"PlantCompanyName\":\"Tsutsumi Plant, Toyota Motor Corp.\",\"PlantCountry\":\"JAPAN\",\"PlantState\":\"\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"2\",\"Seats\":\"5\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"ZVW51L / ZVW55L\",\"Series2\":\"Sedan Body Style\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"\",\"TransmissionStyle\":\"Continuously Variable Transmission (CVT)\",\"Trim\":\"\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"JTDKAMFU6M3000001\",\"ValveTrainDesign\":\"\",\"VehicleDescriptor\":\"JTDKAMFU*M3\",\"VehicleType\":\"PASSENGER CAR\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"106.30\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"\",\"WheelSizeRear\":\"\",\"WheelieMitigation\":\"\",\"Wheels\":\"4\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "I",
+        "bodyType": "Hatchback",
+        "brakeType": "4-Wheel Disc",
+        "camType": "DOHC",
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "I-4",
+        "displacement": 1.8,
+        "doors": 4,
+        "drivetrain": "4x2",
+        "engineCode": "STDEN",
+        "engineDescription": "1.8L 4-Cylinder DOHC 16V VVT-i",
+        "frontRotorDia": 10,
+        "frontTirePressure": 36,
+        "frontTireSize": "215/45R17",
+        "fuelType": "Gasoline / Electric",
+        "horsepower": 95,
+        "make": "Toyota",
+        "model": "Prius",
+        "mpgCity": 54,
+        "mpgCombined": 52,
+        "mpgHighway": 50,
+        "packages": [],
+        "rearRotorDia": 10.2,
+        "rearTirePressure": 35,
+        "rearTireSize": "215/45R17",
+        "steeringType": null,
+        "transDescription": "Continuously Variable Transmission (CVT)",
+        "transSpeeds": null,
+        "transType": "Continuously Variable Transmission (CVT)",
+        "trim": "20th Anniversary Edition",
+        "wheelTorque": 76,
+        "year": 2021
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"JTDKAMFU6M3000001\",\"year\":2021,\"make\":\"Toyota\",\"model\":\"Prius\",\"trim\":\"20th Anniversary Edition\",\"style\":\"5dr Front-Wheel Drive Hatchback CVT\",\"trim_and_style\":\"20th Anniversary Edition 5dr Front-Wheel Drive Hatchback CVT\",\"summary\":\"Welcome to the 2021 Toyota Prius 20th Anniversary Edition, celebrating two decades of excellence. This limited edition model comes equipped with a fuel-efficient 1.8L I-4 121hp hybrid gas engine and a smooth 2-speed CVTi-S continuously variable transmission (cvt) transmission with overdrive. Safety is paramount with 4-wheel anti-lock brakes, side seat mounted airbags, and curtain airbags. The spacious cabin offers automatic air conditioning and cruise control for your comfort and convenience. Enjoy the sleek look of 17\\\" aluminum wheels, while advanced features like Full-Speed Range Dynamic Radar Cruise Control and Vehicle Stability Control ensure a confident ride.\",\"price\":{\"base_msrp\":\"29,875\",\"delivery_charges\":\"1,025\",\"invoice_price\":\"27,811\",\"total_price\":\"30,900\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Midsize Car\",\"rear_door_type\":\"\",\"body_type\":\"Hatchback\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,572\",\"unit\":\"mm\"},{\"value\":\"180\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,760\",\"unit\":\"mm\"},{\"value\":\"69.29\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"69.3\",\"unit\":\"in\"},{\"value\":\"1,760.22\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,471\",\"unit\":\"mm\"},{\"value\":\"57.91\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"59.4\",\"unit\":\"in\"},{\"value\":\"1,508.76\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"59.8\",\"unit\":\"in\"},{\"value\":\"1,518.92\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,700\",\"unit\":\"mm\"},{\"value\":\"106.3\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"2,636\",\"unit\":\"l\"},{\"value\":\"93.1\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"1,001\",\"unit\":\"mm\"},{\"value\":\"39.4\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"950\",\"unit\":\"mm\"},{\"value\":\"37.4\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,397\",\"unit\":\"mm\"},{\"value\":\"55\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,346\",\"unit\":\"mm\"},{\"value\":\"53\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,074\",\"unit\":\"mm\"},{\"value\":\"42.3\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"848\",\"unit\":\"mm\"},{\"value\":\"33.4\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"776\",\"unit\":\"l\"},{\"value\":\"27\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"1,436\",\"unit\":\"l\"},{\"value\":\"51\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"27.4\",\"unit\":\"cu.ft\"},{\"value\":\"775.89\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"3,075\",\"unit\":\"lb\"},{\"value\":\"1,394.56\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"3,075\",\"unit\":\"lb\"},{\"value\":\"1,394.56\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"35.4\",\"unit\":\"ft\"},{\"value\":\"10.79\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"17.7\",\"unit\":\"ft\"},{\"value\":\"5.39\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"10\",\"unit\":\"in\"},{\"value\":\"254\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"10.2\",\"unit\":\"in\"},{\"value\":\"259.08\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"17 X 7 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"17 X 7 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"76\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":1.8,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"5,200\",\"unit\":\"rpm\"},{\"value\":\"95\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"3,600\",\"unit\":\"rpm\"},{\"value\":\"105\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"80.5\",\"unit\":\"mm\"},{\"value\":\"3.17\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"88.4\",\"unit\":\"mm\"},{\"value\":\"3.48\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"11.3\",\"unit\":\"gal\"},{\"value\":\"42.77\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"610.2\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"565\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"120\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"71\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Rack-Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"4-Wheel Disc\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"\",\"max_alternator_capacity_amps\":\"\"}},{\"suspensions\":{\"front_type\":\"Strut\",\"front_type_extended\":\"Strut\",\"rear_type\":\"Multi-Link\",\"rear_type_extended\":\"Multi-Link\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"\"}},{\"tires\":{\"front_tire_size\":\"215/45R17\",\"rear_tire_size\":\"215/45R17\",\"spare_tire_size\":\"\",\"type\":\"All-season\",\"front_tire_pressure_psi\":\"36\",\"rear_tire_pressure_psi\":\"35\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Gas/Electric N/A\",\"code\":\"STDEN\",\"cylinders_configuration\":\"I-4\",\"displacement\":1800,\"compressor\":\"\",\"drivetype\":\"4x2\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"16\",\"compression\":\"13\",\"variable_intake_manifold\":\"\",\"block_type\":\"I\",\"block_material\":\"Aluminum\",\"cam_type\":\"DOHC\"}},{\"fuel\":{\"type\":\"Gasoline / Electric\",\"standard_fuel_economy_type\":\"\",\"grade\":\"Regular Unleaded\"}},{\"mpg\":{\"e…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "doors",
+        "values": {
+          "marketcheck": "5",
+          "nhtsa": "5",
+          "vdb": "4"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "marketcheck": "Limited",
+          "nhtsa": "ZVW51L / ZVW55L",
+          "vdb": "20th Anniversary Edition"
+        }
+      },
+      {
+        "field": "engineCode",
+        "values": {
+          "nhtsa": "2ZR-FXE,1NM",
+          "vdb": "STDEN"
+        }
+      },
+      {
+        "field": "cylindersConfiguration",
+        "values": {
+          "nhtsa": "In-Line",
+          "vdb": "I-4"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "marketcheck": "FWD",
+          "nhtsa": "4x2",
+          "vdb": "4x2"
+        }
+      },
+      {
+        "field": "horsepower",
+        "values": {
+          "nhtsa": "96",
+          "vdb": "95"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "marketcheck": "Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline / Electric"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "marketcheck": "Hatchback",
+          "nhtsa": "Hatchback/Liftback/Notchback",
+          "vdb": "Hatchback"
+        }
+      },
+      {
+        "field": "transType",
+        "values": {
+          "marketcheck": "Automatic",
+          "nhtsa": "Continuously Variable Transmission (CVT)",
+          "vdb": "Continuously Variable Transmission (CVT)"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": false,
+        "deepSpec": {
+          "pct": 0,
+          "present": 0,
+          "total": 19
+        },
+        "engineCode": "no_ground_truth",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "absent",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "absent",
+          "drivetrain": "absent",
+          "engineCode": "absent",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "absent",
+          "horsepower": "absent",
+          "make": "absent",
+          "model": "absent",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "absent",
+          "transSpeeds": "absent",
+          "transType": "absent",
+          "trim": "absent",
+          "wheelTorque": "absent",
+          "year": "absent"
+        },
+        "full": {
+          "pct": 0,
+          "present": 0,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 0,
+          "present": 0,
+          "total": 4
+        },
+        "ok": false,
+        "reason": "out_of_free_dataset_range_2015_2020 (year=2021)"
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 42,
+          "present": 8,
+          "total": 19
+        },
+        "engineCode": "match",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 49,
+          "present": 17,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 79,
+          "present": 15,
+          "total": 19
+        },
+        "engineCode": "mismatch",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "present",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 83,
+          "present": 29,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "JTDKAMFU6M3000001",
+  "year": 2021
+}

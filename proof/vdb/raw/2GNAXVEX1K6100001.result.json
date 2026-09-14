@@ -1,0 +1,485 @@
+{
+  "carApiInRange": true,
+  "inFleet": true,
+  "label": "2019 Chevy Equinox 2.0T LTG (GM dash-code fluids)",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": "In-Line",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": null,
+        "camType": "Dual Overhead Cam (DOHC)",
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "In-Line",
+        "displacement": 2,
+        "doors": 4,
+        "drivetrain": "AWD/All-Wheel Drive",
+        "engineCode": null,
+        "engineDescription": "LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": null,
+        "make": "CHEVROLET",
+        "model": "Equinox",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": null,
+        "transSpeeds": null,
+        "transType": null,
+        "trim": "L 4dr SUV (1.5L 4cyl Turbo 6A)",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2019,\"make\":\"CHEVROLET\",\"model\":\"Equinox\",\"trim\":\"LT (2LT)\",\"specs\":{\"active_safety_system_note\":null,\"adaptive_cruise_control_acc\":null,\"adaptive_driving_beam_adb\":null,\"antilock_braking_system_abs\":\"Standard\",\"auto_reverse_system_for_windows_and_sunroofs\":\"Standard\",\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":\"Standard\",\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":\"2\",\"backup_camera\":\"Standard\",\"base_price\":\"30095.00\",\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":null,\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":\"Optional\",\"body_class\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"brake_system_description\":null,\"brake_system_type\":\"Hydraulic\",\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":null,\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":null,\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":\"All Rows\",\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":\"Standard\",\"destination_market\":null,\"displacement_cc\":\"2000\",\"displacement_ci\":\"122.0474881894645679\",\"displacement_l\":\"2\",\"doors\":\"4\",\"drive_type\":\"AWD/All-Wheel Drive\",\"dynamic_brake_support_dbs\":\"Standard\",\"electrification_level\":null,\"electronic_stability_control_esc\":\"Standard\",\"engine_brake_hp_from\":null,\"engine_brake_hp_to\":null,\"engine_configuration\":\"In-Line\",\"engine_manufacturer\":\"GM\",\"engine_model\":\"LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM\",\"engine_number_of_cylinders\":\"4\",\"engine_power_kw\":null,\"engine_stroke_cycles\":null,\"entertainment_system\":null,\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":null,\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 1C: 4,001 - 5,000 lb (1,814 - 2,268 kg)\",\"gross_vehicle_weight_rating_to\":null,\"headlamp_light_source\":null,\"keyless_ignition\":\"Standard\",\"knee_air_bag_locations\":null,\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":null,\"lane_keeping_assistance_lka\":null,\"manufacturer_name\":\"GENERAL MOTORS LLC\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":\"2\",\"number_of_seats\":\"5\",\"number_of_wheels\":\"4\",\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":null,\"other_motorcycle_info\":null,\"other_restraint_system_info\":null,\"other_trailer_info\":null,\"parking_assist\":null,\"pedestrian_automatic_emergency_braking_paeb\":null,\"plant_city\":\"INGERSOLL\",\"plant_company_name\":\"CAMI\",\"plant_country\":\"CANADA\",\"plant_state\":\"ONTARIO\",\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":null,\"semiautomatic_headlamp_beam_switching\":\"Standard\",\"series\":null,\"series2\":null,\"side_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"steering_location\":\"Left-Hand Drive (LHD)\",\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Direct\",\"top_speed_mph\":null,\"track_width_inches\":null,\"traction_control\":\"Standard\",\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":null,\"transmission_style\":null,\"trim\":\"LT (2LT)\",\"trim2\":null,\"turbo\":\"Yes\",\"valve_train_design\":\"Dual Overhead Cam (DOHC)\",\"vehicle_descriptor\":\"2GNAXVEX*K6\",\"vehicle_type\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"wheel_size_front_inches\":\"17\",\"wheel_size_rear_inches\":\"17\",\"wheelbase_inches_from\":\"107.30\",\"wheelbase_inches_to\":null,\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":9610,\"make_model_id\":160,\"year\":2019,\"name\":\"L\",\"description\":\"L 4dr SUV (1.5L 4cyl Turbo 6A)\",\"msrp\":23800,\"invoice\":23729,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70515,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"L\"}},{\"id\":9612,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV (1.5L 4cyl Turbo 6A)\",\"msrp\":27200,\"invoice\":25894,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}},{\"id\":9618,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV (1.6L 4cyl Turbodiesel 6A)\",\"msrp\":29600,\"invoice\":28179,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}},{\"id\":9613,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV (2.0L 4cyl Turbo 9A)\",\"msrp\":29700,\"invoice\":28274,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}},{\"id\":9614,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV AWD (1.5L 4cyl Turbo 6A)\",\"msrp\":28900,\"invoice\":27513,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}},{\"id\":9617,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV AWD (1.6L 4cyl Turbodiesel 6A)\",\"msrp\":31300,\"invoice\":29798,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}},{\"id\":9611,\"make_model_id\":160,\"year\":2019,\"name\":\"LT\",\"description\":\"LT 4dr SUV AWD (2.0L 4cyl Turbo 9A)\",\"msrp\":31500,\"invoice\":29988,\"created\":\"2023-06-29T21:01:07-04:00\",\"modified\":\"2023-06-29T21:01:07-04:00\",\"make_model\":{\"id\":160,\"make_id\":6,\"name\":\"Equinox\",\"make\":{\"id\":6,\"name\":\"Chevrolet\"}},\"make_model_submodel\":{\"id\":70517,\"oem_make_model_id\":6381,\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"submodel\":\"LT\"}}]},\"trims\":null,\"engines\":null,\"bodies\":null}"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "SUV",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 5,
+        "drivetrain": "4WD",
+        "engineCode": null,
+        "engineDescription": "2.0L I4",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Premium Unleaded",
+        "horsepower": null,
+        "make": "Chevrolet",
+        "model": "Equinox",
+        "mpgCity": 22,
+        "mpgCombined": null,
+        "mpgHighway": 28,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": null,
+        "transType": "Automatic",
+        "trim": "LT",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"trim\":\"LT\",\"body_type\":\"SUV\",\"vehicle_type\":\"Truck\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"fuel_type\":\"Premium Unleaded\",\"engine\":\"2.0L I4\",\"doors\":5,\"made_in\":\"USA\",\"overall_height\":\"65.4\",\"overall_length\":\"183.1\",\"overall_width\":\"72.6\",\"std_seating\":\"5\",\"highway_mpg\":28,\"city_mpg\":22},\"neovin\":{\"vin\":\"2GNAXVEX1K6100001\",\"updated_at\":1787841843,\"updated_at_date\":\"2026-08-27T14:44:03.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"2GNAXVEX_K6\",\"year\":\"2019\",\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"trim\":\"LT\",\"transmission\":\"Automatic\",\"drivetrain\":\"4WD\",\"engine\":\"2.0L I4\",\"fuel_type\":\"Premium Unleaded\",\"body_type\":\"SUV\",\"body_subtype\":\"\",\"doors\":\"5\",\"weight\":\"4850\",\"width\":\"72.6\",\"height\":\"65.4\",\"length\":\"183.1\",\"city_mpg\":\"22\",\"highway_mpg\":\"28\",\"combined_mpg\":\"24\",\"electric_range\":\"\",\"seating_capacity\":\"5\",\"msrp\":\"31400\",\"delivery_charges\":\"1195\",\"vehicle_type\":\"Truck\",\"powertrain_type\":\"Combustion\",\"overall_safety_rating\":\"5\",\"side_safety_rating\":\"5\",\"front_safety_rating\":\"5\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"36000\",\"total_warranty_duration\":\"36\",\"powertrain_warranty_duration\":\"60\",\"powertrain_warranty_distance\":\"60000\",\"anti_corrosion_warranty_duration\":\"72\",\"anti_corrosion_warranty_distance\":\"100000\",\"roadside_assistance_warranty_duration\":\"60\",\"roadside_assistance_warranty_distance\":\"60000\",\"country\":\"USA\",\"version_name\":\"AWD LT 2.0T\",\"manufacturer_code\":\"1XY26/2LT\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"6 Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Projector Beam Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"Bi-Xenon Headlights-Low Beam\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"Bi-Xenon Headlights-High Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"RDS Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Satellite Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio System\",\"description\":\"Premium Brand Audio\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Intelligent Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Season Tires\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Card Key Power Locks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Includes Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Automatic Locking\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti-Theft Protection\",\"description\":\"Anti-Theft Protection\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Metallic\"},{\"category\":\"Exterior\",\"feature_type\":\"Trailer\",\"description\":\"Trailer Towing Preparation\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Trailer\",\"description\":\"Trailer Stability Program\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Upper Medium SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Upgraded Cloth/Velour Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Compact SUV\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Driver Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Passenger Bucket Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Electrically Adjustable\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Reclining Electric Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Manual Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Front Seat Power Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Reclining Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Type\",\"description\":\"Plastic Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Steering Wheel Telescopic Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Vehicle Speed Proportional Power Steering\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Rear Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Strut Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Multi-Link Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Rear Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Automatic Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"9 Speed Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Mode Select\",\"description\":\"Automatic Only Mode Select\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Manual Mode\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Description\",\"description\":\"Automatic With Manual Mode Trans\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Micro Filter\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Manual Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Spoiler\",\"description\":\"Roof Spoiler\"},{\"category\":\"Exterior\",\"feature_type\":\"Rear Window\",\"description\":\"Rear Window Defogger\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rear Windshield Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Variable Intermittent Wipe\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Express Power Windows\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Width (7 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Width (7 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Spare Wheel\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Spacesaver Spare Wheel\"},{\"category\":\"Exterior\",\"feature_type\":\"Spare Wheel\",\"description\":\"Steel Spare Wheel\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems Data Feed-Internet\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Navigational Systems Display Type-Color\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems\",\"description\":\"Mobile Phone Navigational Systems\"},{\"category\":\"Infotainment\",\"feature_type\":\"Navigational Systems Screen\",\"description\":\"Navigational Systems Screen Size (7 in)\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Noise Reduction\",\"description\":\"Electronic Noise Reduction\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Compass\",\"description\":\"Compass\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"description\":\"Disc Brakes-4\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Brakes\",\"desc…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": "In-Line",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": "Hydraulic",
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "In-Line",
+        "displacement": 2,
+        "doors": 4,
+        "drivetrain": "AWD/All-Wheel Drive",
+        "engineCode": "LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM",
+        "engineDescription": "LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": null,
+        "make": "CHEVROLET",
+        "model": "Equinox",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": null,
+        "transSpeeds": null,
+        "transType": null,
+        "trim": "LT (2LT)",
+        "wheelTorque": null,
+        "year": 2019
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 2GNAXVEX1K6100001\",\"Results\":[{\"ABS\":\"Standard\",\"ActiveSafetySysNote\":\"\",\"AdaptiveCruiseControl\":\"\",\"AdaptiveDrivingBeam\":\"\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"All Rows\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"\",\"AirBagLocSeatCushion\":\"\",\"AirBagLocSide\":\"1st Row (Driver and Passenger)\",\"AutoReverseSystem\":\"Standard\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"2\",\"BasePrice\":\"30095.00\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"Optional\",\"BodyCabType\":\"\",\"BodyClass\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"Hydraulic\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"Standard\",\"CIB\":\"\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"Standard\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"2000\",\"DisplacementCI\":\"122.0474881894\",\"DisplacementL\":\"2\",\"Doors\":\"4\",\"DriveType\":\"AWD/All-Wheel Drive\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"Standard\",\"EDR\":\"\",\"ESC\":\"Standard\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"In-Line\",\"EngineCycles\":\"\",\"EngineCylinders\":\"4\",\"EngineHP\":\"\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"GM\",\"EngineModel\":\"LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 1C: 4,001 - 5,000 lb (1,814 - 2,268 kg)\",\"GVWR_to\":\"\",\"KeylessIgnition\":\"Standard\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"\",\"LaneKeepSystem\":\"\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"CHEVROLET\",\"MakeID\":\"467\",\"Manufacturer\":\"GENERAL MOTORS LLC\",\"ManufacturerId\":\"984\",\"Model\":\"Equinox\",\"ModelID\":\"1847\",\"ModelYear\":\"2019\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"Compact Utility (Utility Vehicle Categories \\\"Small\\\" and \\\"Midsize\\\")\",\"NCSAMake\":\"Chevrolet\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"Equinox\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"\",\"PlantCity\":\"INGERSOLL\",\"PlantCompanyName\":\"CAMI\",\"PlantCountry\":\"CANADA\",\"PlantState\":\"ONTARIO\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"Standard\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"2\",\"Seats\":\"5\",\"SemiautomaticHeadlampBeamSwitching\":\"Standard\",\"Series\":\"\",\"Series2\":\"\",\"SteeringLocation\":\"Left-Hand Drive (LHD)\",\"SuggestedVIN\":\"\",\"TPMS\":\"Direct\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"Standard\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"\",\"TransmissionStyle\":\"\",\"Trim\":\"LT (2LT)\",\"Trim2\":\"\",\"Turbo\":\"Yes\",\"VIN\":\"2GNAXVEX1K6100001\",\"ValveTrainDesign\":\"Dual Overhead Cam (DOHC)\",\"VehicleDescriptor\":\"2GNAXVEX*K6\",\"VehicleType\":\"MULTIPURPOSE PASSENGER VEHICLE (MPV)\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"107.30\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"17\",\"WheelSizeRear\":\"17\",\"WheelieMitigation\":\"\",\"Wheels\":\"4\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "I",
+        "bodyType": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+        "brakeType": "Pwr",
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "I-4",
+        "displacement": 2,
+        "doors": 4,
+        "drivetrain": "AWD",
+        "engineCode": "LTG",
+        "engineDescription": null,
+        "frontRotorDia": null,
+        "frontTirePressure": 35,
+        "frontTireSize": "235/50R19",
+        "fuelType": "Gasoline",
+        "horsepower": 252,
+        "make": "Chevrolet",
+        "model": "Equinox",
+        "mpgCity": 22,
+        "mpgCombined": 24,
+        "mpgHighway": 28,
+        "packages": [],
+        "rearRotorDia": null,
+        "rearTirePressure": 35,
+        "rearTireSize": "235/50R19",
+        "steeringType": "hydraulic",
+        "transDescription": "9 speed automatic",
+        "transSpeeds": 9,
+        "transType": "Automatic",
+        "trim": "LT",
+        "wheelTorque": 103,
+        "year": 2019
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"2GNAXVEX1K6100001\",\"year\":2019,\"make\":\"Chevrolet\",\"model\":\"Equinox\",\"trim\":\"LT\",\"style\":\"All-wheel Drive Automatic\",\"trim_and_style\":\"LT All-wheel Drive Automatic\",\"summary\":\"The 2019 Chevrolet Equinox LT offers a powerful performance with its 2L I-4 252hp intercooled turbo engine and 9-speed automatic transmission. Its safety features include 4-wheel anti-lock brakes (ABS), side seat mounted airbags, and curtain 1st and 2nd row overhead airbags. The Equinox LT also comes with conveniences like air conditioning, 18\\\" aluminum wheels, and cruise control. With ABS and driveline traction control, along with its all-wheel drive, this SUV ensures a comfortable and secure ride.\",\"price\":{\"base_msrp\":\"31,500\",\"delivery_charges\":\"1,195\",\"invoice_price\":\"29,988\",\"total_price\":\"32,695\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"2WD Sports Utility Vehicle\",\"rear_door_type\":\"\",\"body_type\":\"Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,651\",\"unit\":\"mm\"},{\"value\":\"183.11\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,844\",\"unit\":\"mm\"},{\"value\":\"72.6\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"72.6\",\"unit\":\"in\"},{\"value\":\"1,844.04\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,661\",\"unit\":\"mm\"},{\"value\":\"65.39\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"62.2\",\"unit\":\"in\"},{\"value\":\"1,579.88\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"62.2\",\"unit\":\"in\"},{\"value\":\"1,579.88\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,725\",\"unit\":\"mm\"},{\"value\":\"107.28\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"2,823\",\"unit\":\"l\"},{\"value\":\"99.7\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"970\",\"unit\":\"mm\"},{\"value\":\"38.2\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"978\",\"unit\":\"mm\"},{\"value\":\"38.5\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,453\",\"unit\":\"mm\"},{\"value\":\"57.2\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,410\",\"unit\":\"mm\"},{\"value\":\"55.5\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,039\",\"unit\":\"mm\"},{\"value\":\"40.9\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"1,013\",\"unit\":\"mm\"},{\"value\":\"39.9\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"847\",\"unit\":\"l\"},{\"value\":\"30\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"1,809\",\"unit\":\"l\"},{\"value\":\"64\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"63.9\",\"unit\":\"cu.ft\"},{\"value\":\"1,809.46\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"29.9\",\"unit\":\"cu.ft\"},{\"value\":\"846.68\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"3,650\",\"unit\":\"lb\"},{\"value\":\"1,655.33\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"3,650\",\"unit\":\"lb\"},{\"value\":\"1,655.33\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"175\",\"unit\":\"mm\"},{\"value\":\"6.9\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"15\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"23\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"17\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"150\",\"unit\":\"lb\"},{\"value\":\"68.03\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"1,500\",\"unit\":\"lb\"},{\"value\":\"680.27\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"18 x -TBD- \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"18 x -TBD- \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"16 x -TBD - \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"103\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":2,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"5,500\",\"unit\":\"rpm\"},{\"value\":\"252\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"2,500\",\"unit\":\"rpm\"},{\"value\":\"260\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"86\",\"unit\":\"mm\"},{\"value\":\"3.39\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"86\",\"unit\":\"mm\"},{\"value\":\"3.39\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"15.6\",\"unit\":\"gal\"},{\"value\":\"59.05\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"390\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"468\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Pwr\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"Pwr\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"\",\"max_alternator_capacity_amps\":\"\"}},{\"suspensions\":{\"front_type\":\"MacPherson Strut\",\"front_type_extended\":\"\",\"rear_type\":\"Multi-Link\",\"rear_type_extended\":\"\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"Steel\"}},{\"tires\":{\"front_tire_size\":\"235/50R19\",\"rear_tire_size\":\"235/50R19\",\"spare_tire_size\":\"T135/70R16\",\"type\":\"All-season\",\"front_tire_pressure_psi\":\"35\",\"rear_tire_pressure_psi\":\"35\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Turbocharged Gas N/A\",\"code\":\"LTG\",\"cylinders_configuration\":\"I-4\",\"displacement\":2000,\"compressor\":\"Intercooled turbo\",\"drivetype\":\"AWD\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"16\",\"compression\":\"9.5\",\"variable_intake_manifold\":\"\",\"block_type\":\"I\",\"block_material\":\"\",\"cam_type\":\"\"}},{\"fuel\":{\"type\":\"Gasoline\",\"standard_fuel_economy_type\":\"\",\"grade\":\"Premium Unleaded\"}},{\"mpg\":{\"epa_city_economy\":\"22\",\"epa_hwy_economy\":\"28\",\"epa_combined_economy\":\"24\",\"epa_city_equivalent\":\"\",\"epa_hwy_equivalent\":\"\",\"epa_combined_equivalent\":\"…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "doors",
+        "values": {
+          "carapi": "4",
+          "marketcheck": "5",
+          "nhtsa": "4",
+          "vdb": "4"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "L 4dr SUV (1.5L 4cyl Turbo 6A)",
+          "marketcheck": "LT",
+          "nhtsa": "LT (2LT)",
+          "vdb": "LT"
+        }
+      },
+      {
+        "field": "engineCode",
+        "values": {
+          "nhtsa": "LTG - Spark Ignited Direct Injection, ALUM DOHC, Variable Valve Timing, DCVCP TURBO, E0-E100, ALUM",
+          "vdb": "LTG"
+        }
+      },
+      {
+        "field": "cylindersConfiguration",
+        "values": {
+          "carapi": "In-Line",
+          "nhtsa": "In-Line",
+          "vdb": "I-4"
+        }
+      },
+      {
+        "field": "drivetrain",
+        "values": {
+          "carapi": "AWD/All-Wheel Drive",
+          "marketcheck": "4WD",
+          "nhtsa": "AWD/All-Wheel Drive",
+          "vdb": "AWD"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Premium Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "carapi": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "marketcheck": "SUV",
+          "nhtsa": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]",
+          "vdb": "Sport Utility Vehicle [SUV]/Multipurpose Vehicle [MPV]"
+        }
+      },
+      {
+        "field": "brakeType",
+        "values": {
+          "nhtsa": "Hydraulic",
+          "vdb": "Pwr"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 32,
+          "present": 6,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "present",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "absent",
+          "transSpeeds": "absent",
+          "transType": "absent",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 40,
+          "present": 14,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "match",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "absent",
+          "transSpeeds": "absent",
+          "transType": "absent",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 43,
+          "present": 15,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 79,
+          "present": 15,
+          "total": 19
+        },
+        "engineCode": "match",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "present",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 77,
+          "present": 27,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "2GNAXVEX1K6100001",
+  "year": 2019
+}

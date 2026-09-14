@@ -588,10 +588,11 @@ export const V4_FIELD_KEYS = [
 
   // ── v7 New OEM Parts (4) ──
   "rotor_front_oem", "rotor_rear_oem", "battery_oem", "coolant_oem",
-  // ── Rotor thickness (4) ── the DISCARD minimum is the replace-at number the
-  //    inspection grades against; nominal is the new thickness and is tracked
-  //    separately purely so a nominal can never be mistaken for a minimum.
-  "rotor_front_min_thickness_mm", "rotor_rear_min_thickness_mm",
+  // ── Rotor thickness (2) ── NOMINAL (new/original OEM) thickness only. The
+  //    replace-at minimum is no longer an extraction target: it is DERIVED as
+  //    a 15% wear threshold off the nominal (rotorSpecResource.deriveRotorMinMm,
+  //    operator policy Aug 2026) — the web publishes nominals, not discard
+  //    limits, so hunting minimums bought nothing.
   "rotor_front_nominal_thickness_mm", "rotor_rear_nominal_thickness_mm",
   // ── v9.9 New OEM Parts (1) ── bottle-SKU engine oil for oil_change fitment.
   "engine_oil_oem",

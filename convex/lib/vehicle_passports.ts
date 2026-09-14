@@ -168,7 +168,8 @@ export const vehiclePassportBrakesValidator = v.object({
   // the mechanic reads the number cast on the rotor hat.
   rotor_min_front_mm: v.optional(nullableNumberValidator),
   rotor_min_rear_mm: v.optional(nullableNumberValidator),
-  // "oem_spec" | "mechanic_read" | "director_verified" | "derived_from_nominal"
+  // "derived_15pct_wear" (standard: 85% of OEM nominal) | "oem_spec" |
+  // "mechanic_read" | "director_verified" | "derived_from_nominal" (legacy)
   // | "default_fallback" — anything derived must never read as an OEM figure.
   rotor_min_quality_front: v.optional(nullableStringValidator),
   rotor_min_quality_rear: v.optional(nullableStringValidator),
@@ -249,6 +250,9 @@ export const prejobReportValidator = v.object({
 export const inspectionZoneStateValidator = v.object({
   zone_id: v.string(),
   done: v.boolean(),
+  // Which half of the split inspection completed this zone. Absent means the
+  // pre-check — the only phase that existed before the split.
+  done_phase: v.optional(v.union(v.literal("pre"), v.literal("mpi"))),
   measures: v.optional(v.record(v.string(), v.string())),
   tri: v.optional(
     v.record(v.string(), v.union(v.literal("g"), v.literal("y"), v.literal("r"))),

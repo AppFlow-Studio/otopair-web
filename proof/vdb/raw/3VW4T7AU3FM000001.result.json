@@ -1,0 +1,479 @@
+{
+  "carApiInRange": true,
+  "inFleet": true,
+  "label": "2015 VW Golf GTI (VAG family sharing with Audi parts)",
+  "providers": {
+    "carapi": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "carapi",
+        "_sourceEndpoint": "vin/{vin}",
+        "blockType": null,
+        "bodyType": "Hatchback/Liftback/Notchback",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": null,
+        "displacement": 1.984,
+        "doors": 4,
+        "drivetrain": null,
+        "engineCode": null,
+        "engineDescription": null,
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 210,
+        "make": "VOLKSWAGEN",
+        "model": "Golf GTI",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 6,
+        "transType": "Automatic",
+        "trim": "Autobahn 4dr Hatchback (2.0L 4cyl Turbo 6AM)",
+        "wheelTorque": null,
+        "year": 2015
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"vin\":{\"year\":2015,\"make\":\"VOLKSWAGEN\",\"model\":\"Golf GTI\",\"trim\":\"\",\"specs\":{\"active_safety_system_note\":null,\"adaptive_cruise_control_acc\":null,\"adaptive_driving_beam_adb\":null,\"antilock_braking_system_abs\":null,\"auto_reverse_system_for_windows_and_sunroofs\":null,\"automatic_crash_notification_acn_advanced_automatic_crash_notification_aacn\":null,\"automatic_pedestrian_alerting_sound_for_hybrid_and_ev_only\":null,\"axle_configuration\":null,\"axles\":null,\"backup_camera\":null,\"base_price\":null,\"battery_current_amps_from\":null,\"battery_current_amps_to\":null,\"battery_energy_kwh_from\":null,\"battery_energy_kwh_to\":null,\"battery_type\":null,\"battery_voltage_volts_from\":null,\"battery_voltage_volts_to\":null,\"bed_length_inches\":null,\"bed_type\":\"Not Applicable\",\"blind_spot_intervention_bsi\":null,\"blind_spot_warning_bsw\":null,\"body_class\":\"Hatchback/Liftback/Notchback\",\"brake_system_description\":null,\"brake_system_type\":null,\"bus_floor_configuration_type\":\"Not Applicable\",\"bus_length_feet\":null,\"bus_type\":\"Not Applicable\",\"cab_type\":\"Not Applicable\",\"charger_level\":null,\"charger_power_kw\":null,\"combined_braking_system_cbs\":null,\"cooling_type\":null,\"crash_imminent_braking_cib\":null,\"curb_weight_pounds\":null,\"curtain_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"custom_motorcycle_type\":\"Not Applicable\",\"daytime_running_light_drl\":null,\"destination_market\":null,\"displacement_cc\":\"1984.00\",\"displacement_ci\":\"121.0711082839488514\",\"displacement_l\":\"1.9840000000000000\",\"doors\":\"4\",\"drive_type\":null,\"dynamic_brake_support_dbs\":null,\"electrification_level\":null,\"electronic_stability_control_esc\":null,\"engine_brake_hp_from\":\"210.00\",\"engine_brake_hp_to\":null,\"engine_configuration\":null,\"engine_manufacturer\":\"Volkswagen\",\"engine_model\":null,\"engine_number_of_cylinders\":\"4\",\"engine_power_kw\":null,\"engine_stroke_cycles\":null,\"entertainment_system\":null,\"ev_drive_unit\":null,\"event_data_recorder_edr\":null,\"forward_collision_warning_fcw\":null,\"front_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"fuel_delivery_fuel_injection_type\":null,\"fuel_tank_material\":null,\"fuel_tank_type\":null,\"fuel_type_primary\":\"Gasoline\",\"fuel_type_secondary\":null,\"gross_combination_weight_rating_from\":null,\"gross_combination_weight_rating_to\":null,\"gross_vehicle_weight_rating_from\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"gross_vehicle_weight_rating_to\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"headlamp_light_source\":null,\"keyless_ignition\":null,\"knee_air_bag_locations\":null,\"lane_centering_assistance\":null,\"lane_departure_warning_ldw\":null,\"lane_keeping_assistance_lka\":null,\"manufacturer_name\":\"VOLKSWAGEN DE MEXICO SA DE CV\",\"motorcycle_chassis_type\":\"Not Applicable\",\"motorcycle_suspension_type\":\"Not Applicable\",\"non_land_use\":null,\"note\":null,\"number_of_battery_cells_per_module\":null,\"number_of_battery_modules_per_pack\":null,\"number_of_battery_packs_per_vehicle\":null,\"number_of_seat_rows\":null,\"number_of_seats\":null,\"number_of_wheels\":null,\"other_battery_info\":null,\"other_bus_info\":null,\"other_engine_info\":\"Fuel: Gas (50-St); Federal / California Emission Standard: BIN 3 / PZEV; Emissions Certification Test Group: FVGAV02.0APA\",\"other_motorcycle_info\":null,\"other_restraint_system_info\":\"Restraint System: Active - Driver/Passenger; Advanced Front Air Bags\",\"other_trailer_info\":null,\"parking_assist\":null,\"pedestrian_automatic_emergency_braking_paeb\":null,\"plant_city\":\"PUEBLA\",\"plant_company_name\":null,\"plant_country\":\"MEXICO\",\"plant_state\":null,\"possible_values\":\"\",\"pretensioner\":null,\"rear_automatic_emergency_braking\":null,\"rear_cross_traffic_alert\":null,\"sae_automation_level_from\":null,\"sae_automation_level_to\":null,\"seat_belt_type\":\"Manual\",\"seat_cushion_air_bag_locations\":null,\"semiautomatic_headlamp_beam_switching\":null,\"series\":null,\"series2\":null,\"side_air_bag_locations\":\"1st Row (Driver and Passenger)\",\"steering_location\":null,\"suggested_vin\":\"\",\"tire_pressure_monitoring_system_tpms_type\":\"Indirect\",\"top_speed_mph\":null,\"track_width_inches\":null,\"traction_control\":null,\"trailer_body_type\":\"Not Applicable\",\"trailer_length_feet\":null,\"trailer_type_connection\":\"Not Applicable\",\"transmission_speeds\":\"6\",\"transmission_style\":\"Automatic\",\"trim\":null,\"trim2\":null,\"turbo\":null,\"valve_train_design\":null,\"vehicle_descriptor\":\"3VW4T7AU*FM\",\"vehicle_type\":\"PASSENGER CAR\",\"wheel_size_front_inches\":null,\"wheel_size_rear_inches\":null,\"wheelbase_inches_from\":null,\"wheelbase_inches_to\":null,\"wheelbase_type\":null,\"wheelie_mitigation\":null,\"windows\":null},\"trims\":[{\"id\":23808,\"make_model_id\":385,\"year\":2015,\"name\":\"Autobahn\",\"description\":\"Autobahn 4dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":31145,\"invoice\":29899,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65341,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"Autobahn\"}},{\"id\":23807,\"make_model_id\":385,\"year\":2015,\"name\":\"Autobahn\",\"description\":\"Autobahn 4dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":30045,\"invoice\":28843,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65341,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"Autobahn\"}},{\"id\":23810,\"make_model_id\":385,\"year\":2015,\"name\":\"Autobahn w/Performance Package\",\"description\":\"Autobahn w/Performance Package 4dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":32640,\"invoice\":31334,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65341,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"Autobahn\"}},{\"id\":23809,\"make_model_id\":385,\"year\":2015,\"name\":\"Autobahn w/Performance Package\",\"description\":\"Autobahn w/Performance Package 4dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":31540,\"invoice\":30277,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65341,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"Autobahn\"}},{\"id\":23793,\"make_model_id\":385,\"year\":2015,\"name\":\"S\",\"description\":\"S 2dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":25885,\"invoice\":24850,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23791,\"make_model_id\":385,\"year\":2015,\"name\":\"S\",\"description\":\"S 2dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":24785,\"invoice\":23793,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23794,\"make_model_id\":385,\"year\":2015,\"name\":\"S\",\"description\":\"S 4dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":26485,\"invoice\":25426,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23792,\"make_model_id\":385,\"year\":2015,\"name\":\"S\",\"description\":\"S 4dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":25385,\"invoice\":24370,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23797,\"make_model_id\":385,\"year\":2015,\"name\":\"S w/Performance Package\",\"description\":\"S w/Performance Package 2dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":27380,\"invoice\":26286,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23795,\"make_model_id\":385,\"year\":2015,\"name\":\"S w/Performance Package\",\"description\":\"S w/Performance Package 2dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":26280,\"invoice\":25229,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23798,\"make_model_id\":385,\"year\":2015,\"name\":\"S w/Performance Package\",\"description\":\"S w/Performance Package 4dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":27980,\"invoice\":26862,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23796,\"make_model_id\":385,\"year\":2015,\"name\":\"S w/Performance Package\",\"description\":\"S w/Performance Package 4dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":26880,\"invoice\":25806,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65342,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"S\"}},{\"id\":23801,\"make_model_id\":385,\"year\":2015,\"name\":\"SE\",\"description\":\"SE 2dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":28885,\"invoice\":27730,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65343,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"SE\"}},{\"id\":23799,\"make_model_id\":385,\"year\":2015,\"name\":\"SE\",\"description\":\"SE 2dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":27785,\"invoice\":26673,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65343,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"SE\"}},{\"id\":23802,\"make_model_id\":385,\"year\":2015,\"name\":\"SE\",\"description\":\"SE 4dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":29485,\"invoice\":28306,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65343,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"SE\"}},{\"id\":23800,\"make_model_id\":385,\"year\":2015,\"name\":\"SE\",\"description\":\"SE 4dr Hatchback (2.0L 4cyl Turbo 6M)\",\"msrp\":28385,\"invoice\":27250,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"id\":385,\"make_id\":43,\"name\":\"Golf GTI\",\"make\":{\"id\":43,\"name\":\"Volkswagen\"}},\"make_model_submodel\":{\"id\":65343,\"oem_make_model_id\":6526,\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"GTI\",\"submodel\":\"SE\"}},{\"id\":23805,\"make_model_id\":385,\"year\":2015,\"name\":\"SE w/Performance Package\",\"description\":\"SE w/Performance Package 2dr Hatchback (2.0L 4cyl Turbo 6AM)\",\"msrp\":30380,\"invoice\":29166,\"created\":\"2023-06-29T21:05:56-04:00\",\"modified\":\"2023-06-29T21:05:56-04:00\",\"make_model\":{\"i…[truncated]"
+    },
+    "marketcheck": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "marketcheck",
+        "_sourceEndpoint": "decode/car/neovin/{vin}/specs",
+        "blockType": null,
+        "bodyType": "Hatchback",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": null,
+        "cylindersConfiguration": null,
+        "displacement": null,
+        "doors": 5,
+        "drivetrain": "FWD",
+        "engineCode": null,
+        "engineDescription": "2.0L I4",
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Premium Unleaded",
+        "horsepower": null,
+        "make": "Volkswagen",
+        "model": "Golf GTI",
+        "mpgCity": 25,
+        "mpgCombined": null,
+        "mpgHighway": 33,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Manual",
+        "transSpeeds": null,
+        "transType": "Manual",
+        "trim": "SE",
+        "wheelTorque": null,
+        "year": 2015
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"basic\":{\"is_valid\":true,\"decode_mode\":\"squishVIN\",\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"Golf GTI\",\"trim\":\"SE\",\"body_type\":\"Hatchback\",\"vehicle_type\":\"Car\",\"transmission\":\"Manual\",\"drivetrain\":\"FWD\",\"fuel_type\":\"Premium Unleaded\",\"engine\":\"2.0L I4\",\"doors\":5,\"made_in\":\"USA\",\"overall_height\":\"57.8\",\"overall_length\":\"168\",\"overall_width\":\"70.8\",\"std_seating\":\"5\",\"highway_mpg\":33,\"city_mpg\":25},\"neovin\":{\"vin\":\"3VW4T7AU3FM000001\",\"updated_at\":1787841851,\"updated_at_date\":\"2026-08-27T14:44:11.000Z\",\"decode_version\":1,\"reason\":\"NO HISTORY FOUND\",\"generic\":[{\"USA\":[{\"squish_vin\":\"3VW4T7AU_FM\",\"year\":\"2015\",\"make\":\"Volkswagen\",\"model\":\"Golf GTI\",\"trim\":\"Autobahn\",\"transmission\":\"Manual\",\"drivetrain\":\"FWD\",\"engine\":\"2.0L I4\",\"fuel_type\":\"Premium Unleaded\",\"body_type\":\"Hatchback\",\"body_subtype\":\"\",\"doors\":\"5\",\"weight\":\"\",\"width\":\"70.8\",\"height\":\"57.8\",\"length\":\"168\",\"city_mpg\":\"25\",\"highway_mpg\":\"33\",\"combined_mpg\":\"28\",\"electric_range\":\"\",\"seating_capacity\":\"5\",\"msrp\":\"30695\",\"delivery_charges\":\"820\",\"vehicle_type\":\"Car\",\"powertrain_type\":\"Combustion\",\"overall_safety_rating\":\"\",\"side_safety_rating\":\"\",\"front_safety_rating\":\"\",\"roof_strength_rating\":\"Good\",\"rollover_rating\":\"4\",\"total_warranty_distance\":\"36000\",\"total_warranty_duration\":\"36\",\"powertrain_warranty_duration\":\"60\",\"powertrain_warranty_distance\":\"60000\",\"anti_corrosion_warranty_duration\":\"144\",\"anti_corrosion_warranty_distance\":\"999999\",\"roadside_assistance_warranty_duration\":\"36\",\"roadside_assistance_warranty_distance\":\"36000\",\"country\":\"USA\",\"version_name\":\"2.0T Autobahn 4-door DSG PZEV\",\"manufacturer_code\":\"AU18M3\",\"data_source\":\"JATO\",\"features\":{\"STANDARD\":[{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"8 Speakers\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Speakers\",\"description\":\"Premium Brand Speakers\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlight Lens Type\",\"description\":\"Projector Beam Headlights\"},{\"category\":\"Exterior\",\"feature_type\":\"Headlights\",\"description\":\"Halogen Headlights-Low Beam\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Dusk Sensor\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Headlight Control\",\"description\":\"Daytime Running Lights\"},{\"category\":\"Exterior\",\"feature_type\":\"Fog Lights\",\"description\":\"Front Fog Lights\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio-Disc Player\",\"description\":\"CD Player\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Digital Media Card\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Satellite Radio\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Color Screen Audio System\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Accessories\",\"description\":\"Bluetooth Connection\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Type\",\"description\":\"Touch Screen Audio\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Side Curtain Airbag-Front And Rear\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Driver Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Passenger Airbag\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Airbag\",\"description\":\"Front Side Airbag\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Remote Audio Controls\"},{\"category\":\"Infotainment\",\"feature_type\":\"Audio Controls\",\"description\":\"Steering Wheel Mounted Audio Controls\"},{\"category\":\"Exterior\",\"feature_type\":\"Tires\",\"description\":\"All Season Tires\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Cover/Rear Parcel Shelf\"},{\"category\":\"Interior\",\"feature_type\":\"Cargo\",\"description\":\"Cargo Area Light\"},{\"category\":\"Exterior\",\"feature_type\":\"Load Restraint\",\"description\":\"Load Restraint-Hooks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Card Key Power Locks\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Includes Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Locks\",\"description\":\"Power Locks Automatic Locking\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Anti-Theft Protection\",\"description\":\"Anti-Theft Protection\"},{\"category\":\"Exterior\",\"feature_type\":\"Paint\",\"description\":\"Paint-Pearl\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Front Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Glass Sunroof\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Electric Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Tilting Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sliding Sunroof-Front\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"Sunshade\"},{\"category\":\"Interior\",\"feature_type\":\"Sunroof\",\"description\":\"One-Touch Opening Sunroof-Front\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Height Adjustable Head Restraints\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Front Seats Head Restraints-2\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Head Restraints\",\"description\":\"Rear Seats Head Restraints-3\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat belts Pre-Tensioners\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Seat Belts\",\"description\":\"Front Seat Belts Height Adjustable\"},{\"category\":\"General\",\"feature_type\":\"Global Segment\",\"description\":\"Lower Medium\"},{\"category\":\"Interior\",\"feature_type\":\"Seat Upholstery\",\"description\":\"Leather Seats\"},{\"category\":\"General\",\"feature_type\":\"Vehicle Segment\",\"description\":\"Small\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Type\",\"description\":\"Driver Sports Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Function\",\"description\":\"Heated Passenger Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Electrically Adjustable\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Reclining Electric Driver Seat\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Passenger Seat Electric Reclining\"},{\"category\":\"Interior\",\"feature_type\":\"Front Seats Adjustment\",\"description\":\"Front Seat Power Lumbar Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Type\",\"description\":\"Rear Seats Bench\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Adjustment\",\"description\":\"Folding Rear Seats\"},{\"category\":\"Interior\",\"feature_type\":\"Rear Seats Function\",\"description\":\"Rear Seats Ski Hatch\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Alloy & Leather Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Height Adjustment Steering Wheel\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Steering Wheel Telescopic Adjustment\"},{\"category\":\"Interior\",\"feature_type\":\"Steering Wheel Function\",\"description\":\"Multi Function Steering Wheel\"},{\"category\":\"Safety & Driver Assist\",\"feature_type\":\"Power Steering\",\"description\":\"Power Steering\"},{\"category\":\"Interior\",\"feature_type\":\"Refrigerated Storage\",\"description\":\"Refrigerated Storage Compartment-Glove Compartment\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Power Outlet\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Outlet\",\"description\":\"12 Volt Rear Power Outlet\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Strut Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Multi-Link Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Suspension Type\",\"description\":\"Coil Suspension-Rear\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Front Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Stabilizer Bar\",\"description\":\"Rear Stabilizer Bar\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Front\"},{\"category\":\"Suspension\",\"feature_type\":\"Wheel Dependence\",\"description\":\"Independent Suspension-Rear\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Type\",\"description\":\"Manual Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Speeds\",\"description\":\"6 Speed Transmission\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Manual Sequential\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Automatic Mode\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission\",\"description\":\"Gear Change Paddles\"},{\"category\":\"Transmission\",\"feature_type\":\"Transmission Description\",\"description\":\"Dual Clutch Sequential Trans (DCT)\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Ventilation System\",\"description\":\"Micro Filter\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning-Number of Zones\",\"description\":\"Dual Zone Air Conditioning\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Air Conditioning\",\"description\":\"Automatic Air Conditioning\"},{\"category\":\"Interior\",\"feature_type\":\"Rear View Mirror\",\"description\":\"Rear View Mirror/Camera\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Driver-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Passenger-Electrically Adjustable\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Heated Door Mirrors\"},{\"category\":\"Exterior\",\"feature_type\":\"Door Mirrors/Cameras\",\"description\":\"Turn Signal In Mirror\"},{\"category\":\"Exterior\",\"feature_type\":\"Spoiler\",\"description\":\"Roof Spoiler\"},{\"category\":\"Exterior\",\"feature_type\":\"Rear Window\",\"description\":\"Rear Window Defogger\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rear Windshield Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Automatic Intermittent Wipe\"},{\"category\":\"Exterior\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Rain Sensing Windsheild Wipers\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Windshield Wipers\",\"description\":\"Heated Washer\"},{\"category\":\"Exterior\",\"feature_type\":\"Glass\",\"description\":\"Tinted Glass\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Front Express Power Windows\"},{\"category\":\"Comfort & Convenience\",\"feature_type\":\"Power Windows\",\"description\":\"Rear Express Power Windows\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Aluminum/Alloy Wheels\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Rear Wheel Diameter (18 in)\"},{\"category\":\"Exterior\",\"feature_type\":\"Wheels\",\"description\":\"Front Whe…[truncated]"
+    },
+    "nhtsa": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "nhtsa",
+        "_sourceEndpoint": "vpic decodevinvaluesextended",
+        "blockType": null,
+        "bodyType": "Hatchback/Liftback/Notchback",
+        "brakeType": null,
+        "camType": null,
+        "cca": null,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": null,
+        "displacement": 1.984,
+        "doors": 4,
+        "drivetrain": null,
+        "engineCode": null,
+        "engineDescription": null,
+        "frontRotorDia": null,
+        "frontTirePressure": null,
+        "frontTireSize": null,
+        "fuelType": "Gasoline",
+        "horsepower": 210,
+        "make": "VOLKSWAGEN",
+        "model": "GTI",
+        "mpgCity": null,
+        "mpgCombined": null,
+        "mpgHighway": null,
+        "packages": null,
+        "rearRotorDia": null,
+        "rearTirePressure": null,
+        "rearTireSize": null,
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 6,
+        "transType": "Automatic",
+        "trim": null,
+        "wheelTorque": null,
+        "year": 2015
+      },
+      "httpStatus": 200,
+      "ok": true,
+      "rawSample": "{\"Count\":1,\"Message\":\"Results returned successfully. NOTE: Any missing decoded values should be interpreted as NHTSA does not have data on the specific variable. Missing value should NOT be interpreted as an indication that a feature or technology is unavailable for a vehicle.\",\"SearchCriteria\":\"VIN(s): 3VW4T7AU3FM000001\",\"Results\":[{\"ABS\":\"\",\"ActiveSafetySysNote\":\"\",\"AdaptiveCruiseControl\":\"\",\"AdaptiveDrivingBeam\":\"\",\"AdaptiveHeadlights\":\"\",\"AdditionalErrorText\":\"\",\"AirBagLocCurtain\":\"1st Row (Driver and Passenger)\",\"AirBagLocFront\":\"1st Row (Driver and Passenger)\",\"AirBagLocKnee\":\"\",\"AirBagLocSeatCushion\":\"\",\"AirBagLocSide\":\"1st Row (Driver and Passenger)\",\"AutoReverseSystem\":\"\",\"AutomaticPedestrianAlertingSound\":\"\",\"AxleConfiguration\":\"\",\"Axles\":\"\",\"BasePrice\":\"\",\"BatteryA\":\"\",\"BatteryA_to\":\"\",\"BatteryCells\":\"\",\"BatteryInfo\":\"\",\"BatteryKWh\":\"\",\"BatteryKWh_to\":\"\",\"BatteryModules\":\"\",\"BatteryPacks\":\"\",\"BatteryType\":\"\",\"BatteryV\":\"\",\"BatteryV_to\":\"\",\"BedLengthIN\":\"\",\"BedType\":\"Not Applicable\",\"BlindSpotIntervention\":\"\",\"BlindSpotMon\":\"\",\"BodyCabType\":\"Not Applicable\",\"BodyClass\":\"Hatchback/Liftback/Notchback\",\"BrakeSystemDesc\":\"\",\"BrakeSystemType\":\"\",\"BusFloorConfigType\":\"Not Applicable\",\"BusLength\":\"\",\"BusType\":\"Not Applicable\",\"CAN_AACN\":\"\",\"CIB\":\"\",\"CashForClunkers\":\"\",\"ChargerLevel\":\"\",\"ChargerPowerKW\":\"\",\"CombinedBrakingSystem\":\"\",\"CoolingType\":\"\",\"CurbWeightLB\":\"\",\"CustomMotorcycleType\":\"Not Applicable\",\"DaytimeRunningLight\":\"\",\"DestinationMarket\":\"\",\"DisplacementCC\":\"1984.00\",\"DisplacementCI\":\"121.07110828394\",\"DisplacementL\":\"1.9840000\",\"Doors\":\"4\",\"DriveType\":\"\",\"DriverAssist\":\"\",\"DynamicBrakeSupport\":\"\",\"EDR\":\"\",\"ESC\":\"\",\"EVDriveUnit\":\"\",\"ElectrificationLevel\":\"\",\"EngineConfiguration\":\"\",\"EngineCycles\":\"\",\"EngineCylinders\":\"4\",\"EngineHP\":\"210.00\",\"EngineHP_to\":\"\",\"EngineKW\":\"\",\"EngineManufacturer\":\"Volkswagen\",\"EngineModel\":\"\",\"EntertainmentSystem\":\"\",\"ErrorCode\":\"0\",\"ErrorText\":\"0 - VIN decoded clean. Check Digit (9th position) is correct\",\"ForwardCollisionWarning\":\"\",\"FuelInjectionType\":\"\",\"FuelTankMaterial\":\"\",\"FuelTankType\":\"\",\"FuelTypePrimary\":\"Gasoline\",\"FuelTypeSecondary\":\"\",\"GCWR\":\"\",\"GCWR_to\":\"\",\"GVWR\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"GVWR_to\":\"Class 1: 6,000 lb or less (2,722 kg or less)\",\"KeylessIgnition\":\"\",\"LaneCenteringAssistance\":\"\",\"LaneDepartureWarning\":\"\",\"LaneKeepSystem\":\"\",\"LowerBeamHeadlampLightSource\":\"\",\"Make\":\"VOLKSWAGEN\",\"MakeID\":\"482\",\"Manufacturer\":\"VOLKSWAGEN DE MEXICO SA DE CV\",\"ManufacturerId\":\"16478\",\"Model\":\"GTI\",\"ModelID\":\"3140\",\"ModelYear\":\"2015\",\"MotorcycleChassisType\":\"Not Applicable\",\"MotorcycleSuspensionType\":\"Not Applicable\",\"NCSABodyType\":\"5-door/4-door hatchback\",\"NCSAMake\":\"Volkswagen\",\"NCSAMapExcApprovedBy\":\"\",\"NCSAMapExcApprovedOn\":\"\",\"NCSAMappingException\":\"\",\"NCSAModel\":\"Golf/Cabriolet/Cabrio/GTI/ GLI\",\"NCSANote\":\"\",\"NonLandUse\":\"\",\"Note\":\"\",\"OtherBusInfo\":\"\",\"OtherEngineInfo\":\"Fuel: Gas (50-St); Federal / California Emission Standard: BIN 3 / PZEV; Emissions Certification Test Group: FVGAV02.0APA\",\"OtherMotorcycleInfo\":\"\",\"OtherRestraintSystemInfo\":\"Restraint System: Active - Driver/Passenger; Advanced Front Air Bags\",\"OtherTrailerInfo\":\"\",\"ParkAssist\":\"\",\"PedestrianAutomaticEmergencyBraking\":\"\",\"PlantCity\":\"PUEBLA\",\"PlantCompanyName\":\"\",\"PlantCountry\":\"MEXICO\",\"PlantState\":\"\",\"PossibleValues\":\"\",\"Pretensioner\":\"\",\"RearAutomaticEmergencyBraking\":\"\",\"RearCrossTrafficAlert\":\"\",\"RearVisibilitySystem\":\"\",\"SAEAutomationLevel\":\"\",\"SAEAutomationLevel_to\":\"\",\"SeatBeltsAll\":\"Manual\",\"SeatRows\":\"\",\"Seats\":\"\",\"SemiautomaticHeadlampBeamSwitching\":\"\",\"Series\":\"\",\"Series2\":\"\",\"SteeringLocation\":\"\",\"SuggestedVIN\":\"\",\"TPMS\":\"Indirect\",\"TopSpeedMPH\":\"\",\"TrackWidth\":\"\",\"TractionControl\":\"\",\"TrailerBodyType\":\"Not Applicable\",\"TrailerLength\":\"\",\"TrailerType\":\"Not Applicable\",\"TransmissionSpeeds\":\"6\",\"TransmissionStyle\":\"Automatic\",\"Trim\":\"\",\"Trim2\":\"\",\"Turbo\":\"\",\"VIN\":\"3VW4T7AU3FM000001\",\"ValveTrainDesign\":\"\",\"VehicleDescriptor\":\"3VW4T7AU*FM\",\"VehicleType\":\"PASSENGER CAR\",\"WheelBaseLong\":\"\",\"WheelBaseShort\":\"\",\"WheelBaseType\":\"\",\"WheelSizeFront\":\"\",\"WheelSizeRear\":\"\",\"WheelieMitigation\":\"\",\"Wheels\":\"\",\"Windows\":\"\"}]}"
+    },
+    "vdb": {
+      "applicable": true,
+      "canonical": {
+        "_provider": "vdb",
+        "_sourceEndpoint": "advanced-vin-decode/v2/{vin}",
+        "blockType": "I",
+        "bodyType": "Hatchback",
+        "brakeType": "4-Wheel Disc",
+        "camType": null,
+        "cca": 480,
+        "chassisCode": null,
+        "cylinders": 4,
+        "cylindersConfiguration": "I-4",
+        "displacement": 2,
+        "doors": 4,
+        "drivetrain": "FWD",
+        "engineCode": "STDEN",
+        "engineDescription": "2.0L TSI I-4 Turbocharged",
+        "frontRotorDia": 12.3,
+        "frontTirePressure": 35,
+        "frontTireSize": "225/40R18",
+        "fuelType": "Gasoline",
+        "horsepower": 210,
+        "make": "Volkswagen",
+        "model": "Golf GTI",
+        "mpgCity": 25,
+        "mpgCombined": 28,
+        "mpgHighway": 34,
+        "packages": [],
+        "rearRotorDia": 10.7,
+        "rearTirePressure": 35,
+        "rearTireSize": "225/40R18",
+        "steeringType": null,
+        "transDescription": "Automatic",
+        "transSpeeds": 6,
+        "transType": "Automatic",
+        "trim": "2.0T SE 4-Door",
+        "wheelTorque": 89,
+        "year": 2015
+      },
+      "ok": true,
+      "rawSample": "{\"vin\":\"3VW4T7AU3FM000001\",\"year\":2015,\"make\":\"Volkswagen\",\"model\":\"Golf GTI\",\"trim\":\"2.0T SE 4-Door\",\"style\":\"4dr Hatchback Manual\",\"trim_and_style\":\"2.0T SE 4-Door 4dr Hatchback Manual\",\"summary\":\"The 2015 Volkswagen Golf GTI 2.0T SE 4-Door comes equipped with a 2L I-4 210hp intercooled turbo engine, along with a 6-speed automatic transmission with overdrive for optimal performance. Safety features include 4-wheel anti-lock brakes (ABS), side seat mounted airbags, and Side Curtain Protection curtain 1st and 2nd row overhead airbags. The vehicle also includes airbag occupancy sensor for added protection. Additional features include Climatic air conditioning, 18\\\" aluminum wheels, cruise control, and ABS and driveline traction control, ensuring a smooth and secure ride. The electronic stability feature further enhances control and handling of the vehicle.\",\"price\":{\"base_msrp\":\"28,385\",\"delivery_charges\":\"820\",\"invoice_price\":\"27,250\",\"total_price\":\"29,205\",\"currency\":\"USD\"},\"vehicle\":{\"epa_classification\":\"Compact Car\",\"rear_door_type\":\"\",\"body_type\":\"Hatchback\",\"doors\":\"4\"},\"dimensions\":[{\"exterior\":[{\"overall_length\":[{\"value\":\"4,267\",\"unit\":\"mm\"},{\"value\":\"167.99\",\"unit\":\"in\"}]},{\"overall_length_without_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_length_with_rear_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overall_width\":[{\"value\":\"1,798\",\"unit\":\"mm\"},{\"value\":\"70.79\",\"unit\":\"in\"}]},{\"max_width_without_mirrors\":[{\"value\":\"70.8\",\"unit\":\"in\"},{\"value\":\"1,798.32\",\"unit\":\"mm\"}]},{\"overall_height\":[{\"value\":\"1,443\",\"unit\":\"mm\"},{\"value\":\"56.81\",\"unit\":\"in\"}]},{\"liftover_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_front\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"overhang_rear_without_bumper\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_door_opening_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_door_opening_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"track_width_front\":[{\"value\":\"60.6\",\"unit\":\"in\"},{\"value\":\"1,539.24\",\"unit\":\"mm\"}]},{\"track_width_rear\":[{\"value\":\"59.7\",\"unit\":\"in\"},{\"value\":\"1,516.38\",\"unit\":\"mm\"}]},{\"wheelbase\":[{\"value\":\"2,631\",\"unit\":\"mm\"},{\"value\":\"103.58\",\"unit\":\"in\"}]},{\"front_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"side_step_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"ground_to_top_of_load_floor\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cab_to_end_of_frame\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"bed_length\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"interior\":[{\"passenger_volume\":[{\"value\":\"2,648\",\"unit\":\"l\"},{\"value\":\"93.5\",\"unit\":\"cu.ft\"}]},{\"trunk_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"front_head_room\":[{\"value\":\"975\",\"unit\":\"mm\"},{\"value\":\"38.4\",\"unit\":\"in\"}]},{\"rear_head_room\":[{\"value\":\"968\",\"unit\":\"mm\"},{\"value\":\"38.1\",\"unit\":\"in\"}]},{\"third_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_head_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_shoulder_room\":[{\"value\":\"1,420\",\"unit\":\"mm\"},{\"value\":\"55.9\",\"unit\":\"in\"}]},{\"rear_shoulder_room\":[{\"value\":\"1,369\",\"unit\":\"mm\"},{\"value\":\"53.9\",\"unit\":\"in\"}]},{\"third_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_shoulder_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"rear_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"third_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_hip_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"front_leg_room\":[{\"value\":\"1,046\",\"unit\":\"mm\"},{\"value\":\"41.2\",\"unit\":\"in\"}]},{\"rear_leg_room\":[{\"value\":\"904\",\"unit\":\"mm\"},{\"value\":\"35.6\",\"unit\":\"in\"}]},{\"third_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fourth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"fifth_row_leg_room\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"cargo\":[{\"cargo_volume\":[{\"value\":\"646\",\"unit\":\"l\"},{\"value\":\"23\",\"unit\":\"cu.ft\"}]},{\"max_cargo_volume\":[{\"value\":\"1,492\",\"unit\":\"l\"},{\"value\":\"53\",\"unit\":\"cu.ft\"}]},{\"front_cargo_volume\":[{\"value\":\"\",\"unit\":\"l\"},{\"value\":\"\",\"unit\":\"cu.ft\"}]},{\"cargo_volume_to_seat1\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat2\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat3\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_to_seat4\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_down\":[{\"value\":\"52.7\",\"unit\":\"cu.ft\"},{\"value\":\"1,492.31\",\"unit\":\"l\"}]},{\"cargo_volume_with_rear_seat_up\":[{\"value\":\"22.8\",\"unit\":\"cu.ft\"},{\"value\":\"645.63\",\"unit\":\"l\"}]},{\"extended_cab_cargo_volume\":[{\"value\":\"\",\"unit\":\"cu.ft\"},{\"value\":\"\",\"unit\":\"l\"}]},{\"floor_to_console_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat1_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat2_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"floor_to_seat3_cargo_area_length\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"beltline_cargo_area_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_height\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_floor_length\":[{\"value\":\"\",\"unit\":\"in\"}]},{\"cargo_box_floor_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"cargo_box_wheelhousings_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"tailgate_width\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"weights\":[{\"curb_weight_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_as_spec'd\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_base\":[{\"value\":\"3,086\",\"unit\":\"lb\"},{\"value\":\"1,399.55\",\"unit\":\"kg\"}]},{\"curb_weight\":[{\"value\":\"3,086\",\"unit\":\"lb\"},{\"value\":\"1,399.55\",\"unit\":\"kg\"}]},{\"curb_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"curb_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_axle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_combined_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"gross_vehicle_weight_rating\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_payload_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_front\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"option_weight_rear\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"total_option_weight\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"towing_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"payload_capacity\":[{\"value\":\"1,038.56\",\"unit\":\"lb\"},{\"value\":\"471\",\"unit\":\"kg\"}]}]},{\"ground_clearance\":[{\"ground_clearance_max\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"ground_clearance_min\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]}]},{\"off_road_attributes\":[{\"approach_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"departure_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]},{\"ramp_breakover_angle\":[{\"value\":\"\",\"unit\":\"deg\"}]}]},{\"steering\":[{\"turning_diameter_curb_to_curb\":[{\"value\":\"35.8\",\"unit\":\"ft\"},{\"value\":\"10.91\",\"unit\":\"m\"}]},{\"turning_diameter_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]},{\"turning_radius_curb_to_curb\":[{\"value\":\"17.9\",\"unit\":\"ft\"},{\"value\":\"5.46\",\"unit\":\"m\"}]},{\"turning_radius_wall_to_wall\":[{\"value\":\"\",\"unit\":\"ft\"},{\"value\":\"\",\"unit\":\"m\"}]}]},{\"trailering\":[{\"max_capacity\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_dead_weight_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_fifth_wheel_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_tongue_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]},{\"max_trailer_weigth_distributing_hitch\":[{\"value\":\"\",\"unit\":\"lb\"},{\"value\":\"\",\"unit\":\"kg\"}]}]},{\"braking\":[{\"front_brake_rotor_dia\":[{\"value\":\"12.3\",\"unit\":\"in\"},{\"value\":\"312.42\",\"unit\":\"mm\"}]},{\"front_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_dia\":[{\"value\":\"10.7\",\"unit\":\"in\"},{\"value\":\"271.78\",\"unit\":\"mm\"}]},{\"rear_brake_rotor_thickness\":[{\"value\":\"\",\"unit\":\"in\"},{\"value\":\"\",\"unit\":\"mm\"}]}]},{\"wheels\":[{\"front_wheel_size\":[{\"value\":\"18 X 7.5 \",\"unit\":\"in\"}]},{\"rear_wheel_size\":[{\"value\":\"18 X 7.5 \",\"unit\":\"in\"}]},{\"spare_wheel_size\":[{\"value\":\"Compact \",\"unit\":\"in\"}]},{\"wheel_torque\":[{\"value\":\"89\",\"unit\":\"lb.ft\"}]}]},{\"engine\":[{\"engine_size\":[{\"value\":2,\"unit\":\"l\"}]},{\"horsepower\":[{\"value\":\"4,500\",\"unit\":\"rpm\"},{\"value\":\"210\",\"unit\":\"hp\"}]},{\"torque\":[{\"value\":\"1,500\",\"unit\":\"rpm\"},{\"value\":\"258\",\"unit\":\"lb.ft\"}]},{\"bore\":[{\"value\":\"82.5\",\"unit\":\"mm\"},{\"value\":\"3.25\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"92.8\",\"unit\":\"mm\"},{\"value\":\"3.65\",\"unit\":\"in\"}]}]},{\"fuel\":[{\"tank_capacity\":[{\"value\":\"13.2\",\"unit\":\"gal\"},{\"value\":\"49.96\",\"unit\":\"l\"}]},{\"auxiliary_fuel_tank_capacity\":[{\"value\":\"\",\"unit\":\"gal\"},{\"value\":\"\",\"unit\":\"l\"}]}]},{\"mpg\":[{\"cruising_range_city\":[{\"value\":\"330\",\"unit\":\"mi\"}]},{\"cruising_range_hwy\":[{\"value\":\"448.8\",\"unit\":\"mi\"}]},{\"estimated_battery_range\":[{\"value\":\"\",\"unit\":\"mi\"}]}]},{\"electric_powertrain\":[{\"motor1_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor2_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor3_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor4_torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]},{\"motor_horsepower\":[{\"value\":\"\",\"unit\":\"hp\"}]}]},{\"traction_battery\":[{\"all_electric_range\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"total_dual_fusion\":[{\"value\":\"\",\"unit\":\"miles\"}]},{\"peak_dc_fast_charge_time\":[{\"value\":\"\",\"unit\":\"minutes\"}]}]},{\"range_extender\":[{\"output\":[{\"value\":\"\",\"unit\":\"hp\"}]},{\"rpm\":[{\"value\":\"\",\"unit\":\"rpm\"}]},{\"bore\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"stroke\":[{\"value\":\"\",\"unit\":\"mm\"},{\"value\":\"\",\"unit\":\"in\"}]},{\"torque\":[{\"value\":\"\",\"unit\":\"lb.ft\"}]}]}],\"specifications\":[{\"exterior\":{\"cab_style\":\"\"}},{\"steering\":{\"type\":\"Rack-Pinion\",\"overall_ratio\":\"\",\"turns_to_turns_ratio\":\"\"}},{\"braking\":{\"type\":\"4-Wheel Disc\",\"primary_abs_system\":\"4-Wheel\",\"secondary_abs_system\":\"\",\"front_disc\":\"Yes\",\"rear_disc\":\"Yes\",\"rear_drum\":\"\"}},{\"electrical\":{\"cold_cranking_capacity_amps\":\"480\",\"max_alternator_capacity_amps\":\"140\"}},{\"suspensions\":{\"front_type\":\"Strut\",\"front_type_extended\":\"Strut\",\"rear_type\":\"Multi-Link\",\"rear_type_extended\":\"Multi-Link\",\"front_axle\":\"\",\"rear_axle\":\"\"}},{\"seating\":{\"number_of_seats\":\"5\",\"max_seating_capacity\":\"5\"}},{\"wheels\":{\"front_wheel_material\":\"Aluminum\",\"rear_wheel_material\":\"Aluminum\",\"spare_wheel_material\":\"Steel\"}},{\"tires\":{\"front_tire_size\":\"225/40R18\",\"rear_tire_size\":\"225/40R18\",\"spare_tire_size\":\"Compact\",\"type\":\"Performance\",\"front_tire_pressure_psi\":\"35\",\"rear_tire_pressure_psi\":\"35\"}},{\"emissions\":{\"greenhouse_gas_score\":\"\",\"air_pollution_score\":\"\"}},{\"engine\":{\"type\":\"Intercooled Turbo Premium Unleaded I-4\",\"code\":\"STDEN\",\"cylinders_configuration\":\"I-4\",\"displacement\":2000,\"compressor\":\"Intercooled turbo\",\"drivetype\":\"FWD\",\"oil_cooler\":\"\",\"engine_location\":\"Front\",\"valves\":\"16\",\"compression\":\"9.6\",\"variable_intake_manifold\":\"\",\"block_type\":\"I\",\"block_material\":\"\",\"cam_type\":\"\"}},{\"fuel\":{\"type\":\"Gasoline\",\"standard_fuel_economy_type\":\"\",\"grade\":\"Prem…[truncated]"
+    }
+  },
+  "score": {
+    "disagreements": [
+      {
+        "field": "model",
+        "values": {
+          "carapi": "Golf GTI",
+          "marketcheck": "Golf GTI",
+          "nhtsa": "GTI",
+          "vdb": "Golf GTI"
+        }
+      },
+      {
+        "field": "doors",
+        "values": {
+          "carapi": "4",
+          "marketcheck": "5",
+          "nhtsa": "4",
+          "vdb": "4"
+        }
+      },
+      {
+        "field": "trim",
+        "values": {
+          "carapi": "Autobahn 4dr Hatchback (2.0L 4cyl Turbo 6AM)",
+          "marketcheck": "SE",
+          "vdb": "2.0T SE 4-Door"
+        }
+      },
+      {
+        "field": "displacement",
+        "values": {
+          "carapi": "1.984",
+          "nhtsa": "1.984",
+          "vdb": "2"
+        }
+      },
+      {
+        "field": "fuelType",
+        "values": {
+          "carapi": "Gasoline",
+          "marketcheck": "Premium Unleaded",
+          "nhtsa": "Gasoline",
+          "vdb": "Gasoline"
+        }
+      },
+      {
+        "field": "bodyType",
+        "values": {
+          "carapi": "Hatchback/Liftback/Notchback",
+          "marketcheck": "Hatchback",
+          "nhtsa": "Hatchback/Liftback/Notchback",
+          "vdb": "Hatchback"
+        }
+      },
+      {
+        "field": "transType",
+        "values": {
+          "carapi": "Automatic",
+          "marketcheck": "Manual",
+          "nhtsa": "Automatic",
+          "vdb": "Automatic"
+        }
+      }
+    ],
+    "perProvider": {
+      "carapi": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "absent",
+          "engineCode": "absent",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "marketcheck": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 21,
+          "present": 4,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "absent",
+          "cylindersConfiguration": "absent",
+          "displacement": "absent",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "absent",
+          "engineDescription": "present",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "absent",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "absent",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "absent",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 37,
+          "present": 13,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 25,
+          "present": 1,
+          "total": 4
+        },
+        "ok": true
+      },
+      "nhtsa": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 37,
+          "present": 7,
+          "total": 19
+        },
+        "engineCode": "absent",
+        "fields": {
+          "blockType": "absent",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "absent",
+          "camType": "absent",
+          "cca": "absent",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "absent",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "absent",
+          "engineCode": "absent",
+          "engineDescription": "absent",
+          "frontRotorDia": "absent",
+          "frontTirePressure": "absent",
+          "frontTireSize": "absent",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "absent",
+          "mpgCombined": "absent",
+          "mpgHighway": "absent",
+          "packages": "absent",
+          "rearRotorDia": "absent",
+          "rearTirePressure": "absent",
+          "rearTireSize": "absent",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "absent",
+          "wheelTorque": "absent",
+          "year": "present"
+        },
+        "full": {
+          "pct": 34,
+          "present": 12,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 0,
+          "present": 0,
+          "total": 4
+        },
+        "ok": true
+      },
+      "vdb": {
+        "applicable": true,
+        "deepSpec": {
+          "pct": 89,
+          "present": 17,
+          "total": 19
+        },
+        "engineCode": "mismatch",
+        "fields": {
+          "blockType": "present",
+          "bodyType": "present",
+          "brakeSystemType": "absent",
+          "brakeType": "present",
+          "camType": "absent",
+          "cca": "present",
+          "chassisCode": "absent",
+          "cylinders": "present",
+          "cylindersConfiguration": "present",
+          "displacement": "present",
+          "doors": "present",
+          "drivetrain": "present",
+          "engineCode": "present",
+          "engineDescription": "present",
+          "frontRotorDia": "present",
+          "frontTirePressure": "present",
+          "frontTireSize": "present",
+          "fuelType": "present",
+          "horsepower": "present",
+          "make": "present",
+          "model": "present",
+          "mpgCity": "present",
+          "mpgCombined": "present",
+          "mpgHighway": "present",
+          "packages": "absent",
+          "rearRotorDia": "present",
+          "rearTirePressure": "present",
+          "rearTireSize": "present",
+          "steeringType": "absent",
+          "transDescription": "present",
+          "transSpeeds": "present",
+          "transType": "present",
+          "trim": "present",
+          "wheelTorque": "present",
+          "year": "present"
+        },
+        "full": {
+          "pct": 86,
+          "present": 30,
+          "total": 35
+        },
+        "highValue": {
+          "pct": 50,
+          "present": 2,
+          "total": 4
+        },
+        "ok": true
+      }
+    }
+  },
+  "vin": "3VW4T7AU3FM000001",
+  "year": 2015
+}

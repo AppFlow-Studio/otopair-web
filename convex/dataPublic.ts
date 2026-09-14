@@ -14,7 +14,7 @@
 import { v } from "convex/values";
 import { query } from "./_generated/server";
 import type { Doc } from "./_generated/dataModel";
-import { collectSpecFields, latestFieldEvidence } from "./dataCatalog";
+import { collectSpecFields, latestFieldEvidence, loadSpecExtras } from "./dataCatalog";
 import { deriveLayer, isServable, type LayerLetter } from "./lib/dataLayers";
 
 const slug = (s: string) =>
@@ -124,7 +124,7 @@ export const teaserLookup = query({
       : null;
 
     // ── Gate every spec field; count served, expose only the headline few ──
-    const fields = collectSpecFields(c, engine, transmission);
+    const fields = collectSpecFields(c, engine, transmission, await loadSpecExtras(ctx, c));
     let servedTotal = 0;
     const headline: TeaserSpec[] = [];
     for (const f of fields) {
@@ -199,5 +199,21 @@ export const teaserLookup = query({
         empirical_labor_services: empiricalServices,
       },
     };
+  },
+});
+
+// Public service-slug catalog — the `?service=` filter values accepted by the
+// /v1/parts and /v0/labor endpoints. Powers the searchable service picker in
+// the developer-docs playground. Slugs + display names are public product
+// metadata (already surfaced on /data and in the OpenAPI examples); no auth,
+// same spirit as ymmtCatalog.listMakes. Small table (~23 rows).
+export const listServices = query({
+  args: {},
+  handler: async (ctx): Promise<Array<{ slug: string; name: string }>> => {
+    const services = await ctx.db.query("services").collect();
+    return services
+      .flatMap((s) => (s.slug ? [{ slug: s.slug, name: s.name, order: s.display_order ?? 99 }] : []))
+      .sort((a, b) => a.order - b.order || a.name.localeCompare(b.name))
+      .map(({ slug, name }) => ({ slug, name }));
   },
 });

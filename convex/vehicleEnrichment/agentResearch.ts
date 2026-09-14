@@ -291,15 +291,15 @@ export function roleClaimFrom(
 // ─── Actions ─────────────────────────────────────────────────────
 
 /**
- * Research rotor discard minimums and record them as CLAIMS.
+ * RETIRED (Aug 2026). Rotor discard minimums are no longer researched: the
+ * stored minimum is DERIVED as a 15% wear threshold off the sourced nominal
+ * (rotorSpecResource.deriveRotorMinMm — operator policy, validated in
+ * mechanic interviews). Five rounds of this rung found 0 published minimums
+ * across ~30 vehicles, so retiring it costs nothing.
  *
- * Scheduled, never awaited: one task runs ~226s, and two axles in one task
- * still exceeds what the pipeline's action budget can absorb.
- *
- * Writes claims only. The rotor resolver's existing double validation decides
- * whether any of it becomes a stored minimum, which is what keeps an
- * aftermarket retailer's product dimension from being promoted to a
- * manufacturer discard spec.
+ * The export survives as a no-op so any still-pending scheduled invocation
+ * from an in-flight run lands harmlessly instead of crashing on a missing
+ * function.
  */
 export const researchRotorMinimums = internalAction({
   args: {
@@ -312,51 +312,12 @@ export const researchRotorMinimums = internalAction({
     engineCode: v.optional(v.union(v.string(), v.null())),
     displacement: v.optional(v.union(v.string(), v.null())),
   },
-  handler: async (ctx, args): Promise<{ status: string; claims: number }> => {
-    if (!isAgentEnabled(process.env)) return { status: "disabled", claims: 0 };
-    const vehicle: AgentVehicle = {
-      year: args.year, make: args.make, model: args.model,
-      trim: args.trim ?? null, engineCode: args.engineCode ?? null,
-      displacement: args.displacement ?? null,
-    };
-    const outcome = await runAgentTask(
-      buildRotorPrompt(vehicle),
-      rotorSchema(),
-      { maxCredits: agentMaxCredits(process.env) },
-    );
-    if (!outcome.ok) {
-      console.warn(`[agent] rotor research failed for ${vehicleLine(vehicle)}: ${outcome.reason}`);
-      return { status: outcome.reason, claims: 0 };
-    }
-    const claims = rotorClaimsFrom(outcome.data, Date.now());
-    if (claims.length === 0) {
-      console.log(`[agent] rotor research returned nothing usable for ${vehicleLine(vehicle)}`);
-      return { status: "no_usable_claims", claims: 0 };
-    }
-    await ctx.runMutation(internal.vehicleEnrichment.claimGathering._writeClaims, {
-      vehicleConfigId: args.vehicleConfigId,
-      runId: args.runId,
-      claims: claims.map((c) => ({
-        field_key: c.field_key,
-        value: c.value,
-        value_raw: c.value_raw ?? c.value,
-        source_family: c.source_family,
-        source_domain: c.source_domain,
-        source_url: c.source_url,
-        method: c.method,
-        // Named so purgeClaims can retract an entire bad agent batch — claims
-        // are durable and cumulative, so a mis-parsed one would otherwise keep
-        // voting in the reconciler forever.
-        adapter: "firecrawl_agent",
-        observed_label: c.observed_label,
-        observed_at: c.observed_at,
-      })),
-    });
+  handler: async (_ctx, args): Promise<{ status: string; claims: number }> => {
     console.log(
-      `[agent] rotor research recorded ${claims.length} claim(s) for ${vehicleLine(vehicle)}: ` +
-        claims.map((c) => `${c.field_key}=${c.value} ("${c.observed_label}")`).join(", "),
+      `[agent] rotor-minimum research is retired (15% wear derivation) — ` +
+        `no-op for ${args.year} ${args.make} ${args.model}`,
     );
-    return { status: "ok", claims: claims.length };
+    return { status: "retired_derived_15pct", claims: 0 };
   },
 });
 

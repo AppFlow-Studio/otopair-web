@@ -3,6 +3,8 @@
 import { useState, type FormEvent } from "react";
 import { Check } from "lucide-react";
 import { PillButton } from "./pill-button";
+import { isValidEmail } from "@/lib/email";
+import { Honeypot, useBotGuard } from "./waitlist-guard";
 
 /**
  * Borough waitlist — the capture form on /brooklyn, /queens, /bronx and
@@ -29,16 +31,21 @@ export default function WaitlistForm({
   const app = list === "app";
   const id = app ? "waitlist-app" : `waitlist-${borough}`;
   const [state, setState] = useState<"idle" | "sending" | "done" | "error">("idle");
+  const { honeypotRef, guardFields } = useBotGuard();
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (state === "sending") return;
+    if (!isValidEmail(email)) {
+      setState("error");
+      return;
+    }
     setState("sending");
     try {
       const res = await fetch("/api/waitlist", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, borough, list }),
+        body: JSON.stringify({ email, borough, list, ...guardFields() }),
       });
       setState(res.ok ? "done" : "error");
     } catch {
@@ -75,6 +82,8 @@ export default function WaitlistForm({
         onChange={(e) => setEmail(e.target.value)}
         className="h-12 flex-1 rounded-full border border-[#1a1a1a]/12 bg-white px-5 text-[15px] text-[#1a1a1a] outline-none placeholder:text-[#777169] focus-visible:border-[#4B82A5] focus-visible:ring-2 focus-visible:ring-[#4B82A5]/30"
       />
+      {/* Invisible bot trap — never seen or tabbed to by a human. */}
+      <Honeypot ref={honeypotRef} />
       <PillButton type="submit" disabled={state === "sending"} className="shrink-0">
         {state === "sending" ? "Joining…" : app ? "Get notified at launch" : `Join the ${borough} waitlist`}
       </PillButton>

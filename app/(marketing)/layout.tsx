@@ -1,5 +1,6 @@
 import Navbar from "@/components/navbar";
 import SmoothScroll from "@/components/flagship/smooth-scroll";
+import { WaitlistProvider } from "@/components/flagship/waitlist-modal";
 
 // The flagship landing page carries its own footer (FooterCta) per the Figma
 // design, so the old global Footer/FooterImage are no longer rendered here.
@@ -19,8 +20,10 @@ export default function MarketingLayout({
       >
         Skip to content
       </a>
-      <Navbar />
-      <SmoothScroll>{children}</SmoothScroll>
+      <WaitlistProvider>
+        <Navbar />
+        <SmoothScroll>{children}</SmoothScroll>
+      </WaitlistProvider>
     </>
   );
 }

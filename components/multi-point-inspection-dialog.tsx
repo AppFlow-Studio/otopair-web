@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  createContext,
   useCallback,
+  useContext,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -23,18 +25,24 @@ import {
   Copy,
   Download,
   EyeOff,
+  Info,
   Loader2,
   Plus,
   RotateCcw,
   Trash2,
   Wrench,
+  X,
 } from "lucide-react";
+import Image from "next/image";
 import { useMutation, useQuery, useAction } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
+import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
+import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
+import type { AxlePosition } from "@/convex/lib/brakeScope";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
@@ -56,13 +64,17 @@ import {
   defaultZoneState,
   derivePrejobFromInspection,
   deriveSuggestedRecommendations,
+  effectiveRotorRef,
   gatherFindings,
   getDirtyIncompleteZones,
   inspectionSlugTaxonomy,
   INSPECTION_NAV_ZONE_IDS,
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
+  canMarkFieldUnavailable,
+  isNysSafetyField,
   isFieldApplicableToZone,
+  isZoneDoneForPhase,
   isFieldRequiredForZone,
   isSpecPrefillField,
   normalizeTireSize,
@@ -75,6 +87,7 @@ import {
   INSPECTION_ZONES_BY_ID,
   requiredZonesForBooking,
   requiresRotorStampPhoto,
+  scheduleCopyDestinationNavigation,
   toggleInspectionTreadMode,
   TRI_LABELS,
   triLabelFor,
@@ -84,7 +97,9 @@ import {
   type CornerZoneId,
   type FieldUnavailableStatus,
   type InspectionField,
+  type InspectionPhase,
   type InspectionState,
+  type RotorMinByAxle,
   type SpecPrefillEntry,
   type TriValue,
   type WarningLightEntry,
@@ -136,6 +151,12 @@ import {
   type AffectedSystem,
 } from "@/lib/vehicle-mod-systems";
 
+// Per-vehicle rotor minimums (enrichment-derived) provided once at the dialog
+// root so the deeply-nested MeasureField can grade + label each corner's rotor
+// against THIS car's replace-at figure without prop-drilling. Null ⇒ fall back
+// to the static default (effectiveRotorRef handles the fallback).
+const RotorMinContext = createContext<RotorMinByAxle | null>(null);
+
 type SubmitIntent = "close" | "start";
 type BookedTirePosition = "FL" | "FR" | "RL" | "RR";
 
@@ -144,6 +165,7 @@ export type InspectionInputPayload = {
   zones: Array<{
     zone_id: string;
     done: boolean;
+    done_phase?: InspectionPhase;
     measures?: Record<string, string>;
     tri?: Record<string, TriValue>;
     descriptors?: Record<string, string[]>;
@@ -180,6 +202,21 @@ type ResolvedSuggestion = {
   systemTags: string[] | null;
   workType: string | null;
 };
+
+/**
+ * Does adding this suggestion need an axle? True only for brake-pad and rotor
+ * replacement — the exact services deriveTierInspectionScope requires an axle
+ * scope for. Matched through getBookingServiceFlags on the resolved name so the
+ * picker fires iff the inspection would otherwise dead-end on a missing axle.
+ * Brake fluid flush and other brake-adjacent work are deliberately excluded:
+ * they carry no axle meaning and don't gate the inspection.
+ */
+function isBrakeAxleSuggestion(suggestion: ResolvedSuggestion): boolean {
+  const name = suggestion.serviceName ?? suggestion.label ?? "";
+  if (!name) return false;
+  const flags = getBookingServiceFlags([name]);
+  return flags.hasBrakePadReplacement || flags.hasRotorReplacement;
+}
 
 const prepareInspectionPhotoUploadRef = makeFunctionReference<"mutation">(
   "inspections:prepareInspectionPhotoUpload",
@@ -378,9 +415,13 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -411,7 +452,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
-  jobInProgress = false,
+  phase,
   tireReplacementPositions = [],
   passportData,
   prefillData,
@@ -425,9 +466,13 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -454,6 +499,18 @@ function MultiPointInspectionDialogBody({
     passportData?.is_first_shop_visit ??
     (passportData ? specsIncomplete && !hasPriorVisits : true);
 
+  // Per-vehicle rotor minimums (enrichment-derived, nominal × 0.85) so every
+  // rotor grade — live chips, findings, recommendations, the prejob rollup —
+  // measures against THIS car's replace-at figure. Null axles fall back to the
+  // static default baked into the corner field (effectiveRotorRef).
+  const rotorMin = useMemo<RotorMinByAxle>(
+    () => ({
+      front: passportData?.passport.brakes.rotor_min_front_mm ?? null,
+      rear: passportData?.passport.brakes.rotor_min_rear_mm ?? null,
+    }),
+    [passportData],
+  );
+
   const savedInspection = useQuery(
     api.inspections.getByBooking,
     bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
@@ -473,6 +530,11 @@ function MultiPointInspectionDialogBody({
   const undoInspectionRec = useMutation(
     api.jobRecommendations.confirmFromPreJob,
   );
+  // The job clock starts at Start Job, which is also what opens the MPI phase,
+  // so "the job is running" and "we are in the MPI half" are the same instant.
+  // Kept as a named const because the mid-job mutations read as a job-state
+  // question, not a phase one.
+  const jobInProgress = phase === "mpi";
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
   // Pre-start sibling of addToJob: appends the same line to a booking that
   // hasn't been started, to be sent as a PRE-job estimate the customer confirms
@@ -565,8 +627,26 @@ function MultiPointInspectionDialogBody({
   // "PARTS" is a synthetic zone (like "OWNER") — never enters the diagram or
   // requiredZones; it hosts the mechanic parts fill-in gate.
   const [activeZone, setActiveZone] = useState<ZoneId | "PARTS" | null>(null);
+  // Completion-moment "copy this corner to its same-axle sibling" prompt. It
+  // surfaces at the diagram the instant a corner is marked complete (the locked
+  // rule: mirror a wheel only after its inspection is fully complete).
+  // `copyPromptCopied` flips the bar from its offer state to a brief "Copied ✓"
+  // confirmation before opening the copied-to corner.
+  const [copyPromptFor, setCopyPromptFor] = useState<CornerZoneId | null>(null);
+  const [copyPromptCopied, setCopyPromptCopied] = useState(false);
+  useEffect(() => {
+    if (!copyPromptCopied || !copyPromptFor) return;
+    const destination = OPPOSITE_CORNER[copyPromptFor];
+    return scheduleCopyDestinationNavigation(destination, () => {
+      setCopyPromptFor(null);
+      setCopyPromptCopied(false);
+      pendingZoneScrollRef.current = "smooth";
+      setActiveZone(destination);
+    });
+  }, [copyPromptCopied, copyPromptFor]);
   const [hydrated, setHydrated] = useState(false);
   const [showResults, setShowResults] = useState(false);
+  const [showBrakeFluidGuide, setShowBrakeFluidGuide] = useState(false);
   const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<
     Partial<Record<ZoneId, { fieldKey: string; message: string }>>
@@ -650,11 +730,6 @@ function MultiPointInspectionDialogBody({
     });
   }, []);
 
-  const requiredZones = useMemo(
-    () => requiredZonesForBooking(bookingServices),
-    [bookingServices],
-  );
-  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
   const baselineMileage =
     prefillData?.mileage ?? passportData?.passport.mileage ?? null;
   // An odometer physically can't run backwards, so a new reading below the
@@ -685,6 +760,7 @@ function MultiPointInspectionDialogBody({
   );
   const completionContext = useMemo(
     () => ({
+      phase,
       serviceNames: bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -704,6 +780,7 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     }),
     [
+      phase,
       bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -713,6 +790,15 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     ],
   );
+
+  // Which zones gate THIS phase. Derived from the context so it tracks both the
+  // booked services and the phase — the pre-check never demands the underbody,
+  // and the MPI half only demands the corners whose wheel actually comes off.
+  const requiredZones = useMemo(
+    () => requiredZonesForBooking(completionContext),
+    [completionContext],
+  );
+  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
 
   useEffect(() => {
     photoPreviewsRef.current = photoPreviews;
@@ -747,6 +833,7 @@ function MultiPointInspectionDialogBody({
         const base = defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         next.zones[id] = {
           done: !!z.done,
+          donePhase: z.done_phase === "mpi" ? "mpi" : "pre",
           dirty: false,
           measures: { ...base.measures, ...(z.measures ?? {}) },
           tri: { ...base.tri, ...(z.tri ?? {}) },
@@ -855,9 +942,9 @@ function MultiPointInspectionDialogBody({
   const zoneNeedsSpecReview = useCallback(
     (zoneId: ZoneId) =>
       (specPrefill[zoneId]?.length ?? 0) > 0 &&
-      !state.zones[zoneId]?.done &&
+      !isZoneDoneForPhase(state.zones[zoneId], phase) &&
       !confirmedSpecZones.has(zoneId),
-    [specPrefill, state, confirmedSpecZones],
+    [specPrefill, state, confirmedSpecZones, phase],
   );
 
   // ---- helpers -----------------------------------------------------------
@@ -890,9 +977,11 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
-  // Mirror a corner's readings onto its same-axle sibling (FL↔FR, RL↔RR). The
-  // two corners share an identical field set, so this is a straight overwrite;
-  // the mechanic then only fixes the few values that differ. No-op if the source
+  // Mirror a corner onto its same-axle sibling (FL↔FR, RL↔RR). Only identity
+  // fields travel, and which ones depends on the phase — sidewall data during
+  // the pre-check, pad brand and rotor presence during the MPI half. Every
+  // measured value stays put: mirroring tread or pressure is how a staggered
+  // setup gets recorded as the same psi on both axles. No-op if the source
   // corner is still blank (guards against wiping the sibling with empties).
   const copyCornerToOpposite = useCallback(
     (sourceId: ZoneId) => {
@@ -900,12 +989,12 @@ function MultiPointInspectionDialogBody({
       if (!opposite) return;
       const source = zoneState(sourceId);
       if (!zoneHasInput(sourceId, source)) return;
-      patchZone(opposite, cornerCopyPatch(source));
+      patchZone(opposite, cornerCopyPatch(source, zoneState(opposite), phase));
       // The copied values equal the already-reviewed source, so don't force a
       // redundant "Specs match" re-confirm on the sibling.
       markSpecReviewed(opposite);
     },
-    [zoneState, patchZone, markSpecReviewed],
+    [zoneState, patchZone, markSpecReviewed, phase],
   );
 
   const photoUrl = useCallback(
@@ -924,8 +1013,10 @@ function MultiPointInspectionDialogBody({
   );
 
   const doneCount = useMemo(
-    () => requiredZones.filter((id) => state.zones[id]?.done).length,
-    [requiredZones, state],
+    () =>
+      requiredZones.filter((id) => isZoneDoneForPhase(state.zones[id], phase))
+        .length,
+    [requiredZones, state, phase],
   );
 
   // Every required zone graded, with no zone left holding un-saved readings.
@@ -937,17 +1028,17 @@ function MultiPointInspectionDialogBody({
   const inspectionComplete = useMemo(
     () =>
       requiredZones.length > 0 &&
-      requiredZones.every((id) => state.zones[id]?.done) &&
+      requiredZones.every((id) => isZoneDoneForPhase(state.zones[id], phase)) &&
       getDirtyIncompleteZones(state).length === 0,
-    [requiredZones, state],
+    [requiredZones, state, phase],
   );
 
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
   // inspection) and never counts un-confirmed scratch input.
   const findings = useMemo(
-    () => gatherFindings(state, { onlyCompletedZones: true }),
-    [state],
+    () => gatherFindings(state, { onlyCompletedZones: true, rotorMin }),
+    [state, rotorMin],
   );
 
   // Suggested follow-up recommendations derived from threshold measurements,
@@ -955,6 +1046,7 @@ function MultiPointInspectionDialogBody({
   const suggestedRecs = useMemo<ResolvedSuggestion[]>(() => {
     const list = deriveSuggestedRecommendations(state, {
       onlyCompletedZones: true,
+      rotorMin,
     });
     return list.map((s) => {
       // `match` holds exact catalog slugs — resolve straight to the service.
@@ -974,7 +1066,7 @@ function MultiPointInspectionDialogBody({
         workType: taxonomy?.work_type ?? null,
       };
     });
-  }, [state, services]);
+  }, [state, services, rotorMin]);
 
   // Drop anything this booking is already doing. Suggesting "tire replacement
   // — soon" on the job that is replacing the tires reads as the system not
@@ -1007,6 +1099,15 @@ function MultiPointInspectionDialogBody({
   // Null for a catalog service, which adds in one tap. See handleAddToJob.
   const [pendingJobSuggestion, setPendingJobSuggestion] =
     useState<ResolvedSuggestion | null>(null);
+  // A brake/rotor line awaiting its axle before it's added. Brake work needs an
+  // axle scope (front/rear/both) so the inspection knows which corners to grade;
+  // a line added off-catalog carries no selected_service_options to read one
+  // from, so we collect it here. Holds the resolved taxonomy so the commit after
+  // the axle pick has everything it needs. See handleAddToJob.
+  const [pendingBrakeAxle, setPendingBrakeAxle] = useState<{
+    suggestion: ResolvedSuggestion;
+    taxonomy: { systemTags: string[]; workType: string };
+  } | null>(null);
   // The MID-JOB scope dialog (price it, say why, add parts, send for the
   // customer's confirmation) — the SAME flow the active-job overlay opens. Only
   // reachable while the job is running; a pre-job inspection sends its added
@@ -1020,7 +1121,7 @@ function MultiPointInspectionDialogBody({
     prejob: PreJobSurveyPayload;
     inspection: InspectionInputPayload;
   } => {
-    const f = gatherFindings(state, { onlyCompletedZones: true });
+    const f = gatherFindings(state, { onlyCompletedZones: true, rotorMin });
     const prejob = derivePrejobFromInspection(state, {
       mileage: mileage.trim() ? Number(mileage) : null,
       inspectionStatus: inspectionStatus
@@ -1039,12 +1140,14 @@ function MultiPointInspectionDialogBody({
         : null,
       nextMechanicTip: nextTip.trim() || null,
       completionContext,
+      rotorMin,
     });
     const inspection: InspectionInputPayload = {
       template_version: state.template_version,
       zones: Object.entries(state.zones).map(([zone_id, zs]) => ({
         zone_id,
         done: zs!.done,
+        done_phase: zs!.donePhase ?? "pre",
         measures: zs!.measures,
         tri: zs!.tri,
         descriptors: zs!.descriptors,
@@ -1088,6 +1191,7 @@ function MultiPointInspectionDialogBody({
     nextTip,
     liftStatus,
     completionContext,
+    rotorMin,
   ]);
 
   // Compact signature of everything savePrejob persists — a change here is what
@@ -1309,8 +1413,9 @@ function MultiPointInspectionDialogBody({
 
   function handleToggleZone(zoneId: ZoneId) {
     const current = zoneState(zoneId);
-    if (current.done) {
+    if (isZoneDoneForPhase(current, phase)) {
       patchZone(zoneId, { done: false });
+      setCopyPromptFor(null);
       return;
     }
     const result = validateZoneForCompletion(state, zoneId, completionContext);
@@ -1329,7 +1434,19 @@ function MultiPointInspectionDialogBody({
       return;
     }
     setError("");
-    patchZone(zoneId, { done: true });
+    // Record which half completed it: a corner signed off during the
+    // pre-check must re-open when the wheel comes off.
+    patchZone(zoneId, { done: true, donePhase: phase });
+    // Locked rule: offer the same-axle copy only now that this corner is fully
+    // complete, and only when the sibling isn't already done (nothing to mirror
+    // onto a finished corner). Non-corner zones have no opposite → no prompt.
+    const opposite = OPPOSITE_CORNER[zoneId as CornerZoneId];
+    if (opposite && !isZoneDoneForPhase(zoneState(opposite), phase)) {
+      setCopyPromptCopied(false);
+      setCopyPromptFor(zoneId as CornerZoneId);
+    } else {
+      setCopyPromptFor(null);
+    }
     closeZoneToDiagram();
   }
 
@@ -1366,7 +1483,9 @@ function MultiPointInspectionDialogBody({
       return false;
     }
     if (action === "start") {
-      const incomplete = requiredZones.find((id) => !state.zones[id]?.done);
+      const incomplete = requiredZones.find(
+        (id) => !isZoneDoneForPhase(state.zones[id], phase),
+      );
       if (incomplete) {
         setError(
           `Mark ${INSPECTION_ZONES_BY_ID[incomplete].label} complete before submitting.`,
@@ -1377,7 +1496,8 @@ function MultiPointInspectionDialogBody({
       }
     }
     for (const zone of INSPECTION_ZONES) {
-      if (zone.dynamic || !state.zones[zone.id]?.done) continue;
+      if (zone.dynamic || !isZoneDoneForPhase(state.zones[zone.id], phase))
+        continue;
       const result = validateZoneForCompletion(
         state,
         zone.id,
@@ -1397,7 +1517,11 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (action === "start" && !liftStatus) {
+    // Only asked in the MPI half. During the ground-level pre-check the answer
+    // is "no" by definition, so requiring it there is a question with one
+    // possible answer (Spec v2 §4.1 wanted it deleted outright; kept because
+    // the mechanic can put the car up early and we want that recorded).
+    if (action === "start" && phase === "mpi" && !liftStatus) {
       setError("Select whether the vehicle is on a lift before submitting.");
       requestAnimationFrame(() =>
         document.getElementById("inspection-lift-yes")?.focus(),
@@ -1590,6 +1714,10 @@ function MultiPointInspectionDialogBody({
   async function commitAddToJob(
     suggestion: ResolvedSuggestion,
     taxonomy: { systemTags: string[]; workType: string },
+    // Set for brake/rotor work, collected via BrakeAxleDialog. Threaded to the
+    // add so resolveBrakeScopeForBooking has an axle to read for the off-catalog
+    // line (it defaults to "both" server-side if somehow absent).
+    axle?: AxlePosition,
   ) {
     if (!bookingId || addingToJobKey) return;
     setAddingToJobKey(suggestion.key);
@@ -1615,9 +1743,11 @@ function MultiPointInspectionDialogBody({
         // so the scope dialog lists them instead of an empty "Add part for X".
         // Null for a freeform finding (nothing to look up).
         catalogServiceId: suggestion.serviceId ?? undefined,
+        axle,
       });
       setAddedToJob((prev) => ({ ...prev, [suggestion.key]: true }));
       setPendingJobSuggestion(null);
+      setPendingBrakeAxle(null);
       setScopeSubmittedNote(null);
       // Staged only — NO auto-send. The line now shows in "Added to this job".
       // Pre-job: it goes out when the mechanic submits the inspection. Mid-job:
@@ -1638,10 +1768,18 @@ function MultiPointInspectionDialogBody({
     // A catalog service carries its own taxonomy (derived from the slug) — add
     // it in one tap. A freeform finding has none, so collect one via the picker.
     if (suggestion.systemTags && suggestion.workType) {
-      void commitAddToJob(suggestion, {
+      const taxonomy = {
         systemTags: suggestion.systemTags,
         workType: suggestion.workType,
-      });
+      };
+      // Brake pad / rotor replacement needs an axle scope so the inspection
+      // grades the right corners — collect it before committing. Everything
+      // else adds in one tap.
+      if (isBrakeAxleSuggestion(suggestion)) {
+        setPendingBrakeAxle({ suggestion, taxonomy });
+      } else {
+        void commitAddToJob(suggestion, taxonomy);
+      }
     } else {
       setPendingJobSuggestion(suggestion);
     }
@@ -1842,7 +1980,7 @@ function MultiPointInspectionDialogBody({
   );
 
   return (
-    <>
+    <RotorMinContext.Provider value={rotorMin}>
       <SurveyDialogShell
         open={open}
         onClose={() => {
@@ -1856,6 +1994,12 @@ function MultiPointInspectionDialogBody({
         maxWidthClassName="max-w-2xl"
         mobileFullBleed
         sideRailSlotId={INSPECTION_SIDE_RAIL_ID}
+        sideGuide={
+          showBrakeFluidGuide ? (
+            <BrakeFluidGuideCard onClose={() => setShowBrakeFluidGuide(false)} />
+          ) : null
+        }
+        disableEscape={showBrakeFluidGuide}
         contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-4 sm:px-6 sm:pb-5"
         headerBadge={
           isFirstVisit ? (
@@ -1960,7 +2104,7 @@ function MultiPointInspectionDialogBody({
                   </span>
                 ) : null}
               </label>
-              <fieldset>
+              <fieldset className={phase === "mpi" ? undefined : "hidden"}>
                 <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   Is the vehicle on a lift?{" "}
                   <span className="text-red-500">*</span>
@@ -2068,11 +2212,83 @@ function MultiPointInspectionDialogBody({
             <div id="inspection-car-diagram" className="flex justify-center scroll-mt-4">
               <CarDiagram
                 activeZone={activeZone === "PARTS" ? null : activeZone}
-                isDone={(id) => !!state.zones[id]?.done}
+                isDone={(id) => isZoneDoneForPhase(state.zones[id], phase)}
                 isRequired={(id) => requiredSet.has(id)}
                 onSelect={selectZone}
               />
             </div>
+
+            {/* Copy-to-sibling prompt — surfaces the instant a corner is marked
+                complete, gated on the source being done (the locked rule). */}
+            {copyPromptFor
+              ? (() => {
+                  const opposite = OPPOSITE_CORNER[copyPromptFor];
+                  const sourceLabel =
+                    INSPECTION_ZONES_BY_ID[copyPromptFor].label;
+                  const oppositeLabel = INSPECTION_ZONES_BY_ID[opposite].label;
+                  const oppositeShort = INSPECTION_ZONES_BY_ID[opposite].short;
+                  const siblingHasInput = zoneHasInput(
+                    opposite,
+                    zoneState(opposite),
+                  );
+                  return (
+                    <div
+                      className={cn(
+                        "mx-auto w-full max-w-md rounded-xl border px-3 py-2.5 text-[13px]",
+                        copyPromptCopied
+                          ? "border-emerald-300 bg-emerald-50 text-emerald-800"
+                          : "border-primary/20 bg-primary/[0.04] text-foreground",
+                      )}
+                    >
+                      {copyPromptCopied ? (
+                        <p className="flex items-center gap-1.5 font-medium text-emerald-700">
+                          <Check className="h-4 w-4" />
+                          Copied to {oppositeLabel}
+                        </p>
+                      ) : (
+                        <div className="flex flex-col gap-2">
+                          <div>
+                            <p className="flex items-center gap-1.5 font-semibold">
+                              <Check className="h-4 w-4 text-emerald-600" />
+                              {sourceLabel} complete
+                            </p>
+                            <p className="mt-0.5 text-muted-foreground">
+                              Copy these readings to {oppositeLabel}, then adjust
+                              the few that differ.
+                              {siblingHasInput ? (
+                                <span className="mt-0.5 block text-amber-700">
+                                  This replaces the readings already entered
+                                  there.
+                                </span>
+                              ) : null}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                copyCornerToOpposite(copyPromptFor);
+                                setCopyPromptCopied(true);
+                              }}
+                              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground hover:bg-primary/90"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                              Copy to {oppositeShort}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCopyPromptFor(null)}
+                              className="rounded-lg border border-primary/20 px-3 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-primary/5"
+                            >
+                              Not now
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()
+              : null}
 
             {/* owner-profile zone entry (not a physical location) */}
             <div className="flex justify-center">
@@ -2154,7 +2370,7 @@ function MultiPointInspectionDialogBody({
                   specConfirmed={confirmedSpecZones.has(activeZone)}
                   onConfirmSpecs={() => markSpecReviewed(activeZone)}
                   extraHeader={
-                    activeZone === "FRT" ? (
+                    activeZone === "FRT" && phase === "pre" ? (
                       <InspectionStickerFields
                         status={inspectionStatus}
                         expires={inspectionExpires}
@@ -2173,7 +2389,6 @@ function MultiPointInspectionDialogBody({
                   onSharedText={(key, value) =>
                     patchSharedText(activeZone, key, value)
                   }
-                  onCopyToOpposite={() => copyCornerToOpposite(activeZone)}
                   onPhoto={(file, tag) =>
                     handlePhotoUpload(activeZone, file, tag)
                   }
@@ -2181,6 +2396,7 @@ function MultiPointInspectionDialogBody({
                     setPhotoToRemove({ zoneId: activeZone, storageId })
                   }
                   onToggleDone={() => handleToggleZone(activeZone)}
+                  onOpenBrakeFluidGuide={() => setShowBrakeFluidGuide(true)}
                   onPrevious={() => {
                     const index = NAV_ZONE_IDS.indexOf(activeZone);
                     openZoneAtTop(
@@ -2229,6 +2445,10 @@ function MultiPointInspectionDialogBody({
           </div>
         )}
       </SurveyDialogShell>
+      <BrakeFluidLevelGuide
+        open={showBrakeFluidGuide}
+        onClose={() => setShowBrakeFluidGuide(false)}
+      />
       <ConfirmationDialog
         open={photoToRemove !== null}
         title="Remove this photo?"
@@ -2262,8 +2482,37 @@ function MultiPointInspectionDialogBody({
         busy={addingToJobKey !== null}
         onCancel={() => setPendingJobSuggestion(null)}
         onConfirm={(taxonomy) => {
-          if (pendingJobSuggestion)
-            void commitAddToJob(pendingJobSuggestion, taxonomy);
+          const suggestion = pendingJobSuggestion;
+          if (!suggestion) return;
+          setPendingJobSuggestion(null);
+          // A freeform finding that reads as brake/rotor work still needs an
+          // axle before it lands — hand it to the axle prompt. Otherwise commit.
+          if (isBrakeAxleSuggestion(suggestion)) {
+            setPendingBrakeAxle({ suggestion, taxonomy });
+          } else {
+            void commitAddToJob(suggestion, taxonomy);
+          }
+        }}
+      />
+
+      {/* Brake/rotor work adds an axle step before it lands, so the inspection
+          scopes the right corners. Defaults to Front and rear — see BrakeAxleDialog. */}
+      <BrakeAxleDialog
+        open={pendingBrakeAxle !== null}
+        serviceName={
+          pendingBrakeAxle?.suggestion.serviceName ??
+          pendingBrakeAxle?.suggestion.label ??
+          ""
+        }
+        busy={addingToJobKey !== null}
+        onCancel={() => setPendingBrakeAxle(null)}
+        onConfirm={(axle) => {
+          if (pendingBrakeAxle)
+            void commitAddToJob(
+              pendingBrakeAxle.suggestion,
+              pendingBrakeAxle.taxonomy,
+              axle,
+            );
         }}
       />
 
@@ -2285,7 +2534,7 @@ function MultiPointInspectionDialogBody({
           );
         }}
       />
-    </>
+    </RotorMinContext.Provider>
   );
 }
 
@@ -2733,10 +2982,10 @@ function ZonePanel({
   extraHeader,
   onPatch,
   onSharedText,
-  onCopyToOpposite,
   onPhoto,
   onRemovePhoto,
   onToggleDone,
+  onOpenBrakeFluidGuide,
   onPrevious,
   onNext,
   fieldSaveState,
@@ -2762,11 +3011,10 @@ function ZonePanel({
   extraHeader?: React.ReactNode;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
-  /** Copies this corner's readings onto its same-axle sibling (corners only). */
-  onCopyToOpposite: () => void;
   onPhoto: (file: File, tag?: "general" | "rotor_stamp") => void;
   onRemovePhoto: (storageId: string) => void;
   onToggleDone: () => void;
+  onOpenBrakeFluidGuide: () => void;
   onPrevious: () => void;
   onNext: () => void;
   /** Per-field autosave state, keyed `${zoneId}::${fieldKey}`. */
@@ -2774,15 +3022,6 @@ function ZonePanel({
   /** Flags a field as pending-save the moment the mechanic edits it. */
   onFieldSaving: (fieldKey: string) => void;
 }) {
-  // Transient "Copied ✓" confirmation on the copy-to-opposite button. Reset when
-  // the panel switches zones and auto-cleared after a short beat.
-  const [copiedFlash, setCopiedFlash] = useState(false);
-  useEffect(() => setCopiedFlash(false), [zoneId]);
-  useEffect(() => {
-    if (!copiedFlash) return;
-    const timer = window.setTimeout(() => setCopiedFlash(false), 2200);
-    return () => window.clearTimeout(timer);
-  }, [copiedFlash]);
   // Refs to every field row so the rail (and spec review) can jump straight to a
   // question, plus a transient highlight so the mechanic sees where they landed.
   const fieldRefs = useRef<Record<string, HTMLDivElement | null>>({});
@@ -2808,14 +3047,6 @@ function ZonePanel({
     setRailTarget(document.getElementById(INSPECTION_SIDE_RAIL_ID));
   }, []);
   const zone = INSPECTION_ZONES_BY_ID[zoneId];
-  // Same-axle sibling for the one-tap copy (undefined on non-corner zones).
-  const oppositeCorner = OPPOSITE_CORNER[zoneId as CornerZoneId] as
-    | CornerZoneId
-    | undefined;
-  const oppositeLabel = oppositeCorner
-    ? INSPECTION_ZONES_BY_ID[oppositeCorner].label
-    : null;
-  const canCopyOpposite = !!oppositeCorner && zoneHasInput(zoneId, zs);
   const tireReplacementScheduled =
     (zoneId === "FL" ||
       zoneId === "FR" ||
@@ -2823,12 +3054,47 @@ function ZonePanel({
       zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
   const applicableFields = zone.fields.filter((field) => {
+    // Phase first, ahead of both override sets below. Those exist to show
+    // wheel-off rows regardless of the booked axle scope, and between them they
+    // cover every wheel-off key — which is exactly why pad and rotor rows used
+    // to appear during the pre-check. A field from the other half of the
+    // inspection is not "always visible"; it is not visible at all yet.
+    if (field.phase !== completionContext.phase) return false;
     if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
     if (SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS.has(field.key)) {
       return isBrakeDetailFieldRelevant(field.key, zs);
     }
     return isFieldApplicableToZone(zoneId, field.key, completionContext);
   });
+  // Spec v2 §5: at MPI the corner reopens showing its wheel-off rows, with what
+  // was recorded on the ground carried above them read-only. The mechanic under
+  // the car can see the tread they measured without being able to restate it —
+  // pre-check readings are settled once the clock starts.
+  const carriedPreRows =
+    completionContext.phase === "mpi"
+      ? zone.fields
+          .filter((field) => field.phase === "pre")
+          .map((field) => {
+            const status = zs.statuses[field.key];
+            if (status) return { key: field.key, label: field.label, value: "—" };
+            const raw =
+              field.type === "measure"
+                ? zs.measures[field.key]
+                : field.type === "tri"
+                  ? TRI_LABELS[zs.tri[field.key] as TriValue]
+                  : field.type === "descriptors"
+                    ? (zs.descriptors[field.key] ?? []).join(", ")
+                    : field.type === "select"
+                      ? zs.select[field.key]
+                      : zs.text[field.key];
+            const value = String(raw ?? "").trim();
+            return value ? { key: field.key, label: field.label, value } : null;
+          })
+          .filter((row): row is { key: string; label: string; value: string } =>
+            row !== null,
+          )
+      : [];
+
   const rotorPhotoRequired =
     (zoneId === "FL" ||
       zoneId === "FR" ||
@@ -2843,7 +3109,10 @@ function ZonePanel({
   // Per-field lookup of the seeded value/provenance for this zone.
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
-  const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
+  // Completion is per phase: a corner signed off during the pre-check reads as
+  // incomplete again once the MPI half opens its wheel-off rows.
+  const doneForPhase = isZoneDoneForPhase(zs, completionContext.phase);
+  const needsSpecReview = hasSpecPrefill && !doneForPhase && !specConfirmed;
   // Seeded specs that actually render here — the set the mechanic must check.
   const seededKeys = applicableFields
     .map((field) => field.key)
@@ -2901,46 +3170,10 @@ function ZonePanel({
           )}
         </h4>
         <div className="flex items-center gap-1">
-          {zs.done ? (
+          {doneForPhase ? (
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
-          ) : null}
-          {oppositeCorner ? (
-            <button
-              type="button"
-              onClick={() => {
-                onCopyToOpposite();
-                setCopiedFlash(true);
-              }}
-              disabled={!canCopyOpposite}
-              title={
-                canCopyOpposite
-                  ? `Copy every reading from this corner to ${oppositeLabel}, then adjust the few that differ`
-                  : `Enter this corner's readings first, then copy them to ${oppositeLabel}`
-              }
-              aria-label={`Copy all readings to ${oppositeLabel}`}
-              className={cn(
-                "mr-0.5 inline-flex items-center gap-1 rounded-lg border px-2 py-1.5 text-[12px] font-medium transition-colors",
-                copiedFlash
-                  ? "border-emerald-300 bg-emerald-50 text-emerald-700"
-                  : canCopyOpposite
-                    ? "border-primary/20 text-muted-foreground hover:bg-primary/5"
-                    : "cursor-not-allowed border-primary/10 text-muted-foreground/40",
-              )}
-            >
-              {copiedFlash ? (
-                <>
-                  <Check className="h-3.5 w-3.5" />
-                  Copied to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              ) : (
-                <>
-                  <Copy className="h-3.5 w-3.5" />
-                  Copy to {INSPECTION_ZONES_BY_ID[oppositeCorner].short}
-                </>
-              )}
-            </button>
           ) : null}
           <button
             type="button"
@@ -3019,6 +3252,24 @@ function ZonePanel({
           )
         : null}
 
+      {carriedPreRows.length > 0 ? (
+        <details className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.03] px-3 py-2">
+          <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            From the pre-check · {carriedPreRows.length} recorded
+          </summary>
+          <dl className="mt-2 space-y-1">
+            {carriedPreRows.map((row) => (
+              <div key={row.key} className="flex justify-between gap-3">
+                <dt className="text-[12px] text-muted-foreground">{row.label}</dt>
+                <dd className="text-[12px] font-medium tabular-nums text-foreground">
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
+
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
@@ -3088,6 +3339,7 @@ function ZonePanel({
                 onSharedText(key, value);
               }}
               saveState={fieldSaveState[`${zoneId}::${field.key}`]}
+              onOpenBrakeFluidGuide={onOpenBrakeFluidGuide}
             />
           </div>
         );
@@ -3153,7 +3405,7 @@ function ZonePanel({
         <InlineFieldError message={fieldError.message} />
       ) : null}
 
-      {!zs.done && zs.dirty ? (
+      {!doneForPhase && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           You&apos;ve entered readings here — tap{" "}
           <span className="font-semibold">Mark zone complete</span> so they
@@ -3200,14 +3452,87 @@ function ZonePanel({
           onClick={onToggleDone}
           className={cn(
             "ml-auto rounded-xl px-4 py-2 text-[13px] font-semibold transition-colors",
-            zs.done
+            doneForPhase
               ? "border border-primary/20 bg-card text-muted-foreground hover:bg-primary/5"
               : "bg-primary text-primary-foreground hover:bg-primary/90",
           )}
         >
-          {zs.done ? "Mark incomplete" : "Mark zone complete"}
+          {doneForPhase ? "Mark incomplete" : "Mark zone complete"}
         </button>
       </div>
+    </div>
+  );
+}
+
+function BrakeFluidLevelGuide({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  return (
+    <SurveyDialogShell
+      open={open}
+      onClose={onClose}
+      title="Brake fluid level guide"
+      description="Match the fluid line to the nearest marked level."
+      maxWidthClassName="max-w-xl"
+      mobileFullBleed
+      outerClassName="2xl:hidden"
+      contentClassName="min-h-0 flex-1 overflow-y-auto px-5 py-4 sm:px-6 sm:py-5"
+    >
+      <BrakeFluidGuideContent />
+    </SurveyDialogShell>
+  );
+}
+
+function BrakeFluidGuideCard({ onClose }: { onClose: () => void }) {
+  return (
+    <aside className="pointer-events-auto w-[26rem] overflow-hidden rounded-2xl border border-primary/10 bg-card shadow-[0_24px_60px_-12px_rgba(15,23,42,0.22)]">
+      <div className="flex items-start justify-between gap-3 border-b border-primary/10 px-4 py-3.5">
+        <div>
+          <h3 className="text-[15px] font-semibold text-foreground">
+            Brake fluid level guide
+          </h3>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            Match the fluid line to the nearest marked level.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="-m-1 rounded-full p-1.5 text-muted-foreground transition-colors hover:bg-primary/5 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          aria-label="Close brake fluid level guide"
+        >
+          <X className="h-4 w-4" aria-hidden="true" />
+        </button>
+      </div>
+      <div className="p-3">
+        <BrakeFluidGuideContent />
+      </div>
+    </aside>
+  );
+}
+
+function BrakeFluidGuideContent() {
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-xl border border-primary/10 bg-muted/30 p-1">
+        <Image
+          src="/brake-fluid-diagram-3.png"
+          alt="Brake fluid reservoir diagram showing Max, High, Mid, Low, and Min levels"
+          width={1536}
+          height={1008}
+          sizes="(max-width: 640px) 100vw, 352px"
+          className="h-auto w-full object-contain"
+        />
+      </div>
+      <p className="rounded-lg border border-primary/10 bg-primary/[0.03] px-3 py-2 text-[12px] leading-5 text-muted-foreground">
+        Read the fluid surface against the reservoir markings. Select the closest
+        of the five levels; use <span className="font-medium text-foreground">Min</span>{" "}
+        only when it is at the minimum mark.
+      </p>
     </div>
   );
 }
@@ -3226,6 +3551,7 @@ function FieldRow({
   onPatch,
   onSharedText,
   saveState,
+  onOpenBrakeFluidGuide,
 }: {
   zoneId: ZoneId;
   field: InspectionField;
@@ -3245,6 +3571,7 @@ function FieldRow({
   onSharedText: (key: string, value: string) => void;
   /** Autosave state for this field's last edit (spinner / check / retry). */
   saveState?: FieldSaveState;
+  onOpenBrakeFluidGuide: () => void;
 }) {
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
@@ -3252,17 +3579,32 @@ function FieldRow({
     return statuses;
   };
   const unavailable = !!zs.statuses[field.key];
-  const unavailableControl = (
+  // NYS safety items (e.g. horn) are mandatory — the mechanic can't mark them
+  // unavailable to skip them, so drop the toggle entirely for those fields.
+  const skippable = canMarkFieldUnavailable(zoneId, field.key);
+  const nysSafety = isNysSafetyField(zoneId, field.key);
+  const unavailableControl = skippable ? (
     <UnavailableToggle
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        statuses[field.key] = "not_applicable";
+        // Marking a field unavailable has to clear whatever was typed into it.
+        // Leaving both behind reads as "the pad measures 5mm AND could not be
+        // seen" — the reading then counts as answered while claiming it was
+        // never taken (Aug 24 bug, Spec v2 §10).
+        onPatch({
+          statuses,
+          measures: { ...zs.measures, [field.key]: "" },
+        });
       }}
     />
-  );
+  ) : null;
   const rotorNotConfirmed =
     ROTOR_GATE_FIELDS.has(field.key) && zs.select.rotor_applicable !== "yes";
   if (field.type === "measure") {
@@ -3342,6 +3684,19 @@ function FieldRow({
           </div>
         </Row>
         {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
+        {nysSafety ? (
+          selected === "r" ? (
+            <p className="px-1 pb-2 text-[11px] font-medium text-red-600">
+              Automatic NYS inspection failure — a 15–20 min diagnostic (fuse /
+              clock spring / horn unit) is required before a replacement can be
+              approved.
+            </p>
+          ) : (
+            <p className="px-1 pb-2 text-[11px] text-muted-foreground">
+              Mandatory state-inspection safety item — can’t be skipped.
+            </p>
+          )
+        ) : null}
       </div>
     );
   }
@@ -3587,27 +3942,40 @@ function FieldRow({
     return (
       <div className="border-b border-primary/10">
         <Row label={field.label} required={required} saveState={saveState}>
-          <div className="flex w-44 flex-col items-end gap-1">
-            <CompactSelect
-              id={`inspection-${zoneId}-${field.key}`}
-              ariaLabel={field.label}
-              value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
-              options={selectOptions}
-              className="w-44"
-              isDisabled={measurementNotTaken}
-              onChange={writeSelect}
-            />
-            {isOtherMode ? (
-              <input
-                id={`inspection-${zoneId}-${field.key}-other`}
-                aria-label={`Custom ${field.label.toLowerCase()}`}
-                value={value === OTHER_INSPECTION_OPTION ? "" : value}
-                placeholder={`Enter ${field.label.toLowerCase()}`}
-                onChange={(event) => writeSelect(event.target.value)}
-                className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
-              />
+          <div className="flex items-center gap-1">
+            {field.key === "bf_level" ? (
+              <button
+                type="button"
+                onClick={onOpenBrakeFluidGuide}
+                className="shrink-0 p-1 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                aria-label="How to read brake fluid level"
+                title="How to read brake fluid level"
+              >
+                <Info className="h-3.5 w-3.5" aria-hidden="true" />
+              </button>
             ) : null}
-            {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+            <div className="flex w-44 flex-col items-end gap-1">
+              <CompactSelect
+                id={`inspection-${zoneId}-${field.key}`}
+                ariaLabel={field.label}
+                value={isOtherMode ? OTHER_INSPECTION_OPTION : value}
+                options={selectOptions}
+                className="w-44"
+                isDisabled={measurementNotTaken}
+                onChange={writeSelect}
+              />
+              {isOtherMode ? (
+                <input
+                  id={`inspection-${zoneId}-${field.key}-other`}
+                  aria-label={`Custom ${field.label.toLowerCase()}`}
+                  value={value === OTHER_INSPECTION_OPTION ? "" : value}
+                  placeholder={`Enter ${field.label.toLowerCase()}`}
+                  onChange={(event) => writeSelect(event.target.value)}
+                  className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
+                />
+              ) : null}
+              {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
+            </div>
           </div>
           {isMeasurementMethod || field.key === "rotor_applicable"
             ? null
@@ -3829,7 +4197,14 @@ function MeasureField({
   saveState?: FieldSaveState;
 }) {
   const value = zs.measures[field.key] ?? "";
-  const result = classifyInspectionMeasure(field, zs.measures, zs.select);
+  // Grade rotor against THIS vehicle's enrichment-derived minimum (nominal ×
+  // 0.85), falling back to the field's static default when unknown.
+  const rotorMinCtx = useContext(RotorMinContext);
+  const rotorRef =
+    field.classify === "rotor"
+      ? effectiveRotorRef(zoneId, field.ref, rotorMinCtx)
+      : undefined;
+  const result = classifyInspectionMeasure(field, zs.measures, zs.select, rotorRef);
   const clearUnavailable = () => {
     const statuses = { ...zs.statuses };
     delete statuses[field.key];
@@ -3965,9 +4340,12 @@ function MeasureField({
 
   const isRotor = field.key === "rotor";
   const unit: RotorUnit = zs.select.rotor_unit === "in" ? "in" : "mm";
+  // Prefer the per-vehicle minimum over the field's static reference so the
+  // mechanic sees the same replace-at figure the grade is measured against.
+  const displayRotorRef = rotorRef ?? field.ref;
   const hint =
-    isRotor && field.ref != null
-      ? `Reference min ${formatRotorReferenceMinimum(field.ref, unit)}`
+    isRotor && displayRotorRef != null
+      ? `Reference min ${formatRotorReferenceMinimum(displayRotorRef, unit)}`
       : field.hint;
   return (
     <div className="border-b border-primary/10">

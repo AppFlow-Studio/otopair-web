@@ -6,10 +6,12 @@
  * shape used by directorConfigActions / directorVehicleActions.
  */
 
-import { mutation, query } from "./_generated/server";
+import { mutation, query, type MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { tierValidator, VEHICLE_TIERS, type VehicleTier } from "./lib/vehicleTiers";
+import { makeKeyOf } from "./lib/makeKey";
+import { pickTierRule, resolveTierWithRules } from "./lib/tierResolver";
 import {
   buildEntityLabel,
   diffChanges,
@@ -650,6 +652,280 @@ export const overrideVehicleConfigTier = mutation({
     });
 
     return { ok: true as const, changes: 1, prevTier, newTier: args.newTier };
+  },
+});
+
+// ===========================================================================
+// MAKE / MODEL TIER RULES — Director-authored, no-deploy tier assignment layer
+// ===========================================================================
+// A live rules table (pricing_tier_rules) that sits ABOVE the hardcoded
+// ASSIGNMENT_RULES engine. lib/tierResolver consults it first, so a rule
+// applies to every FUTURE onboarded car; retierMatchingConfigs applies it to
+// ALREADY-onboarded cars now. Per-config manual overrides always win.
+
+/** Load id→name maps for makes/models (small reference tables). */
+async function loadNameMaps(ctx: MutationCtx) {
+  const [makes, models] = await Promise.all([
+    ctx.db.query("makes").collect(),
+    ctx.db.query("models").collect(),
+  ]);
+  return {
+    makeName: new Map(makes.map((m) => [String(m._id), m.name])),
+    modelName: new Map(models.map((m) => [String(m._id), (m as any).name as string])),
+  };
+}
+
+/**
+ * Re-resolve + persist the tier for every config (optionally scoped to one
+ * make_key), skipping director manual pins unless `force`. Never clears a set
+ * tier with a null resolution. Returns counts for the audit trail + UI toast.
+ */
+async function retierMatchingConfigs(
+  ctx: MutationCtx,
+  opts: { makeKey?: string; force?: boolean },
+): Promise<{ scanned: number; retiered: number; stillNull: number }> {
+  const { makeName, modelName } = await loadNameMaps(ctx);
+  const rules = await ctx.db.query("pricing_tier_rules").collect();
+  const configs = await ctx.db.query("vehicle_configs").collect();
+  const now = Date.now();
+  let scanned = 0;
+  let retiered = 0;
+  let stillNull = 0;
+  for (const cfg of configs) {
+    const make = makeName.get(String(cfg.make_id)) ?? "";
+    if (opts.makeKey && makeKeyOf(make) !== opts.makeKey) continue;
+    scanned++;
+    if (cfg.pricing_tier_source === "manual" && !opts.force) continue;
+    const model = modelName.get(String(cfg.model_id)) ?? "";
+    const res = resolveTierWithRules(rules, {
+      make,
+      model,
+      trim: cfg.trim_name ?? "",
+      year: cfg.year,
+    });
+    if (!res.tier) {
+      if (!cfg.pricing_tier) stillNull++;
+      continue;
+    }
+    if (res.tier !== cfg.pricing_tier || res.source !== cfg.pricing_tier_source) {
+      await ctx.db.patch(cfg._id, {
+        pricing_tier: res.tier,
+        pricing_tier_source: res.source ?? undefined,
+        pricing_tier_set_at: now,
+      } as any);
+      retiered++;
+    }
+  }
+  return { scanned, retiered, stillNull };
+}
+
+/** Trim to undefined so empty inputs don't persist as "" (which would break
+ *  substring matching against every model/trim). */
+const orUndef = (s?: string): string | undefined => {
+  const t = (s ?? "").trim();
+  return t === "" ? undefined : t;
+};
+
+// tierRulesList — all rules + how many configs each rule currently OWNS
+// (the winning most-specific rule for that car).
+export const tierRulesList = query({
+  args: {},
+  handler: async (ctx) => {
+    const [rules, makes, models, configs] = await Promise.all([
+      ctx.db.query("pricing_tier_rules").collect(),
+      ctx.db.query("makes").collect(),
+      ctx.db.query("models").collect(),
+      ctx.db.query("vehicle_configs").collect(),
+    ]);
+    const makeName = new Map(makes.map((m) => [String(m._id), m.name]));
+    const modelName = new Map(models.map((m) => [String(m._id), (m as any).name as string]));
+
+    const ownedBy = new Map<string, number>();
+    for (const cfg of configs) {
+      const make = makeName.get(String(cfg.make_id)) ?? "";
+      const model = modelName.get(String(cfg.model_id)) ?? "";
+      const win = pickTierRule(rules, {
+        make,
+        model,
+        trim: cfg.trim_name ?? "",
+        year: cfg.year,
+      });
+      if (win) ownedBy.set(String(win._id), (ownedBy.get(String(win._id)) ?? 0) + 1);
+    }
+
+    return rules
+      .slice()
+      .sort((a, b) => a.make.localeCompare(b.make) || b.updated_at - a.updated_at)
+      .map((r) => ({
+        id: r._id,
+        make: r.make,
+        make_key: r.make_key,
+        model_includes: r.model_includes ?? null,
+        trim_includes: r.trim_includes ?? null,
+        year_min: r.year_min ?? null,
+        year_max: r.year_max ?? null,
+        tier: r.tier,
+        enabled: r.enabled,
+        note: r.note ?? null,
+        actor_name: r.actor_name ?? null,
+        matchCount: ownedBy.get(String(r._id)) ?? 0,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+      }));
+  },
+});
+
+// upsertTierRule — create or edit a rule, then re-tier existing matching cars.
+export const upsertTierRule = mutation({
+  args: {
+    id: v.optional(v.id("pricing_tier_rules")),
+    make: v.string(),
+    model_includes: v.optional(v.string()),
+    trim_includes: v.optional(v.string()),
+    year_min: v.optional(v.number()),
+    year_max: v.optional(v.number()),
+    tier: tierValidator,
+    enabled: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, args) => {
+    const make = args.make.trim();
+    if (!make) return { ok: false as const, reason: "make_required" };
+    const make_key = makeKeyOf(make);
+    const now = Date.now();
+
+    const fields = {
+      make,
+      make_key,
+      model_includes: orUndef(args.model_includes),
+      trim_includes: orUndef(args.trim_includes),
+      year_min: args.year_min,
+      year_max: args.year_max,
+      tier: args.tier,
+      enabled: args.enabled ?? true,
+      note: orUndef(args.note),
+      actor_name: args.actorName,
+      updated_at: now,
+    };
+
+    let ruleId: Id<"pricing_tier_rules">;
+    let action: string;
+    if (args.id) {
+      const cur = await ctx.db.get(args.id);
+      if (!cur) return { ok: false as const, reason: "rule_not_found" };
+      await ctx.db.patch(args.id, fields);
+      ruleId = args.id;
+      action = "rule_edit";
+    } else {
+      ruleId = await ctx.db.insert("pricing_tier_rules", {
+        ...fields,
+        created_by: args.actorId,
+        created_at: now,
+      });
+      action = "rule_create";
+    }
+
+    // Apply to already-onboarded cars now (future onboards pick it up at
+    // config creation). Manual pins are left untouched.
+    const retier = await retierMatchingConfigs(ctx, { makeKey: make_key });
+
+    const scope =
+      `${make}` +
+      (fields.model_includes ? ` / ${fields.model_includes}` : "") +
+      (fields.trim_includes ? ` / ${fields.trim_includes}` : "");
+    await ctx.db.insert("audit_log", {
+      entity_type: "pricing_tier_rule",
+      entity_id: String(ruleId),
+      action,
+      actor: args.actorName,
+      actor_id: args.actorId,
+      detail: `${scope} → ${args.tier}${fields.enabled ? "" : " (disabled)"} · re-tiered ${retier.retiered} car(s)`,
+      created_at: now,
+    });
+
+    return { ok: true as const, id: ruleId, retier };
+  },
+});
+
+// setTierRuleEnabled — toggle a rule on/off; re-tier the affected make.
+export const setTierRuleEnabled = mutation({
+  args: {
+    id: v.id("pricing_tier_rules"),
+    enabled: v.boolean(),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { id, enabled, actorName, actorId }) => {
+    const cur = await ctx.db.get(id);
+    if (!cur) return { ok: false as const, reason: "rule_not_found" };
+    const now = Date.now();
+    await ctx.db.patch(id, { enabled, updated_at: now });
+    const retier = await retierMatchingConfigs(ctx, { makeKey: cur.make_key });
+    await ctx.db.insert("audit_log", {
+      entity_type: "pricing_tier_rule",
+      entity_id: String(id),
+      action: enabled ? "rule_enable" : "rule_disable",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `${cur.make} rule ${enabled ? "enabled" : "disabled"} · re-tiered ${retier.retiered} car(s)`,
+      created_at: now,
+    });
+    return { ok: true as const, retier };
+  },
+});
+
+// deleteTierRule — remove a rule; re-tier the affected make so cars fall back
+// through the resolver (director_rule → hardcoded engine, or null → review).
+export const deleteTierRule = mutation({
+  args: {
+    id: v.id("pricing_tier_rules"),
+    actorName: v.string(),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { id, actorName, actorId }) => {
+    const cur = await ctx.db.get(id);
+    if (!cur) return { ok: false as const, reason: "rule_not_found" };
+    const makeKey = cur.make_key;
+    const label = cur.make;
+    await ctx.db.delete(id);
+    const retier = await retierMatchingConfigs(ctx, { makeKey });
+    const now = Date.now();
+    await ctx.db.insert("audit_log", {
+      entity_type: "pricing_tier_rule",
+      entity_id: String(id),
+      action: "rule_delete",
+      actor: actorName,
+      actor_id: actorId,
+      detail: `${label} rule deleted · re-tiered ${retier.retiered} car(s)`,
+      created_at: now,
+    });
+    return { ok: true as const, retier };
+  },
+});
+
+// retierConfigs — manual "Re-tier now" backfill. Scoped to a make_key when
+// given (else the whole catalog). Callable from the UI or `npx convex run`.
+export const retierConfigs = mutation({
+  args: {
+    makeKey: v.optional(v.string()),
+    force: v.optional(v.boolean()),
+    actorName: v.optional(v.string()),
+    actorId: v.optional(v.id("director_users")),
+  },
+  handler: async (ctx, { makeKey, force, actorName, actorId }) => {
+    const res = await retierMatchingConfigs(ctx, { makeKey, force });
+    await ctx.db.insert("audit_log", {
+      entity_type: "pricing_tier_rule",
+      entity_id: makeKey ?? "all",
+      action: "retier",
+      actor: actorName ?? "system",
+      actor_id: actorId,
+      detail: `Re-tier${makeKey ? ` (${makeKey})` : " (all)"}: ${res.retiered} re-tiered / ${res.scanned} scanned, ${res.stillNull} still unassigned${force ? " · force" : ""}`,
+      created_at: Date.now(),
+    });
+    return { ok: true as const, ...res };
   },
 });
 

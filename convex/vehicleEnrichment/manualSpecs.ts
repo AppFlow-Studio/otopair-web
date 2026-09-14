@@ -308,46 +308,17 @@ export const SPEC_FIELDS: readonly SpecFieldDef[] = [
 
   // ── Rotor thickness ────────────────────────────────────────────
   //
-  // These four are the ONLY fields here that are not V4_FIELD_KEYS. Their
-  // consumer is utils/rotorSpecResource.ts, which reads them back off the
-  // claim ledger under exactly these keys — the same keys sourceAdapters/
-  // brembo.ts and summitCentric.ts emit, so a manual claim and an aftermarket
-  // catalogue claim land in one cluster and reconcileClaims weighs them
-  // (owners_manual 3 vs aftermarket_catalog 2) instead of racing.
+  // NOMINAL only (Aug 2026 policy): the discard minimum is no longer asked of
+  // any source — it is DERIVED as a 15% wear threshold off the nominal
+  // (rotorSpecResource.deriveRotorMinMm). The nominal questions stay because
+  // the nominal is now the load-bearing figure the threshold is computed
+  // from. Consumer is utils/rotorSpecResource.ts via the claim ledger under
+  // exactly these keys — the same keys sourceAdapters/brembo.ts and
+  // summitCentric.ts emit, so a manual claim and a catalogue claim land in
+  // one cluster and reconcileClaims weighs them instead of racing.
   //
-  // WHY THIS IS WORTH ASKING FOR. Before this, the discard minimum had two
-  // possible sources: a deterministic parse of a retail parts page — which
-  // prints `330x22mm` NOMINAL and essentially never a discard limit — and
-  // those two aftermarket catalogues, whose number is for THEIR disc and is
-  // therefore stamped `oem_spec_flagged` and warn-capped. The manufacturer's
-  // own brake specification table is the authoritative source and was never
-  // being read, on documents already in storage.
-  //
-  // Every one of these is `engineSensitive: false` on purpose: rotor sizing
-  // splits by BRAKE PACKAGE and axle, never by engine, so an engine qualifier
-  // would reject correct rows. The axle is carried by the field key itself.
-  {
-    key: "rotor_front_min_thickness_mm",
-    unit: "mm",
-    hint:
-      "FRONT brake disc/rotor MINIMUM (discard / wear-limit / service-limit) thickness — " +
-      "the replace-at figure. NOT the new/nominal thickness and NOT the minimum " +
-      "MACHINING/refinishing thickness, which are different, larger numbers",
-    engineSensitive: false,
-    rotorKind: "discard_min",
-    rotorAxle: "front",
-  },
-  {
-    key: "rotor_rear_min_thickness_mm",
-    unit: "mm",
-    hint:
-      "REAR brake disc/rotor MINIMUM (discard / wear-limit / service-limit) thickness — " +
-      "the replace-at figure. NOT the new/nominal thickness and NOT the minimum " +
-      "MACHINING/refinishing thickness",
-    engineSensitive: false,
-    rotorKind: "discard_min",
-    rotorAxle: "rear",
-  },
+  // `engineSensitive: false` on purpose: rotor sizing splits by BRAKE
+  // PACKAGE and axle, never by engine. The axle is carried by the field key.
   {
     key: "rotor_front_nominal_thickness_mm",
     unit: "mm",

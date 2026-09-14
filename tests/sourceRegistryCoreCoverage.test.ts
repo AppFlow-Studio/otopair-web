@@ -20,7 +20,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { SERVICE_PARTS_REFERENCE } from "../convex/lib/servicePartsReference";
-import { SOURCE_REGISTRY, getPartsSearchPlans } from "../convex/vehicleEnrichment/sourceRegistry";
+import { SOURCE_REGISTRY, getPartsSearchPlans, getSourceConfig } from "../convex/vehicleEnrichment/sourceRegistry";
 import { PART_FIELD_MAP } from "../convex/vehicleEnrichment/v3pipeline";
 
 /** roleKey (== oem_parts.subcategory) -> PART_FIELD_MAP field key. */
@@ -118,5 +118,33 @@ describe("core part coverage is a property of the pipeline, not of a make", () =
     const engineOilIdx = fields.indexOf("engine_oil_oem");
     expect(brakeIdx).toBeGreaterThanOrEqual(0);
     if (engineOilIdx >= 0) expect(brakeIdx).toBeLessThan(engineOilIdx);
+  });
+});
+
+describe("getSourceConfig — corporate-family fallback for dead badges", () => {
+  // Aug 27 2026, the 2008 Pontiac G6: no registry entry meant zero stores for
+  // every store-backed lane, on exactly the cars whose open-web ecosystem is
+  // worst. The family's stores genuinely serve these badges.
+  it("routes dead GM badges to a GM config with a validated price voice", () => {
+    for (const make of ["Pontiac", "Saturn", "Oldsmobile", "Hummer"]) {
+      const cfg = getSourceConfig(make);
+      expect(cfg).not.toBeNull();
+      expect(
+        (cfg!.parts.alternates ?? []).some(
+          (a) => a.validated && a.capabilities.includes("price"),
+        ),
+      ).toBe(true);
+    }
+  });
+  it("routes Mercury to the Ford family", () => {
+    expect(getSourceConfig("Mercury")).toBe(getSourceConfig("Ford"));
+  });
+  it("still returns null for makes with no family in the registry", () => {
+    expect(getSourceConfig("Peterbilt")).toBeNull();
+    expect(getSourceConfig("")).toBeNull();
+  });
+  it("never shadows an exact entry", () => {
+    expect(getSourceConfig("Chevrolet")).not.toBeNull();
+    expect(getSourceConfig("Scion")).not.toBe(getSourceConfig("Toyota"));
   });
 });

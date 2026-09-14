@@ -769,7 +769,15 @@ export const preauthorizePaymentForBooking = action({
     assertShopReadyForPayments(shop);
 
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     const stripe = getStripe();
@@ -921,7 +929,15 @@ export const createPaymentIntentForBooking = action({
         );
 
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     // Verify ownership of the payment method. Saved cards are attached to
@@ -1223,24 +1239,31 @@ export const _stampApprovalStripeAction = internalMutation({
 /** Reverts the booking back to `pre_job_pending` after a reauth failure so
  *  the customer can update their payment method. Also pushes them. */
 export const _revertBookingToPendingForReauth = internalMutation({
-  args: { bookingId: v.id("bookings") },
+  // v.string() + normalizeId for the same reason as
+  // _clearReauthRequiredAfterSuccess: the `requires_action` webhook passes an
+  // untrusted `metadata.bookingId` that may belong to another deployment sharing
+  // this Stripe account. A foreign/malformed id no-ops here instead of throwing
+  // and 500-ing the webhook.
+  args: { bookingId: v.string() },
   handler: async (ctx, args) => {
-    const booking: any = await ctx.db.get(args.bookingId);
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    if (!bookingId) return;
+    const booking: any = await ctx.db.get(bookingId);
     if (!booking) return;
     const now = Date.now();
-    await ctx.db.patch(args.bookingId, {
+    await ctx.db.patch(bookingId, {
       payment_approval_state: "reauth_required",
       updated_at: now,
     });
     // Push the customer to update their card.
     await ctx.db.insert("notification_outbox", {
       user_id: booking.user_id,
-      booking_id: args.bookingId,
+      booking_id: bookingId,
       shop_id: booking.shop_id,
       channel: "push",
       category: "booking_reauth_required",
       status: "pending",
-      dedupe_key: `reauth_required:${String(args.bookingId)}:${now}`,
+      dedupe_key: `reauth_required:${String(bookingId)}:${now}`,
       payload: {
         title: "Confirm new hold on your card",
         body: "Your bank needs to verify the updated hold. Tap to confirm — you may be asked to authenticate.",
@@ -1249,8 +1272,8 @@ export const _revertBookingToPendingForReauth = internalMutation({
           // (`app/booking/approve-estimate/[id].tsx` → ReauthView). The
           // NotificationsSheet parses this via `parseOtopairDeepLink` →
           // kind: "reauth" → approve-estimate with `mode=reauth`.
-          deepLink: `otopair://booking/${String(args.bookingId)}/reauth`,
-          bookingId: String(args.bookingId),
+          deepLink: `otopair://booking/${String(bookingId)}/reauth`,
+          bookingId: String(bookingId),
         },
       },
       created_at: now,
@@ -1267,9 +1290,19 @@ export const _revertBookingToPendingForReauth = internalMutation({
  *  initiated action AND the `amount_capturable_updated` webhook fallback.
  */
 export const _clearReauthRequiredAfterSuccess = internalMutation({
-  args: { bookingId: v.id("bookings") },
+  // v.string() (not v.id("bookings")): the `amount_capturable_updated` webhook
+  // passes an UNTRUSTED `metadata.bookingId`. The Stripe test account is shared
+  // across Convex deployments (see convex/CARDATA_BILLING_SPEC.md), so an event
+  // can carry a booking id minted by another deployment. A strict v.id()
+  // validator rejects a foreign id and throws — the webhook's outer catch turns
+  // that into a 500, and Stripe then retries the event indefinitely. normalizeId
+  // returns null for a foreign/malformed id so we no-op instead. Internal
+  // callers pass a real Id<"bookings">, which normalizeId resolves unchanged.
+  args: { bookingId: v.string() },
   handler: async (ctx, args) => {
-    const booking: any = await ctx.db.get(args.bookingId);
+    const bookingId = ctx.db.normalizeId("bookings", args.bookingId);
+    if (!bookingId) return { status: "foreign_id" };
+    const booking: any = await ctx.db.get(bookingId);
     if (!booking) return { status: "no_booking" };
     if (booking.payment_approval_state !== "reauth_required") {
       return { status: "skipped" };
@@ -1278,7 +1311,7 @@ export const _clearReauthRequiredAfterSuccess = internalMutation({
       booking.running_approved_ceiling_cents != null
         ? "pre_job_approved"
         : "none";
-    await ctx.db.patch(args.bookingId, {
+    await ctx.db.patch(bookingId, {
       payment_approval_state: priorState,
       updated_at: Date.now(),
     });
@@ -1351,16 +1384,27 @@ export const resumeReauthFromMobile = action({
       throw new Error("Shop is not ready to accept payments yet.");
     }
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     const payment: any = await ctx.runQuery(
       internal.payments_stripe._getPaymentByBookingId,
       { bookingId: args.bookingId },
     );
-    if (!payment) {
-      throw new Error("No payment row found for this booking.");
-    }
+    // A missing row is the FIRST-hold case: a quote-originated booking
+    // (acceptTireQuote/acceptRotorQuote) confirms WITHOUT preauthorizing a
+    // deposit, so a quote → job → added-scope booking reaches reauth_required
+    // with no row to replace. Create it below instead of failing. Same
+    // first-hold path as approveAndAuthorizeHold.
+    const isFirstHold = payment == null;
 
     const targetCents = Math.max(
       booking.mechanic_set_price_cents ?? 0,
@@ -1380,10 +1424,23 @@ export const resumeReauthFromMobile = action({
       throw new Error("This card doesn't belong to you.");
     }
 
+    // First hold: reserve the payments row BEFORE the Stripe call (mirrors
+    // createPaymentIntentForBooking) so a failed/transient PI still leaves a row.
+    const firstHoldIdempotencyKey = `reauth_pi:${args.bookingId}`;
+    if (isFirstHold) {
+      await ctx.runMutation(internal.payments_stripe._reservePaymentRow, {
+        bookingId: args.bookingId,
+        userId: user._id,
+        shopId: shop._id,
+        amount: booking.total_cost ?? targetCents / 100,
+        idempotencyKey: firstHoldIdempotencyKey,
+      });
+    }
+
     // Step 1: cancel the old PI (releases stale auth). Tolerate "already
     // cancelled / captured / etc." — those are fine, we'll create a new
-    // PI either way.
-    const oldPiId = payment.stripe_payment_intent_id;
+    // PI either way. A first hold has none to cancel.
+    const oldPiId = payment?.stripe_payment_intent_id;
     if (oldPiId) {
       try {
         await stripe.paymentIntents.cancel(oldPiId);
@@ -1419,19 +1476,45 @@ export const resumeReauthFromMobile = action({
       throw new Error(err?.message ?? "Card authorization failed.");
     }
 
-    // Step 3: record the new PI on the payments row (swaps the active PI
-    // id so capture/refund target the replacement).
-    await ctx.runMutation(
-      internal.payments_stripe._recordAuthorizationAdjustment,
-      {
+    // Step 3: record the new PI. First hold → write the full payments row
+    // (mirrors createPaymentIntentForBooking) so capture/refund/settlement can
+    // find it; _recordAuthorizationAdjustment only patches an existing row and
+    // would silently orphan the PI. Otherwise swap the active PI id in place.
+    if (isFirstHold) {
+      const mapped =
+        newPi.status === "requires_capture" ||
+        newPi.status === "succeeded" ||
+        newPi.status === "requires_action"
+          ? "processing"
+          : newPi.status === "canceled"
+            ? "cancelled"
+            : "pending";
+      await ctx.runMutation(internal.payments_stripe._recordPaymentIntent, {
         bookingId: args.bookingId,
-        incrementedTotalCents: targetCents,
-        reauthPaymentIntentId: newPi.id,
+        userId: user._id,
+        shopId: shop._id,
+        amount: booking.total_cost ?? targetCents / 100,
+        stripePaymentIntentId: newPi.id,
+        status: mapped,
+        idempotencyKey: firstHoldIdempotencyKey,
+        holdAmountCents: targetCents,
         ...(args.paymentOrigin != null
           ? { paymentOrigin: args.paymentOrigin }
           : {}),
-      },
-    );
+      });
+    } else {
+      await ctx.runMutation(
+        internal.payments_stripe._recordAuthorizationAdjustment,
+        {
+          bookingId: args.bookingId,
+          incrementedTotalCents: targetCents,
+          reauthPaymentIntentId: newPi.id,
+          ...(args.paymentOrigin != null
+            ? { paymentOrigin: args.paymentOrigin }
+            : {}),
+        },
+      );
+    }
     await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
       bookingId: args.bookingId,
       stripeAction: "reauth_from_mobile",
@@ -1513,7 +1596,15 @@ export const approveAndAuthorizeHold = action({
       throw new Error("Shop is not ready to accept payments yet.");
     }
     if (!user.stripe_customer_id) {
-      throw new Error("Add a payment method before confirming.");
+      // Wallet payments (Apple Pay / Google Pay) mint a one-time PaymentMethod
+      // on-device and don't require a saved card, so a first-time customer may
+      // not have a Stripe customer yet. Create one lazily instead of blocking
+      // the booking — the PaymentIntent still needs a customer to attach the
+      // charge to. Idempotent; persists stripe_customer_id on the user row.
+      user.stripe_customer_id = await ctx.runAction(
+        internal.payments_stripe._getOrCreateStripeCustomer,
+        { userId: user._id },
+      );
     }
 
     // Record the approval and park the booking in `reauth_required`. Throws for
@@ -1533,7 +1624,13 @@ export const approveAndAuthorizeHold = action({
       internal.payments_stripe._getPaymentByBookingId,
       { bookingId: args.bookingId },
     );
-    if (!payment) throw new Error("No payment row found for this booking.");
+    // A missing row is the wallet (Apple/Google Pay) FIRST-hold case: those
+    // bookings never place the off-session $20 deposit (a wallet can't authorize
+    // off-session), so THIS approval is the booking's first hold — there's no
+    // stale row to replace. Create it below instead of failing. A saved-card
+    // booking normally arrives here with its deposit row already present.
+    // (This is the path 953166c's lazy-customer change opened up.)
+    const isFirstHold = payment == null;
 
     const targetCents = Math.max(
       afterBooking.mechanic_set_price_cents ?? 0,
@@ -1552,8 +1649,23 @@ export const approveAndAuthorizeHold = action({
       throw new Error("This card doesn't belong to you.");
     }
 
-    // Cancel the stale hold (tolerate an already-terminal PI).
-    const oldPiId = payment.stripe_payment_intent_id;
+    // First hold: reserve the payments row BEFORE the Stripe call (mirrors
+    // createPaymentIntentForBooking) so a failed/transient PI still leaves a row
+    // the FSM hooks can act on. `amount` is dollars; the hold amount is cents.
+    const firstHoldIdempotencyKey = `approve_hold_pi:${args.bookingId}`;
+    if (isFirstHold) {
+      await ctx.runMutation(internal.payments_stripe._reservePaymentRow, {
+        bookingId: args.bookingId,
+        userId: user._id,
+        shopId: shop._id,
+        amount: afterBooking.total_cost ?? targetCents / 100,
+        idempotencyKey: firstHoldIdempotencyKey,
+      });
+    }
+
+    // Cancel the stale hold (tolerate an already-terminal PI). A first hold has
+    // none to cancel.
+    const oldPiId = payment?.stripe_payment_intent_id;
     if (oldPiId) {
       try {
         await stripe.paymentIntents.cancel(oldPiId);
@@ -1586,17 +1698,45 @@ export const approveAndAuthorizeHold = action({
       throw new Error(err?.message ?? "Card authorization failed.");
     }
 
-    await ctx.runMutation(
-      internal.payments_stripe._recordAuthorizationAdjustment,
-      {
+    if (isFirstHold) {
+      // First hold: record the full payments row (mirrors
+      // createPaymentIntentForBooking) so capture / void / settlement can find
+      // it. _recordAuthorizationAdjustment only PATCHES an existing row — it
+      // would silently no-op here and orphan the PI.
+      const mapped =
+        newPi.status === "requires_capture" ||
+        newPi.status === "succeeded" ||
+        newPi.status === "requires_action"
+          ? "processing"
+          : newPi.status === "canceled"
+            ? "cancelled"
+            : "pending";
+      await ctx.runMutation(internal.payments_stripe._recordPaymentIntent, {
         bookingId: args.bookingId,
-        incrementedTotalCents: targetCents,
-        reauthPaymentIntentId: newPi.id,
+        userId: user._id,
+        shopId: shop._id,
+        amount: afterBooking.total_cost ?? targetCents / 100,
+        stripePaymentIntentId: newPi.id,
+        status: mapped,
+        idempotencyKey: firstHoldIdempotencyKey,
+        holdAmountCents: targetCents,
         ...(args.paymentOrigin != null
           ? { paymentOrigin: args.paymentOrigin }
           : {}),
-      },
-    );
+      });
+    } else {
+      await ctx.runMutation(
+        internal.payments_stripe._recordAuthorizationAdjustment,
+        {
+          bookingId: args.bookingId,
+          incrementedTotalCents: targetCents,
+          reauthPaymentIntentId: newPi.id,
+          ...(args.paymentOrigin != null
+            ? { paymentOrigin: args.paymentOrigin }
+            : {}),
+        },
+      );
+    }
     await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
       bookingId: args.bookingId,
       stripeAction: "approve_and_hold",

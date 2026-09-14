@@ -149,13 +149,56 @@ export type SpecField = {
   group: string;
 };
 
+/** Driveline + chassis docs that hold spec values not stored on the config /
+ *  engine / transmission docs. Threaded into collectSpecFields as an optional
+ *  bag so the four external/portal callers can opt in without every caller
+ *  paying the extra reads. Fetch via loadSpecExtras. */
+export type SpecExtras = {
+  drivetrain?: Doc<"drivetrain_configs"> | null;
+  chassis?: Doc<"chassis_specs"> | null;
+  trimSpec?: Doc<"trim_specs"> | null;
+};
+
+/** Fetch the driveline + chassis + trim-spec docs for a config (all bounded
+ *  indexed reads). chassis_specs is keyed by chassis_code, which can repeat
+ *  across makes, so prefer the row whose make matches the config's. */
+export async function loadSpecExtras(
+  ctx: { db: QueryCtx["db"] },
+  c: Doc<"vehicle_configs">,
+): Promise<Required<SpecExtras>> {
+  const drivetrain = await ctx.db
+    .query("drivetrain_configs")
+    .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+    .first();
+  let chassis: Doc<"chassis_specs"> | null = null;
+  if (c.chassis_code) {
+    const rows = await ctx.db
+      .query("chassis_specs")
+      .withIndex("by_chassis_code", (q) => q.eq("chassis_code", c.chassis_code!))
+      .take(5);
+    chassis = rows.find((r) => c.make_id != null && r.make_id === c.make_id) ?? rows[0] ?? null;
+  }
+  const trimSpec = await ctx.db
+    .query("trim_specs")
+    .withIndex("by_vehicle_config", (q) => q.eq("vehicle_config_id", c._id))
+    .first();
+  return { drivetrain, chassis, trimSpec };
+}
+
 /** The curated maintenance-spec field map: stored doc value → evidence field
- *  key. One list, consumed by configWorkspace (portal) and dataApi (external
- *  /v0/maintenance) so the two can never drift. */
+ *  key. One list, consumed by configWorkspace (portal), dataApi (external
+ *  /v0/maintenance + /v0/vehicle) and dataPublic (teaser) so they can never
+ *  drift. The optional `extras` bag adds driveline + chassis service-point
+ *  fields; every field_name below matches the enrichment writer's
+ *  V4_FIELD_KEYS so latestFieldEvidence resolves the layer. Exceptions:
+ *  steering_type + cabin_filter_access carry NO evidence trail (stored direct
+ *  to chassis_specs) — served as stored-value C by /v0/vehicle + teaser, and
+ *  listed as excluded by the strict /v0/maintenance gate. */
 export function collectSpecFields(
   c: Doc<"vehicle_configs">,
   engine: Doc<"engines"> | null,
   transmission: Doc<"transmissions"> | null,
+  extras?: SpecExtras,
 ): SpecField[] {
   const fields: SpecField[] = [];
   const push = (field_name: string, label: string, raw: unknown, group: string) => {
@@ -197,6 +240,53 @@ export function collectSpecFields(
     "Attributes",
   );
   push("trans_fluid_type", "Trans fluid type", transmission?.fluid_type, "Fluids");
+
+  // Driveline fluids (drivetrain_configs — AWD/4WD/RWD differential + transfer
+  // case). Evidence keyed as drivetrain_config; the writer names the transfer-
+  // case keys transfer_case_* while the doc columns are tc_*.
+  const dt = extras?.drivetrain ?? null;
+  push("diff_fluid_type", "Differential fluid", dt?.diff_fluid_type, "Fluids");
+  push("diff_fluid_capacity_qts", "Differential fluid capacity (qts)", dt?.diff_fluid_capacity_qts, "Fluids");
+  push("transfer_case_fluid_type", "Transfer-case fluid", dt?.tc_fluid_type, "Fluids");
+  push(
+    "transfer_case_fluid_capacity_qts",
+    "Transfer-case fluid capacity (qts)",
+    dt?.tc_fluid_capacity_qts,
+    "Fluids",
+  );
+
+  // Chassis service points (chassis_specs, with trim_specs fallback for the
+  // battery/wiper/lug/parking fields still mid-migration off trim_specs).
+  const ch = extras?.chassis ?? null;
+  const tsx = extras?.trimSpec ?? null;
+  push(
+    "lug_nut_torque_ft_lbs",
+    "Lug nut torque (ft-lbs)",
+    ch?.lug_nut_torque_ft_lbs ?? tsx?.lug_nut_torque_ft_lbs,
+    "Chassis",
+  );
+  push(
+    "front_wiper_size",
+    "Front wiper size (in)",
+    ch?.wiper_blade_driver_size_in ?? tsx?.wiper_blade_driver_size_in,
+    "Chassis",
+  );
+  push(
+    "rear_wiper_size",
+    "Rear wiper size (in)",
+    ch?.wiper_blade_rear_size_in ?? tsx?.wiper_blade_rear_size_in,
+    "Chassis",
+  );
+  push("battery_group", "Battery group", ch?.battery_group ?? tsx?.battery_group, "Chassis");
+  push("battery_type", "Battery type", ch?.battery_type ?? tsx?.battery_type, "Chassis");
+  push(
+    "parking_brake_type",
+    "Parking brake type",
+    ch?.parking_brake_type ?? tsx?.parking_brake_type,
+    "Chassis",
+  );
+  push("steering_type", "Steering type", ch?.steering_type, "Chassis");
+  push("cabin_filter_access", "Cabin filter access", ch?.cabin_filter_access, "Chassis");
 
   return fields;
 }
@@ -357,7 +447,7 @@ export const configWorkspace = query({
       .take(15);
 
     // Spec fields: label → stored value → evidence field key + entity type.
-    const fields = collectSpecFields(c, engine, transmission);
+    const fields = collectSpecFields(c, engine, transmission, await loadSpecExtras(ctx, c));
 
     return {
       id: c._id,

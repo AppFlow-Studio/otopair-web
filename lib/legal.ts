@@ -28,12 +28,16 @@ export type LegalFacts = {
 };
 
 export const LEGAL_FACTS: LegalFacts = {
-  entityName: null,
-  entityState: null,
-  privacyEffectiveDate: null,
-  portalTermsEffectiveDate: null,
-  privacyEmail: null,
-  legalEmail: null,
+  // Confirmed by Waleed 2026-09-14: keep the drafts' entity and state, both
+  // documents effective today, and the privacy@ / legal@ inboxes exist.
+  entityName: "Otopair, Inc.",
+  entityState: "Delaware",
+  privacyEffectiveDate: "2026-09-14",
+  portalTermsEffectiveDate: "2026-09-14",
+  privacyEmail: "privacy@otopair.com",
+  legalEmail: "legal@otopair.com",
+  // Still open (Waleed is raising both with Ab and Yassin): the mailing
+  // address, and whether to build the two pages v5 promises or change its text.
   mailingAddress: POSTAL_ADDRESS
     ? `${POSTAL_ADDRESS.streetAddress}, ${POSTAL_ADDRESS.addressLocality}, ${POSTAL_ADDRESS.addressRegion} ${POSTAL_ADDRESS.postalCode}`
     : null,

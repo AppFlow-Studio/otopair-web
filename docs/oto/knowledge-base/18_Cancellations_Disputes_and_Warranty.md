@@ -30,7 +30,9 @@ What happens when a booking doesn't go to plan: cancelling, rescheduling, no-sho
 
 ## The one charge people don't expect
 
-If the shop's estimate after inspection is above what the driver approved and they don't answer within 24 hours, the estimate expires and is treated as declined. The $20 hold is kept to pay the shop for the inspection it already did.
+If the shop's estimate after inspection — before any work starts — is above what the driver approved and they don't answer within 24 hours, the estimate expires and is treated as declined. The $20 hold is kept to pay the shop for the inspection it already did.
+
+That rule is only for the estimate before work starts. A request to add work during the job is different: left unanswered for 24 hours, the job continues at the last price the driver approved, and the added work isn't charged. Nothing is kept.
 
 ## If something goes wrong with a job
 
@@ -68,6 +70,9 @@ If the shop's estimate after inspection is above what the driver approved and th
 **"Can I reschedule?"**
 "Yes — free up to 12 hours before, up to twice per booking, and your hold just moves to the new time. After that, message the shop."
 
+**"The shop found more work — what if I don't answer?"**
+"It depends on when. If the shop asks to add work during the job, nothing extra happens without your yes: after 24 hours the job continues at the last price you approved, and the added work isn't charged. The one exception is the shop's estimate after it inspects your car, before work starts — if that's above what you approved and you don't answer within 24 hours, it's treated as declined and the $20 hold is kept to pay for the inspection."
+
 **"What if the shop cancels, or never answers?"**
 "Then your $20 hold is released in full and nothing is charged."
 
@@ -90,5 +95,6 @@ If the shop's estimate after inspection is above what the driver approved and th
 - Do **not** say refunds are automatic, that Otopair itself pays them, or that the driver doesn't need to contact the shop
 - Do **not** promise dispute outcomes, refund timing or processing times
 - Do **not** say Otopair warrants, guarantees or insures a repair, and do **not** invent warranty lengths or terms
+- Do **not** say a failed part is "usually covered" or that the shop's warranty will cover it — warranties vary by shop and by job, and some shops offer none
 - Do **not** interpret the terms of service, liability limits or warranty law — point to the Terms and Warranty pages on the site
 - Oto can't open a dispute or a ticket for anyone — disputes are opened from the booking in the app

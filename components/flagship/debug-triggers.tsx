@@ -11,6 +11,7 @@
 
 import { useState } from "react";
 import { DEMO_FEATURES } from "./oto-flow";
+import { SERVICE_EXPLAINERS, SYMPTOMS } from "./oto-knowledge";
 import type { OtoAgent } from "./use-oto-agent";
 
 // A real 17-char VIN (2003 Honda Accord) — exercises the live NHTSA decode.
@@ -120,6 +121,22 @@ export default function DebugTriggers({ oto }: { oto: OtoAgent }) {
           {DEMO_FEATURES.map((f) => (
             <button key={f} type="button" className={BTN} onClick={() => oto.showDemo(f)}>
               {f.replace(/_/g, " ")}
+            </button>
+          ))}
+        </Group>
+
+        <Group label="Services">
+          {SERVICE_EXPLAINERS.map((s) => (
+            <button key={s.service} type="button" className={BTN} onClick={() => oto.showService(s.service)}>
+              {s.service.toLowerCase()}
+            </button>
+          ))}
+        </Group>
+
+        <Group label="Symptoms">
+          {SYMPTOMS.map((s) => (
+            <button key={s.id} type="button" className={BTN} onClick={() => oto.showSymptom(s.id)}>
+              {s.symptom.toLowerCase()}
             </button>
           ))}
         </Group>

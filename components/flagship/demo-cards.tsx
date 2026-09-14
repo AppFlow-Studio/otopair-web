@@ -6,17 +6,21 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
+  CircleDot,
   ClipboardList,
   CreditCard,
   FileText,
   Gift,
   MapPin,
+  Receipt,
   ShieldCheck,
   Sparkles,
   Star,
+  Wrench,
   X,
 } from "lucide-react";
 import { motion } from "motion/react";
+import { CARD, CardHead, OtoCard } from "./oto-card";
 import {
   BOOKINGS_DEMO,
   CHECKIN_DEMO,
@@ -36,37 +40,14 @@ import {
 } from "./oto-flow";
 import { Bar, CountUp, Step } from "./shared";
 
-export const CARD =
-  "w-full rounded-[20px] border border-white/40 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_22px_60px_rgba(0,0,0,0.10)]";
+
+// Re-exported so existing importers keep resolving to the single definition.
+export { CARD };
 
 const usd = (n: number) =>
   `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 const EASE = [0.22, 1, 0.36, 1] as const;
-
-function CardHead({
-  icon: Icon,
-  title,
-  subtitle,
-  delay = 0.05,
-}: {
-  icon: React.ComponentType<{ className?: string; strokeWidth?: number }>;
-  title: string;
-  subtitle?: string;
-  delay?: number;
-}) {
-  return (
-    <Step delay={delay}>
-      <div className="flex items-center gap-2">
-        <Icon className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-          {title}
-        </h3>
-      </div>
-      {subtitle && <p className="mt-1 text-[12px] text-[#1a1a1a]/45">{subtitle}</p>}
-    </Step>
-  );
-}
 
 /** Checklist whose rows slide in one-by-one. */
 function CheckList({ items, base = 0.18 }: { items: string[]; base?: number }) {
@@ -111,17 +92,12 @@ function Pills({ items, base = 0.18 }: { items: string[]; base?: number }) {
 /* ------------------------------------------------------------------ */
 export function ServiceCatalogCard() {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-          Service Catalog
-        </h3>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
-          Everything bookable at launch · 4 categories
-        </p>
-      </Step>
-
-      <div className="mt-4 max-h-[300px] space-y-3 overflow-y-auto pr-1 [scrollbar-width:thin]">
+    <OtoCard
+      icon={Wrench}
+      title="Service Catalog"
+      subtitle={`Everything bookable at launch · ${SERVICE_CATALOG.length} categories`}
+    >
+      <div className="mt-4 space-y-3">
         {SERVICE_CATALOG.map((cat, i) => (
           <Step key={cat.category} delay={0.15 + i * 0.07}>
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/45">
@@ -140,7 +116,7 @@ export function ServiceCatalogCard() {
           </Step>
         ))}
       </div>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -151,16 +127,11 @@ export function PricingCard() {
   const lineBase = 0.16;
   const totalDelay = lineBase + PRICING_DEMO.lines.length * 0.08 + 0.05;
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-          Transparent pricing
-        </h3>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
-          {PRICING_DEMO.service} · every charge shown as a line
-        </p>
-      </Step>
-
+    <OtoCard
+      icon={Receipt}
+      title="Transparent pricing"
+      subtitle={`${PRICING_DEMO.service} · every charge shown as a line`}
+    >
       <div className="mt-4 space-y-1">
         {PRICING_DEMO.lines.map((line, i) => (
           <Step
@@ -204,7 +175,7 @@ export function PricingCard() {
           Example only; real prices are built for your exact car.
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -218,15 +189,7 @@ export function HealthScoreCard() {
   const offset = circ * (1 - score / 100);
 
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Vehicle Health
-          </h3>
-        </div>
-      </Step>
+    <OtoCard icon={ShieldCheck} title="Vehicle Health">
 
       <Step delay={0.15} className="mt-4 flex items-center gap-5">
         <div className="relative h-[110px] w-[110px] shrink-0">
@@ -283,7 +246,7 @@ export function HealthScoreCard() {
           <Check className="h-3 w-3" /> Completing a service restores the points it was due.
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -292,15 +255,7 @@ export function HealthScoreCard() {
 /* ------------------------------------------------------------------ */
 export function TiresCard() {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-          New tires
-        </h3>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">
-          Pick a tier — nearby shops send live quotes
-        </p>
-      </Step>
+    <OtoCard icon={CircleDot} title="New tires" subtitle="Pick a tier — nearby shops send live quotes">
 
       <div className="mt-4 space-y-2">
         {TIRE_TIERS.map((t, i) => (
@@ -344,7 +299,7 @@ export function TiresCard() {
           date — no commitment.
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -379,8 +334,8 @@ export function RatingsCard() {
     .map((w) => w[0])
     .join("");
   return (
-    <div className={CARD}>
-      <Step delay={0.05} className="flex items-center gap-3">
+    <OtoCard icon={Star} title="Ratings" subtitle="Only from drivers who completed a job">
+      <Step delay={0.12} className="mt-4 flex items-center gap-3">
         <div className="flex h-11 w-11 items-center justify-center rounded-full bg-[#1a1a1a] text-[15px] font-medium text-white">
           {initials}
         </div>
@@ -422,7 +377,7 @@ export function RatingsCard() {
           before going live.
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -432,16 +387,7 @@ export function RatingsCard() {
 export function RewardsCard() {
   const r = REWARDS_DEMO;
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Gift className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Ownership Credit
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] italic text-[#1a1a1a]/55">“{r.motto}”</p>
-      </Step>
+    <OtoCard icon={Gift} title="Ownership Credit" subtitle={`“${r.motto}”`}>
 
       <Step delay={0.16} className="mt-4 flex items-end justify-between rounded-xl bg-[#1a1a1a] px-4 py-4 text-white">
         <div>
@@ -477,7 +423,7 @@ export function RewardsCard() {
           the app.
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -486,10 +432,9 @@ export function RewardsCard() {
 /* ------------------------------------------------------------------ */
 export function OverviewCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={Sparkles} title="What Otopair is" subtitle={OVERVIEW_DEMO.tagline} />
+    <OtoCard icon={Sparkles} title="What Otopair is" subtitle={OVERVIEW_DEMO.tagline}>
       <CheckList items={OVERVIEW_DEMO.facts} base={0.16} />
-    </div>
+    </OtoCard>
   );
 }
 
@@ -498,8 +443,7 @@ export function OverviewCard() {
 /* ------------------------------------------------------------------ */
 export function CoverageCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={MapPin} title="Where it works" />
+    <OtoCard icon={MapPin} title="Where it works">
       <Step delay={0.15} className="mt-4 rounded-xl bg-[#1a1a1a] px-4 py-4 text-white">
         <p className="text-[11px] uppercase tracking-wide text-white/55">Launching</p>
         <p className="text-[22px] font-medium leading-tight">{COVERAGE_DEMO.launch}</p>
@@ -514,7 +458,7 @@ export function CoverageCard() {
       <Step delay={0.46}>
         <p className="mt-3 text-[11px] text-[#1a1a1a]/45">{COVERAGE_DEMO.note}</p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -523,11 +467,10 @@ export function CoverageCard() {
 /* ------------------------------------------------------------------ */
 export function PaymentsCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={CreditCard} title="Payments" subtitle="Pay your way — securely" />
+    <OtoCard icon={CreditCard} title="Payments" subtitle="Pay your way — securely">
       <Pills items={PAYMENTS_DEMO.methods} base={0.15} />
       <CheckList items={PAYMENTS_DEMO.points} base={0.3} />
-    </div>
+    </OtoCard>
   );
 }
 
@@ -536,13 +479,12 @@ export function PaymentsCard() {
 /* ------------------------------------------------------------------ */
 export function ServiceHistoryCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={FileText} title="Service history" subtitle={SERVICE_HISTORY_DEMO.accepts} />
+    <OtoCard icon={FileText} title="Service history" subtitle={SERVICE_HISTORY_DEMO.accepts}>
       <CheckList items={SERVICE_HISTORY_DEMO.benefits} base={0.15} />
       <Step delay={0.34} className="mt-4 flex items-center gap-2 rounded-xl bg-[#2f7bff]/10 px-4 py-2.5 text-[12.5px] font-medium text-[#1a1a1a]">
         <Gift className="h-4 w-4 text-[#2f7bff]" /> {SERVICE_HISTORY_DEMO.reward}
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -551,8 +493,7 @@ export function ServiceHistoryCard() {
 /* ------------------------------------------------------------------ */
 export function CheckinCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={CalendarClock} title="Quarterly check-in" subtitle={CHECKIN_DEMO.cadence} />
+    <OtoCard icon={CalendarClock} title="Quarterly check-in" subtitle={CHECKIN_DEMO.cadence}>
       <Step delay={0.15} className="mt-4 rounded-xl border border-dashed border-[#1a1a1a]/15 bg-[#1a1a1a]/[0.03] px-4 py-3">
         <p className="text-[13px] text-[#1a1a1a]">“It’s been a few months — quick check-in to keep your car on track.”</p>
       </Step>
@@ -565,7 +506,7 @@ export function CheckinCard() {
       <Step delay={0.48}>
         <p className="mt-3 text-[11px] text-[#1a1a1a]/45">{CHECKIN_DEMO.note}</p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -574,8 +515,7 @@ export function CheckinCard() {
 /* ------------------------------------------------------------------ */
 export function BookingsCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={ClipboardList} title="Bookings" subtitle="Everything happening now" />
+    <OtoCard icon={ClipboardList} title="Bookings" subtitle="Everything happening now">
       <div className="mt-4 space-y-2">
         {BOOKINGS_DEMO.tabs.map((tab, i) => (
           <Step key={tab.name} delay={0.15 + i * 0.1} className="rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
@@ -584,7 +524,7 @@ export function BookingsCard() {
           </Step>
         ))}
       </div>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -617,8 +557,7 @@ function NotifList({ items, muted, base }: { items: string[]; muted?: boolean; b
 export function NotificationsCard() {
   const neverBase = 0.2 + NOTIFICATIONS_DEMO.sends.length * 0.06 + 0.12;
   return (
-    <div className={CARD}>
-      <CardHead icon={Bell} title="Notifications" subtitle="Only what actually matters" />
+    <OtoCard icon={Bell} title="Notifications" subtitle="Only what actually matters">
       <Step delay={0.15}>
         <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/45">
           We send
@@ -631,7 +570,7 @@ export function NotificationsCard() {
         </p>
       </Step>
       <NotifList items={NOTIFICATIONS_DEMO.never} muted base={neverBase + 0.05} />
-    </div>
+    </OtoCard>
   );
 }
 
@@ -640,8 +579,7 @@ export function NotificationsCard() {
 /* ------------------------------------------------------------------ */
 export function TrustCard() {
   return (
-    <div className={CARD}>
-      <CardHead icon={ShieldCheck} title="What we’ll never do" subtitle="Trust is the product" />
+    <OtoCard icon={ShieldCheck} title="What we’ll never do" subtitle="Trust is the product">
       <ul className="mt-4 space-y-2">
         {TRUST_DEMO.never.map((it, i) => (
           <Step
@@ -656,7 +594,7 @@ export function TrustCard() {
           </Step>
         ))}
       </ul>
-    </div>
+    </OtoCard>
   );
 }
 

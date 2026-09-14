@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Calendar, Car, Check, MapPin, Sparkles, Star } from "lucide-react";
 import { motion } from "motion/react";
+import { OtoCard } from "./oto-card";
 import {
   SCHEDULING_PREVIEW,
   WEEK_DAYS,
@@ -14,9 +15,6 @@ import {
 import { CountUp, Step } from "./shared";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
-
-const CARD =
-  "w-full rounded-[20px] border border-white/40 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_22px_60px_rgba(0,0,0,0.10)]";
 
 const usd = (n: number) =>
   n % 1 === 0 ? `$${n}` : `$${n.toFixed(2)}`;
@@ -159,18 +157,14 @@ export function VehicleCard({
         );
 
   return (
-    // The lg+ cap mirrors the hero canvas panel's fixed height
-    // (flagship-hero.tsx, lg:h-[530px]) so the specs list fills the frame
-    // instead of stopping 70px short of it — keep the two in step.
-    <div className={`${CARD} flex max-h-[70vh] flex-col lg:max-h-[530px]`}>
-      <Step delay={0.05} className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Car className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Your Vehicle
-          </h3>
-        </div>
-        {vehicle.configLinked && (
+    // Height, scrolling and the fade at the cut come from OtoCard. This card
+    // was the only one of 24 that fit the panel properly; the shell now does
+    // that for all of them.
+    <OtoCard
+      icon={Car}
+      title="Your Vehicle"
+      aside={
+        vehicle.configLinked ? (
           <motion.span
             initial={{ opacity: 0, scale: 0.7 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -179,8 +173,10 @@ export function VehicleCard({
           >
             Specs on file
           </motion.span>
-        )}
-      </Step>
+        ) : null
+      }
+      footer={<PrimaryButton onClick={onContinue}>Find shops nearby</PrimaryButton>}
+    >
 
       <Step delay={0.14}>
         <p
@@ -196,8 +192,7 @@ export function VehicleCard({
         )}
       </Step>
 
-      {/* Scrollable spec area — capped so the card always fits the screen. */}
-      <div className="my-3 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-width:thin]">
+      <div className="my-3 space-y-4">
         {isRich ? (
           <>
             {groups.map((g, gi) => (
@@ -274,9 +269,7 @@ export function VehicleCard({
           </div>
         )}
       </div>
-
-      <PrimaryButton onClick={onContinue}>Find shops nearby</PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -285,16 +278,7 @@ export function VehicleCard({
 /* ------------------------------------------------------------------ */
 export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Instant Scheduling
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
-      </Step>
+    <OtoCard icon={Calendar} title="Instant Scheduling" subtitle="Secured with fixed pricing">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -318,7 +302,7 @@ export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
       </Step>
 
       <PrimaryButton onClick={onConfirm} delay={0.58}>Confirm Appointment</PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -340,16 +324,11 @@ export function ChooseShopCard({
   const firstName = active?.name.split(" ")[0] ?? "Shop";
 
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <MapPin className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Choose a Shop
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">3 found nearby · Best price first</p>
-      </Step>
+    <OtoCard
+      icon={MapPin}
+      title="Choose a Shop"
+      subtitle={`${shops.length} found nearby · Best price first`}
+    >
 
       <div className="mt-4 space-y-2">
         {shops.map((shop, i) => {
@@ -404,7 +383,7 @@ export function ChooseShopCard({
       <PrimaryButton onClick={() => active && onContinue(active)} delay={0.16 + shops.length * 0.1 + 0.08}>
         Continue with {firstName}
       </PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -423,16 +402,7 @@ export function DateTimeCard({
   onConfirm: () => void;
 }) {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Instant Scheduling
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
-      </Step>
+    <OtoCard icon={Calendar} title="Instant Scheduling" subtitle="Secured with fixed pricing">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -469,7 +439,7 @@ export function DateTimeCard({
       <PrimaryButton onClick={onConfirm} delay={0.42 + slots.length * 0.07 + 0.08}>
         Confirm Appointment
       </PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -518,8 +488,13 @@ export function BookingConfirmedCard({
   const [email, setEmail] = useState("");
 
   return (
-    <div className={CARD}>
-      <div className="flex flex-col items-center">
+    // The one card with a deliberately different header: a centred check mark
+    // and a larger title, because it is the terminal celebration rather than
+    // another explainer. OtoCard's `header` slot exists for exactly this, so
+    // the exception stays visible in the code instead of being drift.
+    <OtoCard
+      header={
+        <div className="flex flex-col items-center">
         <motion.div
           initial={{ scale: 0, rotate: -25 }}
           animate={{ scale: 1, rotate: 0 }}
@@ -535,12 +510,17 @@ export function BookingConfirmedCard({
             transition={{ duration: 0.9, ease: "easeOut", delay: 0.18 }}
           />
         </motion.div>
-        <Step delay={0.3}>
-          <h3 className="mt-3 text-[22px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Booking confirmed
-          </h3>
-        </Step>
-      </div>
+          <Step delay={0.3}>
+            <h3
+              className="mt-3 text-[22px] text-[#1a1a1a]"
+              style={{ fontFamily: "var(--font-Petrona)" }}
+            >
+              Booking confirmed
+            </h3>
+          </Step>
+        </div>
+      }
+    >
 
       <Step delay={0.4} className="mt-5 border-t border-[#1a1a1a]/10 pt-4">
         <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">
@@ -624,6 +604,6 @@ export function BookingConfirmedCard({
           Secure transaction via Otopair Pay
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }

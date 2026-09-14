@@ -9,6 +9,13 @@ import {
 import { api } from "@/convex/_generated/api";
 import { sanitizeInfoCard, type InfoCardPayload } from "./info-card";
 import {
+  findService,
+  findSymptom,
+  SERVICE_NAMES,
+  type ServiceExplainer,
+  type SymptomExplainer,
+} from "./oto-knowledge";
+import {
   DEFAULT_BOOKING,
   DEFAULT_SHOPS,
   DEFAULT_SLOTS,
@@ -112,6 +119,11 @@ export function useOtoAgent() {
   // Outlier fallback: a generic, agent-composed info card for knowledge-base
   // topics with no dedicated demo card (validated/clamped before it lands here).
   const [dynamicCard, setDynamicCard] = useState<InfoCardPayload | null>(null);
+  // The two explanation channels added 2026-09-07: a named catalog service,
+  // and a symptom. Separate channels rather than another demoFeature value
+  // because both carry an argument.
+  const [serviceCard, setServiceCard] = useState<ServiceExplainer | null>(null);
+  const [symptomCard, setSymptomCard] = useState<SymptomExplainer | null>(null);
   // "awake" flips the hero into the live 3-panel layout the moment the user
   // engages (focuses the input / taps a chip / mic), before any message lands —
   // so the chat + schedule panels slide in together ("Oto just woke up").
@@ -131,7 +143,7 @@ export function useOtoAgent() {
   }, [step]);
   useEffect(() => {
     driveSeqRef.current += 1;
-  }, [demoFeature, step, dynamicCard]);
+  }, [demoFeature, step, dynamicCard, serviceCard, symptomCard]);
   // The dynamic card lives in its own visual channel. Clear it the moment any
   // OTHER channel takes over (a demo card, or any funnel step change) so a
   // stale info card can never mask whatever the agent showed next.
@@ -149,6 +161,26 @@ export function useOtoAgent() {
   // re-run this — hence the explicit clears in the funnel tools below.)
   useEffect(() => {
     setDemoFeature(null);
+  }, [step]);
+  // Same exclusivity for the two explanation channels: one card at a time,
+  // whichever Oto reached for most recently.
+  useEffect(() => {
+    if (serviceCard) {
+      setSymptomCard(null);
+      setDemoFeature(null);
+      setDynamicCard(null);
+    }
+  }, [serviceCard]);
+  useEffect(() => {
+    if (symptomCard) {
+      setServiceCard(null);
+      setDemoFeature(null);
+      setDynamicCard(null);
+    }
+  }, [symptomCard]);
+  useEffect(() => {
+    setServiceCard(null);
+    setSymptomCard(null);
   }, [step]);
 
   const pushMessage = useCallback((role: ChatMessage["role"], text: string) => {
@@ -255,6 +287,22 @@ export function useOtoAgent() {
   /** Summon an explainer demo card on the component side. */
   const showDemo = useCallback((feature: DemoFeature) => {
     setDemoFeature(feature);
+  }, []);
+
+  /** Explain one catalog service (what it is, what the shop does, why, when). */
+  const showService = useCallback((name: string): string => {
+    const svc = findService(name);
+    if (!svc) return `No service card for "${name}". Options: ${SERVICE_NAMES.join(", ")}.`;
+    setServiceCard(svc);
+    return `Showing the ${svc.service} explainer on screen.`;
+  }, []);
+
+  /** Explain a symptom: possibilities, urgency, what a mechanic checks. */
+  const showSymptom = useCallback((desc: string): string => {
+    const sym = findSymptom(desc);
+    if (!sym) return `No symptom card matches "${desc}" — describe it another way, or use show_info_card.`;
+    setSymptomCard(sym);
+    return `Showing the "${sym.symptom}" card on screen. It is framed as possibilities, never a diagnosis.`;
   }, []);
 
   /** Re-display the decoded vehicle card (the user's specific car). */
@@ -465,6 +513,14 @@ export function useOtoAgent() {
     showInfoCard(params)
   );
 
+  useConversationClientTool("show_service", (params: Record<string, unknown>) =>
+    showService(String(params?.service ?? ""))
+  );
+
+  useConversationClientTool("show_symptom", (params: Record<string, unknown>) =>
+    showSymptom(String(params?.symptom ?? ""))
+  );
+
   // ---- Scripted demo fallback ---------------------------------------------
   const clearDemoTimers = useCallback(() => {
     demoTimers.current.forEach(clearTimeout);
@@ -616,7 +672,20 @@ export function useOtoAgent() {
           return;
         }
         if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
+        // Snapshot what the canvas was showing when this timer was armed. If
+        // ANYTHING has driven the UI in the eight seconds since — the agent's
+        // own tool call, a chip, the visitor tapping through the walkthrough —
+        // replaying this message would overwrite a newer, more deliberate
+        // choice. That is exactly what used to happen: pick a card, and ~8s
+        // after your last message the panel silently reverted to one derived
+        // from it, permanently. The live-turn fallback below already guards
+        // this way; this path did not. (Found by scripts/oto/ui.mjs.)
+        const armedAtSeq = driveSeqRef.current;
         connectTimerRef.current = setTimeout(() => {
+          if (driveSeqRef.current !== armedAtSeq) {
+            pendingTextRef.current = [];
+            return;
+          }
           if (!connectedRef.current && pendingTextRef.current.length) {
             const queued = pendingTextRef.current;
             pendingTextRef.current = [];
@@ -777,6 +846,8 @@ export function useOtoAgent() {
     setPresignupSaved(false);
     setDemoFeature(null);
     setDynamicCard(null);
+    setServiceCard(null);
+    setSymptomCard(null);
     setAwake(false);
   }, [clearDemoTimers, connected, conversation]);
 
@@ -794,6 +865,8 @@ export function useOtoAgent() {
     presignupSaved,
     demoFeature,
     dynamicCard,
+    serviceCard,
+    symptomCard,
     awake,
     connected,
     isSpeaking: conversation.isSpeaking,
@@ -810,6 +883,8 @@ export function useOtoAgent() {
     decodeVin,
     savePreSignup,
     showDemo,
+    showService,
+    showSymptom,
     showVehicle,
     showInfoCard,
     startBookingFlow,

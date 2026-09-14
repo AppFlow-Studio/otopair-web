@@ -15,6 +15,27 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The service and symptom enums are READ OUT OF THE SOURCE that drives the
+ * cards (components/flagship/oto-knowledge.ts) rather than duplicated here.
+ * A tool enum that drifts from its renderer means the agent names a card that
+ * cannot be drawn, which fails silently — the exact class of bug the 2026-09-07
+ * audit found everywhere else in this surface.
+ */
+function readKnowledgeNames() {
+  const src = readFileSync(join(ROOT, "components", "flagship", "oto-knowledge.ts"), "utf8");
+  const svcBlock = src.slice(src.indexOf("export const SERVICE_EXPLAINERS"), src.indexOf("export const SERVICE_NAMES"));
+  const symBlock = src.slice(src.indexOf("export const SYMPTOMS"), src.indexOf("export function findSymptom"));
+  const services = [...svcBlock.matchAll(/^ {4}service: "([^"]+)",/gm)].map((m) => m[1]);
+  const symptoms = [...symBlock.matchAll(/^ {4}id: "([^"]+)",/gm)].map((m) => m[1]);
+  if (!services.length || !symptoms.length) {
+    throw new Error("Could not read service/symptom names from oto-knowledge.ts");
+  }
+  return { services, symptoms };
+}
+
+const { services: SERVICE_NAMES, symptoms: SYMPTOM_IDS } = readKnowledgeNames();
 const BASE = "https://api.elevenlabs.io";
 
 // ---- tiny .env.local parser ------------------------------------------------
@@ -34,6 +55,11 @@ function loadEnv() {
   }
   return env;
 }
+
+// --dry-run prints what WOULD change and writes nothing. The live agent serves
+// real visitors, so pushing to it is a deliberate act, not a side effect of
+// running a script.
+const DRY = process.argv.includes("--dry-run") || process.argv.includes("--check");
 
 const env = loadEnv();
 const API_KEY = env.ELEVENLABS_API_KEY;
@@ -211,6 +237,46 @@ const TOOLS = [
   },
   {
     type: "client",
+    name: "show_service",
+    description:
+      "Explain ONE named service on screen: what it actually is, what happens at the shop, why it matters, and how you know it's due. Call this whenever the visitor asks what a service is, whether they really need it, or what they'd be paying for — the questions people arrive with. Use the exact catalog name. Never quote a price; the card deliberately doesn't, and neither should you.",
+    parameters: {
+      type: "object",
+      properties: {
+        service: {
+          type: "string",
+          enum: SERVICE_NAMES,
+          description: "The catalog service to explain, e.g. 'Brake Fluid Flush'.",
+        },
+      },
+      required: ["service"],
+    },
+    expects_response: true,
+    response_timeout_secs: 10,
+    execution_mode: "immediate",
+  },
+  {
+    type: "client",
+    name: "show_symptom",
+    description:
+      "Show what a described symptom COULD be — possibilities, how urgent it is, and what a mechanic will actually check. Call this the moment a visitor describes something their car is doing (a noise, a light, a feel). The card is explicitly framed as possibilities rather than a diagnosis and carries the safety line for load-bearing systems, so you can speak briefly and let it do the work. If nothing matches, say so plainly and use show_info_card instead.",
+    parameters: {
+      type: "object",
+      properties: {
+        symptom: {
+          type: "string",
+          enum: SYMPTOM_IDS,
+          description: "Which symptom card fits what the visitor described.",
+        },
+      },
+      required: ["symptom"],
+    },
+    expects_response: true,
+    response_timeout_secs: 10,
+    execution_mode: "immediate",
+  },
+  {
+    type: "client",
     name: "show_info_card",
     description:
       "Show a generic info card for a knowledge-base topic that has NO dedicated show_demo card. Rule: if the topic matches a show_demo feature, use show_demo; OTHERWISE compose a show_info_card from what you know. You supply the content; the screen lays it out and styles it. Pick ONE layout and fill the matching field — list (items[]: bullet points), steps (items[]: ordered steps), rows (rows[]: label/value pairs), stats (stats[]: value+label number tiles), compare (pros[] and/or cons[]: what it does vs. what it doesn't). Always give a short title; summary is one line under it; footnote is fine print. Keep every entry to a few words — they're UI labels, not sentences. Don't read the card aloud; speak your short human answer alongside it.",
@@ -278,6 +344,8 @@ Show things on screen by calling client tools — this is core to the experience
 - decode_vin(vin) — when the visitor gives a 17-character VIN; confirm the car you get back. Decode ONCE — after that you already know their car.
 - show_vehicle() — to (re)show the visitor's OWN car and its full specs. Use this whenever they ask about "my car", "my specs", "show it again", etc. Never use show_demo 'overview' for their specific car.
 - BOOKING WALKTHROUGH — when the visitor asks how booking works, to see the flow, or to go step by step, call show_booking_flow() FIRST (it opens the interactive walkthrough on the shop-picker). Then narrate as they tap through: pick a shop → pick a time → confirm. You can advance for them with show_times then confirm_booking. NEVER use show_demo("bookings") for this — that card only tracks existing appointments.
+- show_symptom(symptom) — call this AS SOON AS the visitor describes something their car is doing: a noise, a warning light, a vibration, a smell. This is the commonest reason anyone talks to you, and the card carries the possibilities, the urgency and what a mechanic checks — so keep your own reply to a sentence or two. It is framed as possibilities, never a diagnosis; do not overrule that by sounding certain.
+- show_service(service) — call whenever a named service comes up: what it is, whether they really need it, what they'd be paying for. Use the exact catalog name. The card explains what happens at the shop, which is the part nobody explains. Never attach a price to it.
 - show_info_card(...) — the FALLBACK for topics that don't have a show_demo card above. If the question fits a show_demo feature, use show_demo; otherwise build a quick show_info_card from the knowledge base: set a short title, pick a layout (list / steps / rows / stats / compare), and fill the matching field with a few short entries. Use it for the long-tail questions so the screen still backs up your answer — don't leave outlier topics with no visual.
 - save_presignup(email) — once you naturally have their email, so their car is waiting when they sign up.
 
@@ -290,7 +358,7 @@ How to behave:
 - Keep replies brief and let the visuals carry the weight.`.trim();
 
 async function main() {
-  console.log(`→ Agent: ${AGENT_ID}`);
+  console.log(`→ Agent: ${AGENT_ID}${DRY ? "   (dry run — nothing will be written)" : ""}`);
 
   // 1. Existing tools (match by name to stay idempotent).
   const existing = await api("/v1/convai/tools");
@@ -305,15 +373,23 @@ async function main() {
     if (found) {
       // Keep the existing tool's config in sync (description / enum changes).
       try {
-        await api(`/v1/convai/tools/${found}`, {
-          method: "PATCH",
-          body: JSON.stringify({ tool_config: tool }),
-        });
-        console.log(`  ↻ ${tool.name} — updated (${found})`);
+        if (DRY) {
+          console.log(`  ↻ ${tool.name} — would update (${found})`);
+        } else {
+          await api(`/v1/convai/tools/${found}`, {
+            method: "PATCH",
+            body: JSON.stringify({ tool_config: tool }),
+          });
+          console.log(`  ↻ ${tool.name} — updated (${found})`);
+        }
       } catch (e) {
         console.log(`  • ${tool.name} — exists (${found}); config update skipped: ${e.message}`);
       }
       toolIds.push(found);
+      continue;
+    }
+    if (DRY) {
+      console.log(`  + ${tool.name} — WOULD BE CREATED (new tool)`);
       continue;
     }
     const created = await api("/v1/convai/tools", {
@@ -341,6 +417,31 @@ async function main() {
   }
   base = base.trim();
   const newPrompt = `${base ? base + "\n\n" : ""}<<<OTOPAIR_GUIDANCE>>>\n${PROMPT_GUIDANCE}\n<<<END_OTOPAIR_GUIDANCE>>>`;
+
+  // Copy-lock check on the part of the prompt this script does NOT own. The
+  // Personality/Goal/Guardrails blocks were written in the ElevenLabs
+  // dashboard and live outside our markers, which is how a scrubbed repo still
+  // shipped an agent that said the platform-fee rate out loud in 7 real
+  // conversations. We cannot rewrite that text safely from here, but we can
+  // refuse to be quiet about it.
+  const feeHit = base.match(/\b\d{1,2}\s?%\s*(platform|service)?\s*fee|seven percent/i);
+  if (feeHit) {
+    console.log("\n  ⚠ THE BASE PROMPT STATES A FEE RATE — outside this script's markers:");
+    console.log(`      "${feeHit[0]}"`);
+    console.log("      That text was written in the ElevenLabs dashboard and must be edited there.");
+    console.log("      It is a locked number; the site copy was scrubbed of it in Aug 2026.\n");
+  }
+
+  if (DRY) {
+    console.log(`  · Would attach ${mergedIds.length} tool(s) and replace the guidance block.`);
+    console.log(`  · Guidance block: ${PROMPT_GUIDANCE.length} chars`);
+    const liveBlock =
+      (prevPrompt.match(/<<<OTOPAIR_GUIDANCE>>>\n([\s\S]*?)\n<<<END_OTOPAIR_GUIDANCE>>>/) || [])[1] || "";
+    const same = liveBlock.trim() === PROMPT_GUIDANCE.trim();
+    console.log(`  · Live block:     ${liveBlock.length} chars — ${same ? "identical" : "DIFFERENT, would be replaced"}`);
+    console.log("\nDry run complete. Nothing was written. Re-run without --dry-run to apply.");
+    return;
+  }
 
   await api(`/v1/convai/agents/${AGENT_ID}`, {
     method: "PATCH",

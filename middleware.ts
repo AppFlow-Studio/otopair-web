@@ -17,6 +17,7 @@ const isPublicRoute = createRouteMatcher([
   "/llms.txt",
   "/privacy",
   "/terms",
+  "/shop-portal-terms",
   "/contact",
   "/sign-in(.*)",
   "/sign-up(.*)",

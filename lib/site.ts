@@ -120,6 +120,7 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/contact", changeFrequency: "yearly", priority: 0.5 },
   { path: "/privacy", changeFrequency: "yearly", priority: 0.2 },
   { path: "/terms", changeFrequency: "yearly", priority: 0.2 },
+  { path: "/shop-portal-terms", changeFrequency: "yearly", priority: 0.2 },
 ];
 
 /** Absolute URL for a site path — the one place `SITE_URL` is joined. */

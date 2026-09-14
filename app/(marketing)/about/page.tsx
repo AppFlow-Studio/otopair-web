@@ -79,7 +79,7 @@ const RULES: { rule: string; how: string }[] = [
   },
   {
     rule: "No fee is hidden, and nothing is sold on urgency.",
-    how: "The total includes parts, labor, tax and Otopair’s service fee. No upsells, no countdowns, no scarcity, no marketing blasts, and your data is never sold or rented.",
+    how: "The total includes parts, labor, tax and Otopair’s service fee. No upsells, no countdowns, no scarcity, no marketing blasts, and your name, contact details, messages and payment details are never sold or shared.",
   },
 ];
 

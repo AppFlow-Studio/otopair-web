@@ -223,7 +223,11 @@ export default function TrustAndSafetyPage() {
           <li>Hides fees. The total you approve is the total you pay.</li>
           <li>Uses upsells, scarcity or countdowns.</li>
           <li>Uses panic or guilt language.</li>
-          <li>Sells or rents your data. See the <Link href="/privacy">privacy policy</Link>.</li>
+          <li>
+            Sells or shares your name, contact details, messages, location or payment details. The{" "}
+            <Link href="/privacy">privacy policy</Link> explains the vehicle-history data Otopair does
+            license, and how to opt your car out.
+          </li>
           <li>Pushes services your car does not need.</li>
           <li>Sends marketing notification blasts.</li>
         </ul>

@@ -1,100 +1,130 @@
 {
   "docs": {
     "01_What_Otopair_Is.md": {
-      "id": "ddI25TENal72ewUfLosr",
+      "id": "R3lKRHFQCKgHkQPdyQKU",
       "name": "What Otopair Is",
-      "sha256": "baecc8dd95f8aba28fbc543839dc7a8a11436794aa8b0b012d6d1a240963573e",
-      "uploaded_at": "2026-09-14T20:44:48.823Z"
+      "sha256": "4bdbdc5f6a8adb8ead93833e2f4c0eea10393c42062770019bd71eba4f5baeac",
+      "uploaded_at": "2026-09-14T22:52:37.148Z"
     },
     "02_Where_It_Works.md": {
-      "id": "sLc5K5UL7eojJr1tCMes",
+      "id": "9QRmWp7pT9SvsZ38KgpZ",
       "name": "Where Otopair Works",
-      "sha256": "8540ef5613f0fd8c8a93b42c07726c78b9da1b9a04f38a490fc1f033dd397073",
-      "uploaded_at": "2026-09-14T20:44:49.057Z"
+      "sha256": "9d9ea4a5bac154a7a02b0413b33de8d3b7a505bbd68e8efa277d7301a1e23d41",
+      "uploaded_at": "2026-09-14T22:52:37.358Z"
     },
     "03_How_Booking_Works.md": {
-      "id": "dgFjODIsQwqSTCemokvP",
+      "id": "rvqIvS4WApjUOYZ4ngNZ",
       "name": "How Booking Works",
-      "sha256": "839c13ee8c075c365949eecb77dfc2e88b8bf28dce2314f99c3d3bbe4dfbbf6a",
-      "uploaded_at": "2026-09-14T20:44:49.266Z"
+      "sha256": "7f8ab919495706f3ac592acecfaece6ed0d0038e225db4b2625c131199630615",
+      "uploaded_at": "2026-09-14T22:52:37.571Z"
     },
     "04_Service_Catalog.md": {
-      "id": "xdaeUhGVQcI7zReCQdjd",
+      "id": "JhNLpJuteKhLGxT3k4KH",
       "name": "Service Catalog",
-      "sha256": "4060c5c957eb8df6f2831b9d70e2afecd98a2e8701a8bf08dd1f870b069f7b25",
-      "uploaded_at": "2026-09-14T20:44:49.467Z"
+      "sha256": "0c88c387521654ad39d910677ea8f3d6453182ef13ffca0deb0c94b51e572ed7",
+      "uploaded_at": "2026-09-14T22:52:37.785Z"
     },
     "05_How_Tires_Work.md": {
-      "id": "B6OI6zp9xInTQQgQr18v",
+      "id": "tyj38fDGUTN0H7z6keXZ",
       "name": "How Tire Quotes Work",
-      "sha256": "b8cc6233b4076cb79ae8513989d367fa1e9c9e28ce2d7556f9b8789c80315b89",
-      "uploaded_at": "2026-09-14T20:44:49.672Z"
+      "sha256": "d289e91569b3a8101ff4450956341a743e18c119bd9cecf59b48f9ae2d756eec",
+      "uploaded_at": "2026-09-14T22:52:38.010Z"
     },
     "06_Pricing.md": {
-      "id": "0I6sFR4h6DgwnEZnGmYj",
+      "id": "qVeFoYDl0IG8g9C3G6Gk",
       "name": "Pricing",
-      "sha256": "7b6fda3126b2e3255eb3e33067e8bfbd24b36d99588a016fbf5c0dc2f82c70be",
-      "uploaded_at": "2026-09-14T20:44:49.879Z"
+      "sha256": "65f41f02e1af01de9d6940dd41891f3985da2a827627be8813cd12c5af2eac62",
+      "uploaded_at": "2026-09-14T22:52:38.209Z"
     },
     "07_Payments.md": {
-      "id": "rjUL5OzpWCJApsCspD86",
+      "id": "A1Hy2VDZs3fW2kzKVC3z",
       "name": "Payments",
-      "sha256": "45666584d20676913e10dc027ce43dffef976d19069805d67b55c8aff899773e",
-      "uploaded_at": "2026-09-14T20:44:50.086Z"
+      "sha256": "e7a840bd12d589a4cb2d1b308449498f0523dd2a0938ab7bc442908a37cd88b8",
+      "uploaded_at": "2026-09-14T22:52:38.601Z"
     },
     "08_Vehicle_Onboarding.md": {
-      "id": "8EAO72bycfMBXWIylWHR",
+      "id": "SuZhujE08D1gRNITgeeq",
       "name": "Vehicle Onboarding",
-      "sha256": "ec6614021471d191b31b6eaba08dabad42b595400d4172ad5528e8a4e7c9cf60",
-      "uploaded_at": "2026-09-14T20:44:50.306Z"
+      "sha256": "4c3f588eee6d7ad7f53ae54eb9848975abba92d7760e2832535fddf01bce1bdc",
+      "uploaded_at": "2026-09-14T22:52:38.849Z"
     },
     "09_Service_History_Upload.md": {
-      "id": "6fZrfGWxupD5v6XK2gX6",
+      "id": "5ItNke41MITLDnkaEM7J",
       "name": "Service History Upload",
-      "sha256": "90fa2b039eaae7c7a6bb02f7ed39f32cd02ef93c9be6fca0fa7f03f85fcaf73c",
-      "uploaded_at": "2026-09-14T20:44:50.592Z"
+      "sha256": "3c61dd3f55243d353d29c5427226a7c9f1a99611785d44dfba29e3384bce1637",
+      "uploaded_at": "2026-09-14T22:52:39.085Z"
     },
     "10_Vehicle_Health_Score.md": {
-      "id": "53ZbeZFTSCSmTrcsE2RD",
+      "id": "sIbpk5CenvtNiuC15L1R",
       "name": "Vehicle Health Score",
-      "sha256": "fa64794f01402f997992574af4e7c01c284e87059ce2c1065fbba06632d247fc",
-      "uploaded_at": "2026-09-14T20:44:50.798Z"
+      "sha256": "b9bbcaa143cfd26a8e626223fcb2a2b573292b51f8e7ad5c82e082684fbc11b0",
+      "uploaded_at": "2026-09-14T22:52:39.305Z"
     },
     "11_Quarterly_Check-In.md": {
-      "id": "rHPL7JWNFeUht9y6YFM4",
+      "id": "fSqZXlox7vcfryuKrQHM",
       "name": "Quarterly Check-In",
-      "sha256": "d7370782c69fe0c7aec724234ccd94bea04d70b4b776b48656df1189e1d73475",
-      "uploaded_at": "2026-09-14T20:44:51.012Z"
+      "sha256": "6862e94b6e6390bb85cac586aaa43aa1da2b6de4a257d7e3710fb317cf298a46",
+      "uploaded_at": "2026-09-14T22:52:39.504Z"
     },
     "12_Ratings.md": {
-      "id": "VSodEprENL3bh9hmGK2o",
-      "name": "Ratings",
-      "sha256": "f3f1a802b613c3b5c4a56dda225c7e3bd62fe490732ee82186d9a1da37a2d7ce",
-      "uploaded_at": "2026-09-14T20:44:51.222Z"
+      "id": "UXSrbV475sDp3k42u4o5",
+      "name": "Ratings and Reviews",
+      "sha256": "0ead7263b8538af6987ca63d97e5727c4cd11958702ab06fefc7f4a37388e8fd",
+      "uploaded_at": "2026-09-14T22:52:39.738Z"
     },
     "13_Rewards_Ownership_Credit.md": {
-      "id": "qkoN5jsYEiQor1NJ88N3",
+      "id": "UOGk0f2uEdCw1eCZyUhS",
       "name": "Rewards — Ownership Credit",
-      "sha256": "76e333693f93583156d4659300ab82d4deb089ef141aa09ca0894de90d9b84da",
-      "uploaded_at": "2026-09-14T20:44:51.441Z"
+      "sha256": "0d722f76b126dfda87d20c2b825955e17be185c8f297fe6c008c816297eb46f7",
+      "uploaded_at": "2026-09-14T22:52:39.941Z"
     },
     "14_Bookings_Tab.md": {
-      "id": "iF6Zf0svM5blA00WpIBi",
+      "id": "cunS52ixpcZNNEMOZst1",
       "name": "Bookings Tab in the App",
-      "sha256": "354a4dc4b1fa5ea935bdedc7a405cb287dbe789bc7a313a448c3065dc8b780f4",
-      "uploaded_at": "2026-09-14T20:44:51.658Z"
+      "sha256": "60afb23d78e58cdba8f527e22e7ccf19f40ee574427197f362b1d90fcded3e52",
+      "uploaded_at": "2026-09-14T22:52:40.138Z"
     },
     "15_Notifications.md": {
-      "id": "1CX1aL9Ev5qbOdXRuUwY",
+      "id": "82zw7npfpSqVPPPjjG5n",
       "name": "Notifications",
-      "sha256": "d9fa722ed42758671f45dfe95d3eadbfcc71615c67210d6ca0030f8805a1cc16",
-      "uploaded_at": "2026-09-14T20:44:51.946Z"
+      "sha256": "6d0635a7f9bbf2dc39d2a5ab565592e8bd9d018fde56a740a44fd6c705e8867e",
+      "uploaded_at": "2026-09-14T22:52:40.355Z"
     },
     "16_What_Otopair_Will_Not_Do.md": {
-      "id": "F1Nq4cB9XlnXejIcL1Mk",
+      "id": "GCxxs0YE7VCvc3h3XCMM",
       "name": "What Otopair Will Not Do",
-      "sha256": "17a56a7fe5b4ca41065193909ebb72f78d0f17834613f405b1624a2e3bdd1147",
-      "uploaded_at": "2026-09-14T20:44:52.157Z"
+      "sha256": "f74df42900ea1be2fec9c5b695a1d699753bc4975bca5e2edc027c9787f5cf07",
+      "uploaded_at": "2026-09-14T22:52:40.552Z"
+    },
+    "17_Shops_on_Otopair.md": {
+      "id": "CET2Awy015KtzLrqBTqK",
+      "name": "Shops on Otopair",
+      "sha256": "7dd0f0b19bdc34e5aaac2926e0cdab0cde144d8855764fcc6ada71334248e9bd",
+      "uploaded_at": "2026-09-14T22:52:40.771Z"
+    },
+    "18_Cancellations_Disputes_and_Warranty.md": {
+      "id": "zWLIN1xZQNTwszR2Mowl",
+      "name": "Cancellations, Disputes and Warranty",
+      "sha256": "7481abb0017908a889703516ea9ba9b51b43274e59854ece16b4c33d9b6054fb",
+      "uploaded_at": "2026-09-14T22:52:40.961Z"
+    },
+    "19_Contact_Support_and_Oto.md": {
+      "id": "ueI26JzhvUUaa25DcgmK",
+      "name": "Contact, Support and Oto",
+      "sha256": "20c3f5107883909012b63cdd655acdae0294b96749996940c76fcece8dab6529",
+      "uploaded_at": "2026-09-14T22:52:41.172Z"
+    },
+    "20_Warning_Lights_and_Safety.md": {
+      "id": "Y8gYDoMMQzvtYs5zZjRH",
+      "name": "Warning Lights and Safety",
+      "sha256": "8a371cf380ba6aef7a72bcf28077381b976dd2654fb1176155813c0c2800786c",
+      "uploaded_at": "2026-09-14T22:52:41.369Z"
+    },
+    "21_Privacy_Security_and_the_Terms.md": {
+      "id": "bLkGsxfnehSnSrbVkwZ8",
+      "name": "Privacy, Security and the Terms",
+      "sha256": "cd6cdd712efbb890408ef80a8b2816f4ed247ceb8095b1b43266dc94734e9c96",
+      "uploaded_at": "2026-09-14T22:52:41.589Z"
     }
   }
 }

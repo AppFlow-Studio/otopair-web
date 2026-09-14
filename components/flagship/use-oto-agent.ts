@@ -220,8 +220,11 @@ export function useOtoAgent() {
       // message that extends the previous Oto bubble replaces it, so visitors
       // don't read the same paragraph twice.
       const last = prev[prev.length - 1];
-      if (role === "oto" && last?.role === "oto" && text.length > last.text.length && text.startsWith(last.text)) {
-        return [...prev.slice(0, -1), { ...last, text }];
+      if (role === "oto" && last?.role === "oto") {
+        // An exact or shorter repeat of the last bubble adds nothing (3 of 47
+        // live answers arrived twice, word for word, on 2026-09-14).
+        if (last.text.startsWith(text)) return prev;
+        if (text.startsWith(last.text)) return [...prev.slice(0, -1), { ...last, text }];
       }
       return [...prev, { id: mkId(), role, text }];
     });
@@ -387,26 +390,30 @@ export function useOtoAgent() {
 
   /**
    * Live-mode safety net. The agent SHOULD call a client tool for every topic,
-   * but model tool-calling isn't 100% reliable — so we also read each turn and,
-   * if the agent didn't drive the UI shortly after, surface the matching card
-   * ourselves. A VIN in a user turn is decoded immediately (never depends on a
-   * tool call). The drive-seq guard guarantees we never override the agent when
-   * it DID act, and the step guard keeps us out of the booking funnel.
+   * but model tool-calling isn't 100% reliable — so we also read each VISITOR
+   * turn and, if the agent didn't drive the UI shortly after, surface the
+   * matching card ourselves. A VIN is decoded immediately (never depends on a
+   * tool call). The drive-seq guard keeps us from overriding the agent when it
+   * DID act, and the step guard keeps us out of the booking funnel.
+   *
+   * Oto's own replies are never read. They name several topics at once
+   * ("Tires & Brakes", "a person reviews the job record"), so matching them
+   * swapped cards the agent had chosen correctly: show_demo(service_catalog),
+   * then New tires 1.5s later (live QA, 2026-09-14). The agent picks its card
+   * through its tool calls.
    */
-  const handleLiveTurn = useCallback(
-    (text: string, isUser: boolean) => {
-      if (isUser) {
-        const m = text.match(VIN_RE);
-        if (m && lastVinRef.current !== m[0].toUpperCase()) {
-          void decodeVin(m[0]);
-          return;
-        }
+  const handleVisitorTurn = useCallback(
+    (text: string) => {
+      const m = text.match(VIN_RE);
+      if (m && lastVinRef.current !== m[0].toUpperCase()) {
+        void decodeVin(m[0]);
+        return;
       }
       // Decide what the screen should show if the agent doesn't drive it.
       let action: (() => void) | null = null;
-      if (isUser && lastVinRef.current && MYCAR_RE.test(text)) {
+      if (lastVinRef.current && MYCAR_RE.test(text)) {
         action = () => showVehicle();
-      } else if (isUser && BOOKING_RE.test(text)) {
+      } else if (BOOKING_RE.test(text)) {
         action = () => {
           setDemoFeature(null);
           stepRef.current = "shops";
@@ -427,7 +434,7 @@ export function useOtoAgent() {
           if (s !== "intro" && s !== "vehicle") return; // don't hijack an active booking flow
           apply();
         },
-        isUser ? 1000 : 500
+        1000
       );
     },
     [decodeVin, showVehicle]
@@ -444,8 +451,9 @@ export function useOtoAgent() {
         .trim();
       if (!clean) return;
       pushMessage(role, clean);
-      // Safety net runs only for live sessions (demo mode routes via runDemo).
-      if (connectedRef.current) handleLiveTurn(clean, source === "user");
+      // Safety net runs only for live sessions (demo mode routes via runDemo),
+      // and only on the visitor's words.
+      if (connectedRef.current && source === "user") handleVisitorTurn(clean);
     },
     onError: (message) => {
       console.warn("[oto] conversation error:", message);
@@ -733,7 +741,7 @@ export function useOtoAgent() {
       pushMessage("user", text);
       // With an agent configured, run the live safety net (instant VIN decode +
       // card fallback) so the visual never depends solely on the agent's tools.
-      if (agentConfigured) handleLiveTurn(text, true);
+      if (agentConfigured) handleVisitorTurn(text);
 
       // Live session already up (voice or text) — send straight to the agent.
       if (connectedRef.current) {
@@ -781,7 +789,7 @@ export function useOtoAgent() {
       // No agent — local demo.
       runDemo(text);
     },
-    [agentConfigured, connect, conversation, handleLiveTurn, pushMessage, runDemo]
+    [agentConfigured, connect, conversation, handleVisitorTurn, pushMessage, runDemo]
   );
 
   /** Talk to Oto — opens a live voice (WebRTC) session, else demo. */

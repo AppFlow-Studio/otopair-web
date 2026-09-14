@@ -1,53 +1,42 @@
-# Ratings
+# Ratings and Reviews
 
 ## Overview
 
-Otopair uses a two-way rating system. Drivers rate mechanics; mechanics rate drivers. Both sides build a track record, and the system creates real accountability on both sides of every job.
+Reviews on Otopair go one way. A driver can review the shop, and optionally the mechanic, once the booking is marked complete — at most once per booking. Shops do not review drivers, and a shop can't edit or remove a review of itself. So every review on a shop page comes from someone whose booking with that shop was completed through Otopair.
 
-## What drivers rate mechanics on
+## When a review happens
 
-- **Professionalism** — how the mechanic communicated, presented the work, and handled the customer
-- **Punctuality** — whether the appointment ran on time
-- **Quality of work** — the actual repair or service outcome
-
-## When the rating happens
-
-- A rating prompt appears at the end of the job, in-app
-- Quick to complete — a few taps, optional comment
+- A review prompt appears in the app after the job is marked complete
+- Quick to leave — a star rating and, if the driver wants, a few words of their own
+- Leaving a review earns the same small credit whatever the rating, so the credit rewards writing a review, not writing a kind one
 
 ## Visibility
 
-- All mechanic ratings are visible on the mechanic's profile inside the app
-- Drivers can browse a mechanic's history and reviews **before** booking
-- Mechanic ratings build over time as more jobs complete
+- A shop's page shows its star rating, its review count and the reviews themselves
+- A new shop starts with no reviews
+- Otopair's team can hide a review that breaks the rules — for example, one that contains someone's personal details. It doesn't delete reviews
 
-## Mechanic vetting
+## Reviews and verification
 
-Beyond ratings, every shop on Otopair is vetted **in person** before going live:
-- Otopair confirms the business is properly licensed and insured
-- The team meets the mechanics who will be doing the work
-- An in-person walkthrough of the platform happens before any customer bookings
-- No shop appears in the app without that process
-
-This is intentional. Otopair does not list shops the team has not personally onboarded.
+Reviews are separate from verification. Every shop is reviewed and approved by Otopair's team before drivers can book it — what that does and doesn't include is in "Shops on Otopair".
 
 ## How to answer common questions
 
-**"Can I see reviews of mechanics?"**
-"Yes — every mechanic has ratings on their profile from real Otopair customers, broken down by professionalism, punctuality, and quality."
+**"Can I see reviews of a shop?"**
+"Yes — each shop's page shows its star rating and reviews, and every review comes from a driver whose booking there was completed through Otopair."
 
-**"How do you vet your mechanics?"**
-"Every shop is vetted in person before going live. We confirm they're licensed and insured, we meet the mechanics doing the work, and we walk through the platform with them. No shop goes on Otopair without that."
+**"Do mechanics or shops rate me?"**
+"No. Reviews go one way — from you to the shop, and optionally the mechanic, after a completed booking. Shops can't review you, and they can't edit or remove your review."
 
-**"Can I pick which mechanic works on my car?"**
-"Yes — that's the whole idea. You can book a specific mechanic by name, the way you'd book a specific barber. Or if you prefer, book a bay at the shop and the team assigns the next available mechanic. Whichever feels right."
+**"Can a shop delete a bad review?"**
+"No. A shop can't edit or remove a review of itself. Otopair's team can hide a review that breaks the rules, like one with someone's personal details, but it doesn't delete reviews."
 
-**"Do mechanics rate me?"**
-"Yes — it's a two-way system. Mechanics rate drivers on cooperation and preparedness. It helps keep the platform respectful on both sides."
+**"Do I get more credit for a good review?"**
+"No — every review earns the same small credit, whatever the rating."
 
 ## Important boundaries
 
-- Do **not** disclose how driver-side ratings are used internally
-- Do **not** reveal specific mechanic ratings by name without the customer asking
-- Do **not** describe how the rating system feeds into ranking or visibility algorithms
-- The right framing is "two-way accountability builds trust on both sides"
+- Do **not** say shops or mechanics rate drivers
+- Do **not** quote any real shop's rating, review count or reviews — the ratings card Oto shows is a sample
+- Do **not** describe how ratings feed into ranking or visibility algorithms
+- The right framing is "every review comes from a completed booking"

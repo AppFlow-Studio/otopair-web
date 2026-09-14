@@ -7,6 +7,7 @@ import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive } from "./download-app";
 import { OtoCard } from "./oto-card";
 import { useWaitlist } from "./waitlist-modal";
 import {
+  SAMPLE_JOB,
   SCHEDULING_PREVIEW,
   WEEK_DAYS,
   type Booking,
@@ -276,11 +277,11 @@ export function VehicleCard({
 }
 
 /* ------------------------------------------------------------------ */
-/* 1. Instant Scheduling                                               */
+/* 1. Scheduling (sample)                                              */
 /* ------------------------------------------------------------------ */
 export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
   return (
-    <OtoCard icon={Calendar} title="Instant Scheduling" subtitle="Secured with fixed pricing">
+    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample · how scheduling looks in the app">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -329,7 +330,7 @@ export function ChooseShopCard({
     <OtoCard
       icon={MapPin}
       title="Choose a Shop"
-      subtitle={`${shops.length} found nearby · Best price first`}
+      subtitle="Sample shops · how picking a shop looks in the app"
     >
 
       <div className="mt-4 space-y-2">
@@ -382,6 +383,13 @@ export function ChooseShopCard({
         })}
       </div>
 
+      {/* The sample prices only mean anything next to the job they price. */}
+      <Step delay={0.16 + shops.length * 0.1}>
+        <p className="mt-3 text-[11px] leading-relaxed text-[#1a1a1a]/45">
+          Sample prices for a {SAMPLE_JOB}. In the app, every verified shop shows its own total for your exact car.
+        </p>
+      </Step>
+
       <PrimaryButton onClick={() => active && onContinue(active)} delay={0.16 + shops.length * 0.1 + 0.08}>
         Continue with {firstName}
       </PrimaryButton>
@@ -390,7 +398,7 @@ export function ChooseShopCard({
 }
 
 /* ------------------------------------------------------------------ */
-/* 3. Date & Time                                                      */
+/* 3. Date & Time (sample)                                             */
 /* ------------------------------------------------------------------ */
 export function DateTimeCard({
   slots,
@@ -404,7 +412,7 @@ export function DateTimeCard({
   onConfirm: () => void;
 }) {
   return (
-    <OtoCard icon={Calendar} title="Instant Scheduling" subtitle="Secured with fixed pricing">
+    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample times · how the app shows open slots">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -513,7 +521,7 @@ export function BookingConfirmedCard({
   const [email, setEmail] = useState("");
 
   return (
-    // The one card with a deliberately different header: a centred check mark
+    // The one card with a deliberately different header: a centered check mark
     // and a larger title, because it is the terminal celebration rather than
     // another explainer. OtoCard's `header` slot exists for exactly this, so
     // the exception stays visible in the code instead of being drift.
@@ -537,15 +545,16 @@ export function BookingConfirmedCard({
         </motion.div>
           <Step delay={0.3}>
             <h3
-              className="mt-3 text-[22px] text-[#1a1a1a]"
+              className="mt-3 text-center text-[22px] text-[#1a1a1a]"
               style={{ fontFamily: "var(--font-Petrona)" }}
             >
-              Booking confirmed
+              Sample booking
             </h3>
             {/* Oto is the site's marketing agent: this receipt demonstrates the
-                app's booking flow and must never read as a real appointment. */}
+                app's booking flow and must never read as a real appointment —
+                so the title itself says "sample", not "confirmed". */}
             <p className="mt-1 text-center text-[11px] text-[#1a1a1a]/45">
-              Sample booking · how it looks in the Otopair app
+              How a confirmed booking looks in the Otopair app · nothing was booked
             </p>
           </Step>
         </div>
@@ -631,7 +640,7 @@ export function BookingConfirmedCard({
 
       <Step delay={0.9}>
         <p className="mt-3 text-center text-[10px] text-[#1a1a1a]/40">
-          Secure transaction via Otopair Pay
+          Sample receipt · no payment is taken on this website
         </p>
       </Step>
     </OtoCard>

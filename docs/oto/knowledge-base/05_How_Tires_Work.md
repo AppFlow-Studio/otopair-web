@@ -2,52 +2,36 @@
 
 ## Why tires are different
 
-Tire wholesale costs swing significantly between brands, sizes, and shops. Instead of pre-pricing tires, Otopair lets shops respond with live quotes after the driver picks a tier. The app **presents** quotes — it does not generate them. Shops quote; the app displays.
+Tires are the one service where the part is the whole conversation: brand, model, size and specification vary more than any other line on a job. So instead of one built total, Tire Replacement collects quotes from shops for the exact tire each would fit. Shops set the quotes; the app presents them.
+
+Only Tire Replacement works this way. Tire Rotation, Tire Balance and Wheel Alignment are labor-only services with a normal total, like the rest of the catalog.
 
 ## The flow
 
-1. On your car's image in the app, **tap the tire** to start
-2. Choose a tier: **Premium**, **Plus**, or **Standard** — you pick a tier, not a specific brand
-3. The request goes out to **every shop in your radius simultaneously**
-4. Quotes come back **first-come, first-served**
-5. The quote window stays open for **up to 10 minutes** or **until 5 shops have responded**, whichever comes first
-6. Each quote is shown alongside a **baseline market price** so you can judge it fairly
-7. Pick by **price and available date**
-
-## Tier guidance for the voice agent
-
-- **Premium** — Top-quality tires built to last and perform across conditions
-- **Plus** — Strong mid-range balance of quality and value
-- **Standard** — Solid everyday tires at the most cost-friendly end
-
-Do not name specific brands inside a tier. Brand-to-tier mapping is internal and may shift.
-
-## What the user sees while waiting
-
-The app shows a calm loading state while quotes return — no countdown timer, no pressure language. Quotes arrive as push notifications (or in-app updates) as shops respond.
-
-## What if no shop responds
-
-If fewer than the expected number of quotes return in 10 minutes, the app guides the user through options like widening the search radius. The driver is never stuck; there's always a next step.
+1. **Post the request** for your car in the app — it already knows your tire size from the car's profile
+2. **Shops respond.** Each quote lists the tire brand and model, the price per tire, how many, labor, the total, and a date and time the shop can offer
+3. **Accept one.** The booking goes to that shop at that slot, and the other responses are set aside
 
 ## You're not locked in
 
-The driver is not committed until they accept a quote. Comparing and walking away is fine — there's no fee for requesting quotes.
+Until you accept, the request is only at the quote stage and you can cancel it for free. Once you accept, it's a normal booking: the total you accepted is the figure you approved, and the usual $20 hold and approval rules apply. After the job, the shop can record the tires it fitted on your car's record.
 
 ## How to answer common questions
 
 **"How do I get new tires?"**
-"Tap the tire on your car image in the app, pick Premium, Plus, or Standard, and shops in your area send quotes back within ten minutes. You pick the one you like."
+"Post a tire request in the app. Shops send quotes with the exact tire, the price per tire, labor, the total and a time they can do it — you compare and accept the one you want."
 
 **"Which brand will I get?"**
-"You pick a tier — Premium, Plus, or Standard — and the shops in your area come back with what they have in that tier. Brand variety depends on what each shop stocks. You'll see exactly what's on offer in each quote before you pick."
+"The one in the quote you accept. Every quote names the tire brand and model, so you know exactly what's going on your car before you say yes."
 
-**"What if I want a specific brand?"**
-"At launch, tire selection is by tier rather than specific brand. If brand matters to you for a particular tire, message the shop after booking to confirm."
+**"Do I have to pick one?"**
+"No. Until you accept a quote, you can cancel the request for free."
+
+**"How much are tires?"**
+"That's up to the shops — each quote is for the exact tire on your car, and Otopair doesn't publish tire prices. You'll see every quote's full total in the app before you accept."
 
 ## Important boundaries
 
-- Do **not** quote specific dollar amounts for tires
-- Do **not** name specific tire brands as being in a particular tier
-- Do **not** promise a specific number of quotes — sometimes shops are busy and fewer come back
-- Do **not** describe the internal tier-to-brand mapping or wholesale pricing logic
+- Do **not** quote or estimate dollar amounts for tires — quotes come from the shops, for the car
+- Do **not** recommend tire brands
+- Do **not** promise how many quotes come back or how quickly

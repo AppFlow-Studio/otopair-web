@@ -2,7 +2,7 @@
 
 ## Overview
 
-Otopair's rewards program is called **Ownership Credit**. It's a dollar-based credit applied directly to services booked through Otopair. It is not points. It is not a separate currency to convert.
+Otopair's rewards program is called **Ownership Credit**. It's real dollar credit, not points. Credit applies to the driver's next booking automatically, or the balance can be converted to a gift card. The exact amounts, tiers and terms — including how credit is earned, applied and when it expires — are shown on the rewards screen in the app.
 
 ## Motto
 
@@ -12,45 +12,35 @@ The principle is simple: rewards aren't about getting people to spend more. They
 
 ## How Ownership Credit is earned
 
-**Primary path** — completing maintenance, diagnostics, and repairs through Otopair.
-
-**Bonus actions:**
-- **$5** for a verified review after a service
-- **$10** for uploading service records (per upload, with reasonable caps)
-- **$15** for each referral after the referred user's first booking
-
-## At launch
-
-At launch, **every user is in the Driver tier**, earning approximately **1.0%** dollar credit back on bookings. Driver tier sets the baseline of transparent pricing and fair treatment.
-
-## Tiers coming after launch
-
-Two additional tiers — **Preferred** and **Elite** — are coming after launch. These tiers add additional protections, soft booking priority, and concierge support. Specific eligibility, thresholds, and benefits will be announced closer to availability.
-
-## Expiration
-
-Credits expire after **6 months** of inactivity. The app keeps the driver clearly informed before any credit is about to expire.
+- **Completing a booking** through Otopair — maintenance, diagnostics and repairs
+- **Leaving a review** after a completed booking — the same small credit whatever the rating
+- **Uploading a service record**
+- **Referring a friend** who completes their first booking
 
 ## What rewards never affect
 
-- They do **not** affect Vehicle Health Score accuracy or calculation
+- They do **not** affect the Vehicle Health Score — there's no way to buy a higher score
 - They do **not** affect pricing fairness — every driver gets the same transparent pricing
-- They do **not** affect trust signals or mechanic visibility
+- They do **not** affect trust signals or which shops a driver sees
 
 ## How to answer common questions
 
 **"How do rewards work?"**
-"You earn real dollar credit on every booking — 1.0% to start — plus bonuses for verified reviews, uploading service records, and referrals. Credits go straight toward your next service. No points, no conversion, no hoops."
+"You earn real dollar credit on every completed booking, plus extra for leaving a review, uploading a service record, or referring a friend who completes their first booking. It applies to your next booking automatically, or you can turn your balance into a gift card. The exact amounts and terms are shown in the app."
 
-**"What's the difference between tiers?"**
-"At launch, everyone's a Driver, earning 1.0% credit back. Higher tiers — Preferred and Elite — are coming soon with extra protections and priority. We'll share details when they launch."
+**"How much credit do I get?"**
+"The rewards screen in the app shows the exact amounts — I don't have figures to quote here."
 
 **"Do credits expire?"**
-"After 6 months, yes. We'll let you know in the app before any credit is about to expire so you have time to use it."
+"The rewards screen in the app spells out how credit is earned, applied and when it expires."
+
+**"Are there tiers?"**
+"The app shows the tiers and their terms. Every driver gets the same transparent pricing either way."
 
 ## Important boundaries
 
-- Do **not** quote specific thresholds for Preferred or Elite tiers — these are not yet locked publicly
+- Do **not** quote reward amounts, percentages, expiry periods, tier names or thresholds — they're shown in the app
+- Do **not** say a good rating earns more — every review earns the same credit
 - Do **not** describe per-vehicle tier tracking mechanics
 - Do **not** explain the internal economics of how credit issuance is funded
 - Do **not** make rewards sound like a primary reason to use Otopair — they are a thank-you, not a hook

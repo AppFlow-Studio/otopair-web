@@ -2,7 +2,7 @@
 
 ## Overview
 
-Every 90 days, Otopair shows a soft banner on the Home screen asking the driver "how's your car?" It's a short data refresh that keeps maintenance recommendations accurate as the car ages and miles accumulate.
+Every 90 days, the Otopair app asks the driver a few quick questions about the car. It's a short data refresh that keeps maintenance recommendations and the Vehicle Health Score accurate as the car ages and miles accumulate — the app has no way to read the odometer, so it asks.
 
 ## Why quarterly
 
@@ -23,20 +23,14 @@ Example banner copy: *"It's been a few months — quick check-in to keep your [c
 
 ## What it asks
 
-The check-in adapts to the vehicle's mode (Lease, Owned New, Owned Active, Owned Endurance, Owned Weekend). Most modes see between **3 and 7 core questions** plus a few optionals — typically completed in **under 60 seconds**.
+Three questions: the current mileage, anything done elsewhere since the last check-in, and whether the car is telling you anything — a warning light, a noise, or something that feels off. It takes about 30 seconds, and it's optional.
 
-Common questions include:
-- Current mileage
-- Any services done elsewhere since the last check-in
-- Any warning lights on the dashboard
-- Any unusual symptoms (noises, vibrations, pulling)
-- For leases: mileage pace vs. allowance
+Answers are self-reported: the mileage refreshes when each item comes due, and warning lights the driver reports are logged against the car. A record from a shop is what makes an item verified.
 
-## What happens if it's ignored
+## What happens if it's skipped
 
-- **14 days ignored:** banner language softly shifts to signal staleness — still no push, still dismissible
-- **30+ days ignored:** the Vehicle Health score shows an **"(estimated)"** qualifier next to the number. The score itself doesn't change — just the confidence label
-- **Never:** the check-in does NOT gate features, lower the health score, or penalize the driver in any way
+- Skip it and the Vehicle Health Score is shown as an estimate until the driver answers
+- **Never:** the check-in does NOT gate features, charge anything, or penalize the driver in any way
 
 ## What completion feels like
 
@@ -47,13 +41,13 @@ Common questions include:
 ## How to answer common questions
 
 **"Do I have to do the quarterly check-in?"**
-"No, but it is recommended. It helps us keep recommendations accurate for your car. Most people get through it in under a minute."
+"No — it's optional. It keeps your recommendations and your health score current, and it takes about 30 seconds."
 
 **"What happens if I skip it?"**
-"Nothing bad. After about a month, your Vehicle Health score gets a small '(estimated)' note next to it — that's just to remind you the data might be a little stale. The score doesn't drop, and nothing locks up."
+"Nothing bad. Your Vehicle Health Score just shows as an estimate until you answer."
 
 **"What's in it?"**
-"Quick stuff — current mileage, any services you did elsewhere, any warning lights, anything weird you've noticed. Three to seven questions, usually under a minute."
+"Three quick questions — your mileage, anything done elsewhere since last time, and whether the car's telling you anything, like a warning light or a noise. About 30 seconds."
 
 ## Important boundaries
 

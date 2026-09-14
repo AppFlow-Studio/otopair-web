@@ -36,11 +36,33 @@ import {
 
 const VIN_RE = /\b[A-HJ-NPR-Z0-9]{17}\b/i;
 
+// The booking walkthrough is a SAMPLE. Its cards only ever show the sample
+// shops, times and prices in oto-flow.ts: the agent may pick one of those
+// shops, a weekday and one of the sample times, but it can never put a real
+// shop's name — or a price of its own — onto a sample card.
+const WEEKDAY_RE = /^(mon|tues|wednes|thurs|fri|satur|sun)day$/i;
+
+/** One of the sample shops, by name ("Eltingville" is enough), or null. */
+function sampleShop(name: unknown): Shop | null {
+  if (typeof name !== "string") return null;
+  const t = name.trim().toLowerCase();
+  if (t.length < 4) return null;
+  return DEFAULT_SHOPS.find((s) => s.name.toLowerCase() === t || s.name.toLowerCase().startsWith(t)) ?? null;
+}
+
+/** One of the bookable sample times ("11 AM" matches "11:00 AM"), or null. */
+function sampleSlot(label: unknown): Slot | null {
+  if (typeof label !== "string") return null;
+  const norm = (s: string) => s.toLowerCase().replace(/[\s.]/g, "").replace(/:00(?=[ap]m$)/, "");
+  const t = norm(label);
+  return DEFAULT_SLOTS.find((s) => !s.disabled && norm(s.label) === t) ?? null;
+}
+
 // Demo-mode (no live agent) keyword → feature, so typed questions still demo.
 // Ordered: more specific first. Stems omit a trailing \b so plurals match.
 const DEMO_KEYWORDS: [RegExp, DemoFeature][] = [
   [/\b(tire|tyre|wheel)/, "tires"],
-  [/\b(rating|review|vetted|rated)/, "ratings"],
+  [/\b(rating|review|vetted|licensed|insured|rated)/, "ratings"],
   [/\b(reward|credit|loyalty|cashback|cash back|points)/, "rewards"],
   [/\b(notification|notif|alert|spam|push)/, "notifications"],
   [/\b(refund|dispute|apple pay|google pay|how (do|can) i pay|payment|\bcard\b|debit)/, "payments"],
@@ -74,18 +96,18 @@ const MYCAR_RE =
 
 // Short, natural demo-mode acknowledgements (live agent speaks its own words).
 const DEMO_LINES: Record<DemoFeature, string> = {
-  service_catalog: "Here's everything you can book at launch.",
-  pricing: "Here's how pricing works — every line is shown before you confirm, and the total is locked.",
-  health_score: "Here's how the Vehicle Health Score keeps your car protected.",
-  tires: "Tires work a little differently — you pick a tier and nearby shops send live quotes.",
-  ratings: "Every shop is reviewed and approved before it goes live, and rated only by drivers who completed a job there.",
-  rewards: "You earn real dollar credit — Ownership Credit — on every booking. No points, no hoops.",
+  service_catalog: "Here are the 22 services you can book in the app, in four categories.",
+  pricing: "Here's how pricing works — the shop sets the price, you see the full total for your car before you book, and it can't go up without your yes. This one's a sample.",
+  health_score: "Here's the Vehicle Health Score — a 0-to-100 grade of your car's upkeep. This one's a sample car.",
+  tires: "Tires work a little differently: shops send quotes for the exact tire, and you pick one.",
+  ratings: "Every shop is reviewed and approved by Otopair's team before it goes live, and reviews come only from drivers who completed a booking there.",
+  rewards: "You earn real dollar credit — Ownership Credit — on every completed booking. It goes toward your next booking, or you can turn it into a gift card.",
   overview: "Here's Otopair in a nutshell.",
-  coverage: "Here's where Otopair is live, and where it goes next.",
-  payments: "Here's how payments work — pay your way, securely.",
+  coverage: "Here's where Otopair is live, and where it's planned next.",
+  payments: "Here's how paying works — a $20 hold when you book, and you're charged when the job is done.",
   service_history: "You can upload past records — here's why it makes everything more accurate.",
-  checkin: "Every 90 days there's a soft check-in to keep things accurate — never a push.",
-  bookings: "Here's your Bookings tab — everything happening with your car.",
+  checkin: "Every 90 days there's a quick check-in — three questions, about 30 seconds.",
+  bookings: "Here's the Bookings tab in the app — every booking, with its live status.",
   notifications: "We only send what matters — here's the breakdown.",
   trust: "Here's what Otopair will never do. Trust is the whole point.",
 };
@@ -311,7 +333,9 @@ export function useOtoAgent() {
 
       if (launchList.status === "fulfilled") {
         setPresignupSaved(true);
-        return "Saved — they're on the launch list (one email the day the app is live), and their car will be waiting when they sign up.";
+        return vehicle
+          ? "Saved — they're on the launch list (one email the day the app is live), and their car will be waiting when they sign up with the same email."
+          : "Saved — they're on the launch list (one email the day the app is live).";
       }
       if (stub.status === "fulfilled") {
         setPresignupSaved(true);
@@ -322,8 +346,12 @@ export function useOtoAgent() {
     [createStub, vehicle]
   );
 
-  /** Summon an explainer demo card on the component side. */
+  /** Summon an explainer demo card on the component side. The hero renders a
+   *  symptom or service card ahead of a demo card, so an explicit demo request
+   *  clears those — otherwise the new card never appears. */
   const showDemo = useCallback((feature: DemoFeature) => {
+    setServiceCard(null);
+    setSymptomCard(null);
     setDemoFeature(feature);
   }, []);
 
@@ -457,46 +485,48 @@ export function useOtoAgent() {
     return "Scheduling preview shown.";
   });
 
-  useConversationClientTool("show_shops", (params: Record<string, unknown>) => {
-    const incoming = params?.shops;
-    if (Array.isArray(incoming) && incoming.length) {
-      setShops(incoming as unknown as Shop[]);
-    }
+  // The walkthrough always shows its own sample shops and times: a shop list
+  // or time grid the agent sends is ignored, so a real shop — or a price the
+  // agent made up — can never land on a sample card.
+  useConversationClientTool("show_shops", () => {
     setDemoFeature(null);
     setStep("shops");
-    return "Shop list shown to the user.";
+    return "Sample shop list shown to the user (sample shops and prices for a Brake Pad Replacement — not real listings).";
   });
 
   useConversationClientTool("show_times", (params: Record<string, unknown>) => {
-    const incoming = params?.times ?? params?.slots;
-    if (Array.isArray(incoming) && incoming.length) {
-      setSlots(incoming as unknown as Slot[]);
-    }
-    if (typeof params?.shop === "string") {
-      setSelectedShop((prev) => prev ?? { ...DEFAULT_SHOPS[0], name: params.shop as string });
-    }
+    const rawShop = params?.shop;
+    const sample = sampleShop(rawShop);
+    if (sample) setSelectedShop((prev) => prev ?? sample);
     setDemoFeature(null);
     setStep("datetime");
-    return "Available times shown to the user.";
+    if (typeof rawShop === "string" && !sample) {
+      return `Sample times shown. "${rawShop}" isn't one of the sample shops, so it was not put on screen — the walkthrough only uses ${DEFAULT_SHOPS.map((s) => s.name).join(", ")}.`;
+    }
+    return "Sample times shown to the user.";
   });
 
   useConversationClientTool(
     "confirm_booking",
     (params: Record<string, unknown>) => {
+      // Sample receipt. The agent can choose a sample shop, a weekday and a
+      // sample time; the job, the mechanic and the total always come from the
+      // sample data — never from the agent.
+      const shop = sampleShop(params?.shop) ?? selectedShop;
+      const rawDate = params?.date;
+      const date = typeof rawDate === "string" && WEEKDAY_RE.test(rawDate.trim()) ? rawDate.trim() : null;
+      const time = sampleSlot(params?.time)?.label ?? null;
       setBooking((prev) => ({
-        service: (params?.service as string) ?? prev.service,
-        shop: (params?.shop as string) ?? selectedShop?.name ?? prev.shop,
-        mechanic: (params?.mechanic as string) ?? prev.mechanic,
-        date: (params?.date as string) ?? prev.date,
-        time: (params?.time as string) ?? selectedSlot?.label ?? prev.time,
-        total:
-          typeof params?.total === "number"
-            ? (params.total as number)
-            : prev.total,
+        ...prev,
+        shop: shop?.name ?? prev.shop,
+        mechanic: shop?.mechanic ?? prev.mechanic,
+        date: date ?? prev.date,
+        time: time ?? selectedSlot?.label ?? prev.time,
+        total: shop?.price ?? prev.total,
       }));
       setDemoFeature(null);
       setStep("confirmed");
-      return "Booking confirmed in the UI.";
+      return "Sample booking receipt shown in the UI — nothing was booked and nothing was charged.";
     }
   );
 
@@ -516,6 +546,8 @@ export function useOtoAgent() {
     if (!DEMO_FEATURES.includes(feature as DemoFeature)) {
       return `Unknown demo. Options: ${DEMO_FEATURES.join(", ")}.`;
     }
+    setServiceCard(null);
+    setSymptomCard(null);
     setDemoFeature(feature as DemoFeature);
     return `Showing the ${feature.replace(/_/g, " ")} demo on screen.`;
   });
@@ -534,7 +566,7 @@ export function useOtoAgent() {
     setDemoFeature(null);
     stepRef.current = "shops";
     setStep("shops");
-    return "Started the interactive booking walkthrough — nearby shops are on screen. The user taps a shop → picks a time → confirms; narrate each step. (You can also call show_times then confirm_booking to advance for them.)";
+    return "Started the interactive booking walkthrough — the SAMPLE shops are on screen (sample shops and prices for a Brake Pad Replacement, not real listings). The user taps a shop → picks a time → confirms; narrate each step and say it's a sample. (You can also call show_times then confirm_booking to advance for them.)";
   });
 
   /** Validate + surface a generic agent-composed info card (the long-tail fallback). */
@@ -542,7 +574,10 @@ export function useOtoAgent() {
     const card = sanitizeInfoCard(raw);
     if (!card) return "Couldn't build that card — it needs at least a title.";
     // Take over the canvas; the channel-exclusion effects keep things tidy.
+    // Symptom and service cards render ahead of it, so clear those too.
     setDemoFeature(null);
+    setServiceCard(null);
+    setSymptomCard(null);
     setDynamicCard(card);
     return `Showing an info card: ${card.title}.`;
   }, []);
@@ -669,7 +704,7 @@ export function useOtoAgent() {
         setThinking(true);
         after(600, () => {
           setThinking(false);
-          pushMessage("oto", OTO_LINES.shops ?? "Here are nearby shops with fixed prices.");
+          pushMessage("oto", OTO_LINES.shops ?? "Here's a sample of how picking a shop works.");
         });
         return;
       }
@@ -853,9 +888,18 @@ export function useOtoAgent() {
 
   /** Confirm the appointment and reveal the confirmation card. */
   const confirmAppointment = useCallback(() => {
-    const shopName = selectedShop?.name ?? booking.shop;
+    const shop = selectedShop ?? sampleShop(booking.shop);
+    const shopName = shop?.name ?? booking.shop;
     const time = selectedSlot?.label ?? booking.time;
-    setBooking((prev) => ({ ...prev, shop: shopName, time }));
+    // The sample receipt matches the sample shop that was picked: its mechanic
+    // and its sample price, not a figure from a different shop.
+    setBooking((prev) => ({
+      ...prev,
+      shop: shopName,
+      mechanic: shop?.mechanic ?? prev.mechanic,
+      time,
+      total: shop?.price ?? prev.total,
+    }));
     if (connectedRef.current) {
       setDemoFeature(null);
       stepRef.current = "confirmed";

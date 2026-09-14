@@ -13,7 +13,7 @@ Otopair is built on trust. That trust comes from the things Otopair refuses to d
 - **Push services a car doesn't need** — recommendations come from real maintenance intervals adjusted for the actual vehicle, not from revenue targets
 - **Send marketing notification blasts** — every notification has to matter
 - **Lock features behind the quarterly check-in** — it's an offer, not a requirement
-- **Gate basic functionality behind rewards tiers** — Driver tier already does everything important
+- **Gate basic functionality behind rewards** — every driver gets the same transparent pricing and protections
 
 ## Language principles
 

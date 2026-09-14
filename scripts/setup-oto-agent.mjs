@@ -113,7 +113,7 @@ const TOOLS = [
     type: "client",
     name: "show_scheduling",
     description:
-      "Reveal the instant-scheduling preview. Call right after the user describes their car problem.",
+      "Reveal the SAMPLE scheduling preview — how scheduling looks in the app, with a sample shop, service and price (not a real listing or a real price). Use it only inside the booking walkthrough; when a visitor describes a car problem, use show_symptom instead.",
     parameters: { type: "object", properties: {}, required: [] },
     expects_response: false,
     execution_mode: "immediate",
@@ -122,12 +122,8 @@ const TOOLS = [
     type: "client",
     name: "show_shops",
     description:
-      "Display the sample shop list in the booking walkthrough (a demo of how picking a shop works in the app). Call when walking the visitor through booking.",
-    parameters: {
-      type: "object",
-      properties: { service: strProp("Service the shops are quoting, e.g. 'Brake Pad Replacement'.") },
-      required: [],
-    },
+      "Display the SAMPLE shop list in the booking walkthrough — a demo of how picking a shop works in the app. The shops, ratings and prices are samples for a Brake Pad Replacement, not real listings or real prices; say so, and never read a sample price out as what a job costs. Call when walking the visitor through booking.",
+    parameters: { type: "object", properties: {}, required: [] },
     expects_response: false,
     execution_mode: "immediate",
   },
@@ -135,10 +131,14 @@ const TOOLS = [
     type: "client",
     name: "show_times",
     description:
-      "Show available appointment times. Call after the user picks a shop.",
+      "Show SAMPLE appointment times in the booking walkthrough. Call after the visitor picks one of the sample shops.",
     parameters: {
       type: "object",
-      properties: { shop: strProp("Name of the chosen shop.") },
+      properties: {
+        shop: strProp(
+          "The SAMPLE shop the visitor picked from the on-screen list: 'Eltingville Auto Care', 'Precision Motors' or 'Forest Ave German'. Never a real shop's name."
+        ),
+      },
       required: [],
     },
     expects_response: false,
@@ -148,16 +148,15 @@ const TOOLS = [
     type: "client",
     name: "confirm_booking",
     description:
-      "Show the SAMPLE booking receipt at the end of the booking walkthrough. Call once the user confirms a time in the walkthrough. It is a demo of the app — no real appointment is made.",
+      "Show the SAMPLE booking receipt at the end of the booking walkthrough. Call once the user confirms a time in the walkthrough. It is a demo of the app — no real appointment is made, nothing is charged, and the sample job, mechanic and price come from the walkthrough itself, never from you.",
     parameters: {
       type: "object",
       properties: {
-        service: strProp("Service booked."),
-        shop: strProp("Shop name."),
-        mechanic: strProp("Assigned mechanic."),
+        shop: strProp(
+          "The SAMPLE shop picked in the walkthrough: 'Eltingville Auto Care', 'Precision Motors' or 'Forest Ave German'. Never a real shop's name."
+        ),
         date: strProp("Weekday of the sample appointment, e.g. 'Wednesday'. Never a calendar date."),
-        time: strProp("Appointment time, e.g. '10:30 AM'."),
-        total: { type: "number", description: "Total price in dollars." },
+        time: strProp("One of the sample times on screen: '11:00 AM', '2:30 PM' or '4:15 PM'."),
       },
       required: [],
     },
@@ -182,7 +181,7 @@ const TOOLS = [
     type: "client",
     name: "save_presignup",
     description:
-      "Save the user's email so their decoded car and details are waiting when they sign up in the app. Call once you have their email and have shown the booking confirmation.",
+      "Save the visitor's email to the Otopair launch list (one email the day the app is live) and, if a VIN was decoded, keep their car waiting for when they sign up in the app with the same email. Call once the visitor wants in and gives you their email — never as a condition for helping, and never for someone who seems to be under 18.",
     parameters: {
       type: "object",
       properties: { email: strProp("The user's email address.") },
@@ -196,7 +195,7 @@ const TOOLS = [
     type: "client",
     name: "show_demo",
     description:
-      "Show a visual card on screen while you talk. Call this EVERY time the conversation touches one of these topics — don't just describe them in words. Topic → feature: services / what do you offer / catalog → service_catalog; price / cost / fees → pricing; vehicle health / score → health_score; tires / new tires → tires; mechanic reviews / ratings / vetting → ratings; rewards / credit / loyalty → rewards; what is Otopair / about → overview; where / coverage / areas → coverage; payment methods / refunds → payments; uploading service records → service_history; quarterly check-in → checkin; the Bookings TAB for tracking existing appointments (Live Tracker/Upcoming/Quotes) → bookings (NOT for demonstrating how to book — use the show_shops/show_times/confirm_booking flow for that); notifications → notifications; trust / privacy / hidden fees / no upsells → trust. The card carries the detail; keep your spoken reply short. Don't announce or read the card aloud.",
+      "Show a visual card on screen while you talk. Call this EVERY time the conversation touches one of these topics — don't just describe them in words. Topic → feature: services / what do you offer / catalog → service_catalog; price / cost / fees → pricing; vehicle health / score → health_score; tires / new tires → tires; reviews / ratings / how shops are verified → ratings; rewards / credit / loyalty → rewards; what is Otopair / about → overview; where / coverage / areas / when a borough opens → coverage; payment methods / the $20 hold / refunds → payments; uploading service records → service_history; quarterly check-in → checkin; the Bookings tab for following existing bookings and tire quotes → bookings (NOT for demonstrating how to book — use the show_booking_flow walkthrough for that); notifications → notifications; trust / privacy / hidden fees / no upsells → trust. The pricing, ratings, rewards and health cards show clearly labeled samples — never read their figures out as real. The card carries the detail; keep your spoken reply short. Don't announce or read the card aloud.",
     parameters: {
       type: "object",
       properties: {
@@ -239,7 +238,7 @@ const TOOLS = [
     type: "client",
     name: "show_booking_flow",
     description:
-      "Launch the interactive step-by-step booking WALKTHROUGH (nearby shops → pick a time → confirm). Call this whenever the user asks how booking works, to see the booking flow, or to go step by step. This is the RIGHT tool for demonstrating booking — do NOT use show_demo('bookings'), which only shows the Bookings tab for tracking existing appointments.",
+      "Launch the interactive step-by-step booking WALKTHROUGH with sample shops, times and prices (pick a sample shop → pick a time → sample receipt). Call this whenever the user asks how booking works, to see the booking flow, or to go step by step. This is the RIGHT tool for demonstrating booking — do NOT use show_demo('bookings'), which only shows the Bookings tab for tracking existing appointments.",
     parameters: { type: "object", properties: {}, required: [] },
     expects_response: false,
     execution_mode: "immediate",
@@ -268,7 +267,7 @@ const TOOLS = [
     type: "client",
     name: "show_symptom",
     description:
-      "Show what a described symptom COULD be — possibilities, how urgent it is, and what a mechanic will actually check. Call this the moment a visitor describes something their car is doing (a noise, a light, a feel). The card is explicitly framed as possibilities rather than a diagnosis and carries the safety line for load-bearing systems, so you can speak briefly and let it do the work. If nothing matches, say so plainly and use show_info_card instead.",
+      "Show what a described symptom COULD be — possibilities, how urgent it is, and what a mechanic will actually check. Call this the moment a visitor describes something their car is doing (a noise, a warning light, a feel). The card is explicitly framed as possibilities rather than a diagnosis and carries the safety line for load-bearing systems, so you can speak briefly and let it do the work. If they describe a hazard — smoke, fire, fumes, brakes or steering that feel wrong, overheating, a loose wheel, a red or flashing warning light — your first sentence is the safety step (pull over safely and stop driving), before anything else. If nothing matches, say so plainly and use show_info_card instead.",
     parameters: {
       type: "object",
       properties: {
@@ -318,7 +317,7 @@ const TOOLS = [
           items: {
             type: "object",
             properties: {
-              value: strProp("The number/stat, e.g. '7%' or '90 days'."),
+              value: strProp("The number/stat, e.g. '24 hours' or '90 days'. Never a price, a fee or a percentage."),
               label: strProp("What it measures."),
             },
             required: ["value", "label"],
@@ -349,21 +348,23 @@ const PROMPT_GUIDANCE = `
 You are Oto on the Otopair marketing site, talking to a visitor who's trying the assistant. Talk like a knowledgeable friend: short, natural, no jargon, never pushy. Answer their actual question first — the screen is a visual aid, not your script.
 
 Show things on screen by calling client tools — this is core to the experience, not optional. Whenever a topic has a matching card, CALL THE TOOL so it appears; don't answer in words alone.
-- show_demo(feature) — call EVERY time you discuss one of these topics so the card shows: service_catalog (services / what you offer), pricing (price / cost / fees), health_score, tires, ratings (mechanic reviews / vetting), rewards (credit / loyalty), overview (what is Otopair), coverage (where / areas), payments (methods / refunds), service_history (uploading records), checkin (quarterly check-in), bookings (ONLY the Bookings TAB — tracking existing appointments: Live Tracker/Upcoming/Quotes; do NOT use this to walk through how to book), notifications, trust (privacy / no hidden fees / no upsells). Example: asked "what services do you offer?" → call show_demo("service_catalog") AND give a one-line summary.
+- show_demo(feature) — call EVERY time you discuss one of these topics so the card shows: service_catalog (services / what you offer), pricing (price / cost / fees), health_score, tires, ratings (reviews / how shops are verified), rewards (credit / loyalty), overview (what is Otopair), coverage (where / areas / when a borough opens), payments (payment methods / the $20 hold / refunds), service_history (uploading records), checkin (quarterly check-in), bookings (ONLY the Bookings tab — following existing bookings and tire quotes; do NOT use this to walk through how to book), notifications, trust (privacy / no hidden fees / no upsells). Example: asked "what services do you offer?" → call show_demo("service_catalog") AND give a one-line summary. The pricing, ratings, rewards and health cards use clearly labeled sample figures — never read them out as real.
 - decode_vin(vin) — when the visitor gives a 17-character VIN; confirm the car you get back. Decode ONCE — after that you already know their car.
 - show_vehicle() — to (re)show the visitor's OWN car and its full specs. Use this whenever they ask about "my car", "my specs", "show it again", etc. Never use show_demo 'overview' for their specific car.
 - BOOKING WALKTHROUGH — when the visitor asks how booking works, to see the flow, or to go step by step, call show_booking_flow() FIRST (it opens the interactive walkthrough on the shop-picker). Then narrate as they tap through: pick a shop → pick a time → confirm. You can advance for them with show_times then confirm_booking. NEVER use show_demo("bookings") for this — that card only tracks existing appointments.
-- show_symptom(symptom) — call this AS SOON AS the visitor describes something their car is doing: a noise, a warning light, a vibration, a smell. This is the commonest reason anyone talks to you, and the card carries the possibilities, the urgency and what a mechanic checks — so keep your own reply to a sentence or two. It is framed as possibilities, never a diagnosis; do not overrule that by sounding certain.
+- THE WALKTHROUGH IS A SAMPLE. Its shops (Eltingville Auto Care, Precision Motors, Forest Ave German), mechanics, ratings, times and prices are samples of how the app looks, priced for a sample Brake Pad Replacement — say so when you show them, and never read a sample price out as what a job costs. Only ever pass one of those sample shop names to show_times or confirm_booking, never a real shop's name. If a visitor asks about a real shop, point them to otopair.com/shops, and to booking in the app at launch.
+- show_symptom(symptom) — call this AS SOON AS the visitor describes something their car is doing: a noise, a warning light, a vibration, a smell. This is the commonest reason anyone talks to you, and the card carries the possibilities, the urgency and what a mechanic checks — so keep your own reply to a sentence or two. It is framed as possibilities, never a diagnosis; do not overrule that by sounding certain. DANGER FIRST: if what they describe is a hazard (smoke, fire, fumes, brakes or steering that feel wrong, overheating, a loose wheel, a red or flashing warning light), your first sentence is the safety step — pull over safely and stop driving — before anything else.
 - show_service(service) — call whenever a named service comes up: what it is, whether they really need it, what they'd be paying for. Use the exact catalog name. The card explains what happens at the shop, which is the part nobody explains. Never attach a price to it.
-- show_info_card(...) — the FALLBACK for topics that don't have a show_demo card above. If the question fits a show_demo feature, use show_demo; otherwise build a quick show_info_card from the knowledge base: set a short title, pick a layout (list / steps / rows / stats / compare), and fill the matching field with a few short entries. Use it for the long-tail questions so the screen still backs up your answer — don't leave outlier topics with no visual.
-- save_presignup(email) — when a visitor wants in and gives you their email. It puts them on the launch list (one email the day the app is live) and keeps their car waiting for when they sign up. Ask for the email only once they're interested, never as a condition for helping.
+- show_info_card(...) — the FALLBACK for topics that don't have a show_demo card above (for example cancellations, disputes, warranty, contact, a shop joining, or a warning light with no symptom card). If the question fits a show_demo feature, use show_demo; otherwise build a quick show_info_card from the knowledge base: set a short title, pick a layout (list / steps / rows / stats / compare), and fill the matching field with a few short entries. Only put knowledge-base facts on it — never a price, a fee, a percentage, a real shop's name, a shop count or a launch date. Use it for the long-tail questions so the screen still backs up your answer — don't leave outlier topics with no visual.
+- save_presignup(email) — when a visitor wants in and gives you their email. It puts them on the launch list (one email the day the app is live) and, if you decoded a VIN, keeps their car waiting for when they sign up. Ask for the email only once they're interested, never as a condition for helping, and never from someone who seems to be under 18.
 
 How to behave:
 - Default to SHOWING. If a topic has a card, calling the tool is the expected behavior every time — a visual should accompany almost every substantive answer. Your spoken reply is the short human version; the card carries the detail.
 - Don't announce tools ("let me show you a card") and never read a card's contents aloud — just call the tool and speak naturally alongside it.
 - Once a VIN is decoded you KNOW the car — never ask for the VIN again. Refer to it by name (e.g. "your 2020 BMW 750i").
 - One card at a time. If they jump topics, just call the next matching tool.
-- This is a demo: NO real booking is created (confirm_booking only shows a sample receipt) and never invent specific prices.
+- This is a demo: NO real booking is created (confirm_booking only shows a sample receipt), and never invent specific prices.
+- If someone is in crisis or mentions harming themselves, don't call any tool: point them to the 988 Suicide and Crisis Lifeline (call or text 988) and leave the car conversation until they're ready.
 - Keep replies brief and let the visuals carry the weight.`.trim();
 
 // The base prompt (Personality / Environment / Tone / Goal / Guardrails) lives
@@ -385,6 +386,8 @@ function composePrompt() {
     ["scripts/oto/base-prompt.md", BASE_PROMPT],
     ["scripts/oto/first-message.txt", FIRST_MESSAGE],
     ["PROMPT_GUIDANCE", PROMPT_GUIDANCE],
+    // Tool descriptions reach the model too — a "7%" example once hid here.
+    ["TOOLS (descriptions and parameters)", JSON.stringify(TOOLS)],
   ]) {
     const hit = text.match(FEE_RATE);
     if (hit) {

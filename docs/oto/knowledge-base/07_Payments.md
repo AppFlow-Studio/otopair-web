@@ -2,43 +2,31 @@
 
 ## Accepted payment methods
 
-- **Apple Pay** (iOS)
+- **Apple Pay** (iPhone)
 - **Google Pay** (Android)
 - **Credit cards** (Visa, Mastercard, American Express, Discover)
 - **Debit cards**
 
-## Payment timing
+## How paying works — the $20 hold
 
-- When you book, a **$20 hold** secures the appointment — it's a hold on your card, not a charge
-- You're charged when the job is done: the locked price you approved, never more (and less, if parts come in cheaper than the high-end quote)
-- No card details are stored on Otopair — payments are handled through secure payment infrastructure
+1. **You book** — a **$20 hold** goes on your card or wallet. It's an authorization, not a charge: no money moves when you book. The $20 is the same for every booking and every shop, and it's the most ever blocked before the shop has inspected the car
+2. **The shop inspects the car and confirms the price** — the hold is raised to that price. Within what you approved, that happens without another tap; above it, the app asks you to approve first
+3. **The shop marks the job complete** — the hold is captured for the confirmed price. That's the only moment a completed job is charged, and it's never more than you approved
 
-## Cancellations
+- Apple Pay or Google Pay may ask you to re-confirm when the hold is raised; a saved card is re-authorized without an extra step
+- Card holds expire after about 7 days, so a booking made well ahead of the appointment may need the same $20 hold re-confirmed before the visit. Nothing extra is charged
+- The $20 is kept in only three cases: a cancellation inside 24 hours, a no-show marked by the shop, or an inspection estimate left unanswered for 24 hours. Every case is in "Cancellations, Disputes and Warranty"
 
-- Cancel from inside the booking detail in the **Upcoming** tab
-- Tap the booking, tap cancel — no external pages, no phone calls
-- Cancellation may capture a brief reason for admin review (used to improve the platform)
-- Cancellation timing rules may vary by shop; the app shows the rules at the moment of cancellation
+## Your card and Stripe
 
-## Refunds
+- Payments run through Stripe. Cards are entered directly in Stripe's payment sheet in the app, so the card number never reaches Otopair
+- Otopair keeps only the card brand and the last four digits, for the receipt, plus Stripe's references for the hold and the charge
+- The money stays with Stripe until the job is done. Shops are paid through Stripe, on Stripe's payout schedule, after the job is complete — Otopair doesn't hold shop money itself
 
-- Refunds are initiated through the app and processed through the same secure payment infrastructure
-- Tap the refund option inside the booking, explain what happened, and the Otopair team handles the rest
-- The driver doesn't get sent to a third-party site or made to chase the shop directly
+## Receipts
 
-## Disputes
-
-- If something goes wrong with a job, open a dispute directly inside the booking
-- Otopair's team launches an investigation — they review the job history, parts logged, labor recorded, and communication between the driver and the shop
-- Otopair owns the resolution process from start to finish
-- For MVP launch, dispute communication is handled by email ticket; in-app chat is on the roadmap
-
-## Pricing changes during a visit
-
-If the mechanic discovers something additional during the visit:
-- The shop must send a **new quote** through the app
-- The driver must **approve** the new quote before any extra work or charge happens
-- No surprise add-ons, ever
+- Once the payment settles, an itemized receipt shows every line and what happened to the hold, with the settlement figures read from the actual charge
+- The receipt stays on the booking in the app. The receipt email carries a private link that opens it without signing in — anyone holding the link can open that receipt, so it shouldn't be forwarded
 
 ## How to answer common questions
 
@@ -46,19 +34,18 @@ If the mechanic discovers something additional during the visit:
 - If it's on the list above: confirm
 - If not: "We support Apple Pay, Google Pay on Android, and credit or debit cards at launch. Other methods may come later"
 
-**"How do refunds work?"**
-"All in the app. If you need a refund, tap the button inside your booking, tell us what happened, and Otopair handles it. We don't send you off to a third-party site or make you chase someone else."
+**"Is the $20 a charge?"**
+"No — it's a hold, not a charge. After the shop inspects your car, the hold is raised to the confirmed price, and you're only charged when the job is done. The $20 is only kept if you cancel inside 24 hours, don't show up, or leave the shop's inspection estimate unanswered for 24 hours."
 
-**"What if there's a dispute with the shop?"**
-"Open a dispute right inside your booking. Otopair's team launches an investigation — we look at the job history, the parts logged, the labor recorded, and the conversation between you and the shop — and we reach a resolution. We own the process from start to finish."
+**"When do I actually pay?"**
+"When the shop marks the job complete — the confirmed price, never more than you approved."
 
 **"Do you store my card?"**
-"No. Payment details are handled through secure payment infrastructure, not stored on Otopair."
+"No — your card number never reaches Otopair. It's entered directly with Stripe, and Otopair keeps just the brand and the last four digits so your receipt shows which card you used."
 
 ## Important boundaries
 
+- You can say payments and shop payouts run through Stripe, as the site does. Do **not** describe internal payment workflow or financial architecture
 - Do **not** promise specific refund timelines (they depend on the bank and the situation)
-- Do **not** describe the back-end payment provider by name
-- Do **not** promise specific dispute outcomes or processing times
-- Do **not** discuss internal payment workflow or financial architecture
-- The right tone is calm reassurance: "Otopair handles it — you don't have to chase anyone."
+- Do **not** say the $20 is always refunded, or that it's never kept
+- Refunds, disputes and cancellation fees are explained in "Cancellations, Disputes and Warranty"

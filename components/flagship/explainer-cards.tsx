@@ -82,15 +82,16 @@ export function ServiceCard({ service }: { service: ServiceExplainer }) {
 
       {service.safety && (
         <SafetyNote delay={0.4 + service.shop.length * 0.07}>
-          This one is load-bearing. If anything feels off, have it inspected before you drive on it.
+          This one is load-bearing. If anything feels off, get it inspected before you drive it again.
         </SafetyNote>
       )}
 
-      {/* The interval deferral doubles as the reason to hand over a VIN — the
-          card is honest that it cannot be specific without knowing the car. */}
+      {/* The card is honest that it cannot be specific without knowing the
+          car. The website's VIN decode returns specs, not a service schedule —
+          the schedule check is the app's job, so the footnote says so. */}
       <Step delay={0.46 + service.shop.length * 0.07}>
         <p className="mt-4 text-[11px] leading-relaxed text-[#1a1a1a]/45">
-          Intervals differ by car. Give Oto your VIN and it reads the schedule your car was actually built to.
+          Intervals differ by car. In the app, Oto checks your car&rsquo;s own schedule and records before you book.
         </p>
       </Step>
     </OtoCard>
@@ -122,6 +123,15 @@ export function SymptomCard({ symptom }: { symptom: SymptomExplainer }) {
         </Step>
       }
     >
+      {/* Danger first, diagnosis second: a hazard's safe first step leads the
+          card, before any possibility is named. */}
+      {symptom.firstStep && (
+        <SafetyNote delay={0.12}>
+          <span className="font-semibold">First: </span>
+          {symptom.firstStep}
+        </SafetyNote>
+      )}
+
       <Step delay={0.16}>
         <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/45">
           Could be

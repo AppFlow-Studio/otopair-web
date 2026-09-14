@@ -2,14 +2,18 @@
 
 ## Overview
 
-Adding a car to Otopair is fast — under a minute for most drivers. Otopair uses an advanced internal vehicle intelligence tool to decode a VIN and pull verified specifications (engine, drivetrain, parts, labor times) so every quote reflects the exact car, not a rough average.
+Adding a car to Otopair is fast. Enter the VIN and the app decodes it against a public vehicle database to fill in the year, make, model, trim, engine and body style. That decoded profile is what Oto, the Vehicle Health Score and every quote are built on, so an exact identification matters.
 
-## Three ways to add a vehicle
+## Two ways to add a vehicle
 
-- **Enter the VIN** — Fastest path, decodes everything automatically
-- **Manual entry** — Type in year, make, and model
+- **Enter the VIN** — the fastest and most accurate path, because it identifies the exact trim and engine
+- **Manual entry** — type in the year, make and model
 
-The VIN path is the most accurate because it identifies the exact trim and engine.
+## Finding the VIN
+
+- On the driver's side of the dashboard, visible through the windshield; on the sticker in the driver's door jamb; and on the registration and insurance card
+- A VIN is 17 characters. If one won't decode, check for a typo: VINs never contain the letters I, O or Q
+- A visitor who decodes their VIN with Oto on the website and leaves their email has the car attached automatically when they sign up in the app with the same email
 
 ## Ownership paths
 
@@ -46,22 +50,21 @@ The first vehicle is always assumed primary.
 
 ## Vehicle coverage
 
-Otopair recognizes essentially every modern passenger vehicle sold in the United States by VIN. For pricing accuracy:
-
-- Otopair has pre-built detailed service profiles for the most common cars on NYC roads — roughly **80% of vehicles** drivers will bring in
-- Cars outside the pre-built set get **enriched on demand** the first time someone adds them, automatically filling specifications, parts, and labor times
-- The most accurate pricing is available for common makes like **Toyota, Honda, Ford, Chevrolet, Nissan, Hyundai, BMW, Mercedes-Benz, Audi, and Lexus**
+Otopair recognizes essentially every modern passenger vehicle sold in the United States by VIN. The most detailed service data is available for common makes like **Toyota, Honda, Ford, Chevrolet, Nissan, Hyundai, BMW, Mercedes-Benz, Audi, and Lexus**; a less common car can still be added, and its details are filled in when it is.
 
 ## How to answer common questions
 
 **"How do I add my car?"**
-"Three ways — type in your VIN, scan your license plate with the camera, or enter the year, make, and model manually. VIN is fastest because it nails the exact trim."
+"Type in your VIN — the app decodes it and fills in the year, make, model, trim and engine. You can also enter the year, make and model by hand, but the VIN nails the exact car, and that's what every quote is built on."
+
+**"Where do I find my VIN?"**
+"On the driver's side of the dashboard where it meets the windshield, on the sticker in the driver's door jamb, or on your registration or insurance card. It's 17 characters and never uses the letters I, O or Q."
 
 **"Do you have my car?"**
-"If your car was made in the last 25 years and sold in the US, almost certainly yes. Share your VIN and the app decodes it in about a second."
+"If it has a standard 17-character VIN, share it and we'll see what comes back."
 
 **"What if my car isn't in your database?"**
-"Add it anyway. The system enriches new vehicles automatically the first time they're added. You won't get stuck."
+"Add it anyway — a less common car still gets its details filled in when it's added. You won't get stuck."
 
 **"Can I have multiple cars on one account?"**
 "Yes, as many as you own. Each one has its own profile and history. You switch between them with one tap."
@@ -70,6 +73,6 @@ Otopair recognizes essentially every modern passenger vehicle sold in the United
 
 - Do **not** describe the internal vehicle intelligence pipeline architecture
 - Do **not** name the vehicle data vendors or APIs used
-- Do **not** quote specific accuracy percentages beyond "most common cars"
-- Do **not** explain how on-demand enrichment works internally
+- Do **not** quote accuracy percentages or coverage figures
+- Do **not** say the app can scan a license plate, or promise how fast a VIN decodes
 - Right answer when uncertain: "Share your VIN and we'll see what comes back."

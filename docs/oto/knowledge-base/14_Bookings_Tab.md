@@ -2,56 +2,50 @@
 
 ## Overview
 
-The Bookings tab is where drivers see everything related to their active service activity. It has three top-level views: **Live Tracker**, **Upcoming**, and **Quotes**. Past bookings live in the Profile section so the Bookings tab stays focused on what's happening now.
+The Bookings tab is where a driver follows everything that's booked and in progress. Each booking shows its live status as the job moves — confirmed, estimate confirmed, in service, ready for pickup — with short updates from the shop, such as "started at 10:05 AM · front pads off, rotors checked". Tire quote requests have their own view, and past bookings with their receipts stay in the driver's booking history.
 
-## Live Tracker
+## Bookings
 
-Shows the **current job in progress** — what's happening with the driver's car while it's at the shop.
+- Every booking shows where it sits in its lifecycle, so the driver can follow along without calling the shop
+- Tap a booking for the full detail: date, time, shop and price breakdown
+- Reschedule or cancel from the booking, within the windows it shows (see "Cancellations, Disputes and Warranty")
+- Approval requests from the shop — an estimate above what the driver approved, or added work — arrive on the booking, with 24 hours to answer
 
-- Real-time status updates from the mechanic
-- The job moves through phases like check-in, work in progress, and complete
-- The driver can follow along without calling the shop
+## Tire quotes
 
-## Upcoming
-
-Holds **confirmed future appointments**.
-
-- Tap any row to see full booking detail: time, date, price breakdown, PDF receipt
-- Reschedule a time directly from here
-- Cancel from here too — no external page
-
-## Quotes
-
-Holds **pending tire-quote requests** waiting on shop responses.
-
-- Shows the live status as quotes arrive
-- Each quote shows price, date availability, and how it compares to the baseline
-- The window stays open up to 10 minutes or until 5 shops respond
-- Driver picks one to convert the quote into a confirmed booking
-
-## How a job moves between views
-
-A quote-request job starts in **Upcoming**, moves to **Quotes** when responses arrive, and lands in **Live Tracker** when the driver picks one and the day of service comes around. A standard booking (non-tire) goes straight from Upcoming to Live Tracker on the appointment day.
+- Each quote shows the tire brand and model, the price per tire, quantity, labor, the total and a slot the shop can offer
+- Accept one to turn it into a booking with that shop; the rest are set aside
+- Until you accept, you can cancel the request for free
 
 ## Past bookings
 
-- All completed bookings live in **Profile / Service History**, not in Bookings
-- Each past booking has a full PDF receipt, the parts logged, and the service notes
-- Drivers can re-book the same service with the same shop in one tap from history
+- Completed and cancelled bookings live in the driver's booking history
+- Each past booking keeps its itemized receipt and the parts that went in
+- Drivers can re-book the same service with the same shop from history
+
+## Messaging the shop
+
+- Open the booking and tap **Message shop**. Every conversation is attached to that booking, so the shop's team answers with the car and the job in front of them, and the thread stays on the booking for the record
+- Quick actions change with the stage: before the visit — running late, reschedule request, cancel or pick up; car at the shop — status check, add a service; work in progress — when will it be ready, approve extra work, a question about the work; completed — pickup arrangement, invoice question, issue after service. A free-text message works any time
+- The shop replies from its dashboard; the thread shows when the shop has responded and when it's resolved, and a new message reopens it
+- Oto is separate: there's no live human on the Oto chat, and Oto can't message a shop for anyone
 
 ## How to answer common questions
 
 **"Where do I see my appointment?"**
-"In your Bookings tab. Upcoming shows confirmed appointments, Live Tracker shows what's happening while your car is at the shop, and Quotes shows pending tire responses."
+"In the Bookings tab. Each booking shows its live status as the job moves, and your past bookings and receipts are in your booking history."
 
 **"How do I track my service?"**
-"Open the Bookings tab and tap Live Tracker. It shows the current stage of your job while it's happening at the shop — no need to call."
+"Open the booking in the Bookings tab — it shows the current stage of your job while the car's at the shop, with updates from the shop. No need to call."
 
 **"Where are my old bookings?"**
-"In your Profile, under Service History. Past bookings live there with full receipts and notes."
+"In your booking history in the app, with their receipts."
+
+**"Can I talk to the shop?"**
+"Yes — open the booking and tap Message shop. The thread is tied to that job, so they know exactly which car you mean."
 
 ## Important boundaries
 
-- Do **not** promise specific Live Tracker update intervals
+- Do **not** promise specific status update intervals
 - Do **not** describe the internal job state machine in technical detail
-- Do **not** claim Live Tracker shows minute-by-minute mechanic activity — it shows the major phases
+- Do **not** claim the status shows minute-by-minute mechanic activity — it shows the major stages and the shop's updates

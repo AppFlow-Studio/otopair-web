@@ -647,10 +647,31 @@ async function main() {
   console.log("\nVerification:");
   for (const [label, ok] of checks) console.log(`   ${ok ? "✓" : "✖"} ${label}`);
 
-  for (const id of uploadedIds) {
-    const idx = await api(`/v1/convai/knowledge-base/${id}/rag-index`).catch((e) => ({ error: e.message }));
-    const statuses = (idx.indexes ?? []).map((i) => i.status).join(", ") || idx.error || "no index yet";
-    console.log(`   · RAG index ${id}: ${statuses}`);
+  // Uploading a doc does not index it (observed 2026-09-14: 16 docs sat at "no
+  // index" after attach), and an unindexed doc is invisible to RAG — so start
+  // indexing with the agent's own embedding model and wait for it.
+  const embeddingModel = vp.rag?.enabled ? vp.rag.embedding_model : null;
+  if (embeddingModel && uploadedIds.length) {
+    for (const id of uploadedIds) {
+      await api(`/v1/convai/knowledge-base/${id}/rag-index`, {
+        method: "POST",
+        body: JSON.stringify({ model: embeddingModel }),
+      });
+    }
+    const pending = new Set(uploadedIds);
+    for (let attempt = 0; attempt < 30 && pending.size; attempt++) {
+      await new Promise((r) => setTimeout(r, 5000));
+      for (const id of [...pending]) {
+        const idx = await api(`/v1/convai/knowledge-base/${id}/rag-index`).catch(() => ({}));
+        const status = (idx.indexes ?? []).find((i) => i.model === embeddingModel)?.status;
+        if (status === "succeeded" || status === "failed" || status === "rag_limit_exceeded") {
+          pending.delete(id);
+          if (status !== "succeeded") checks.push([`RAG index ${id}: ${status}`, false]);
+        }
+      }
+    }
+    console.log(`   ${pending.size ? "✖" : "✓"} RAG indexed ${uploadedIds.length - pending.size}/${uploadedIds.length} new docs (${embeddingModel})`);
+    if (pending.size) checks.push([`RAG indexing still pending for ${pending.size} doc(s)`, false]);
   }
 
   if (checks.some(([, ok]) => !ok)) {

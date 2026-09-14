@@ -192,7 +192,17 @@ export function useOtoAgent() {
   }, [step]);
 
   const pushMessage = useCallback((role: ChatMessage["role"], text: string) => {
-    setMessages((prev) => [...prev, { id: mkId(), role, text }]);
+    setMessages((prev) => {
+      // The live agent sometimes sends a reply, calls a tool, then sends the
+      // same reply again with a sentence added (seen 2026-09-14). A new Oto
+      // message that extends the previous Oto bubble replaces it, so visitors
+      // don't read the same paragraph twice.
+      const last = prev[prev.length - 1];
+      if (role === "oto" && last?.role === "oto" && text.length > last.text.length && text.startsWith(last.text)) {
+        return [...prev.slice(0, -1), { ...last, text }];
+      }
+      return [...prev, { id: mkId(), role, text }];
+    });
   }, []);
 
   /** Wake the hero into its live layout (called on first engagement). */

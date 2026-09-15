@@ -75,15 +75,43 @@ Run `13-44-56` after the fixes: 30 cards, 0 breaches, every height 530.
   it is a hard rule.
 - A new failure mode you saw for real: add a persona.
 
-## The agent is not written from here
+## Live checks through the site chat
 
-`scripts/setup-oto-agent.mjs` owns the tools and the guidance block between its
-`<<<OTOPAIR_GUIDANCE>>>` markers. It does **not** own the Personality, Goal and
-Guardrails blocks — those were written in the ElevenLabs dashboard and cannot
-be diffed from the repo. That split is how a repo scrubbed of the platform-fee
-rate still shipped an agent that said it out loud in seven real conversations.
-The script now refuses to be quiet about it: it greps the base prompt for a fee
-rate and warns.
+The loop above tests the agent through ElevenLabs' simulator and the cards
+through the dev trigger panel. Two more scripts drive the real website chat on
+`npm run dev`, with the site's own session route, safety net and cards:
 
-Run it with `--dry-run` first. It writes to the agent that serves real
-visitors.
+```bash
+node scripts/oto/qa.mjs --questions questions.json --out results.json   # one question per conversation
+node scripts/oto/chat-sim.mjs                                           # multi-turn visitors
+node scripts/oto/chat-sim.mjs --only safety-and-crisis,adversarial
+```
+
+- **`chat-sim.mjs`** plays each visitor in `fixtures/chat-scenarios.json` turn
+  by turn. Every Oto turn must keep the rules at the top of the script: no fee
+  percentage, no dollar figure but the $20 hold, no "vetted", no guarantee, no
+  "book it today", no sample booking passed off as real, no bubble shown twice,
+  and the conversation stays open. Each turn's `all` / `any` / `never` patterns
+  are hard checks too. `card` and `tools` are warnings, because the agent's
+  choice of card varies between runs. It writes `results.json` and a
+  `transcript.md` to read, and exits non-zero on a hard failure.
+- **`qa.mjs`** asks single questions, typically written from the site's pages,
+  and records the answer, the card, the tools the agent called, whether the
+  agent answered twice (the chat merges that on screen), and reply latency.
+
+Both go through `site-chat.mjs`, which keeps test sign-ups in the browser: the
+launch-list POST is answered locally (the real route emails the visitor and the
+team) and the Convex mutation that saves a pre-signup is refused before it
+leaves the page.
+
+## The agent is written from here
+
+`scripts/setup-oto-agent.mjs` owns the whole agent: the base prompt
+(`base-prompt.md`), the guidance block between its `<<<OTOPAIR_GUIDANCE>>>`
+markers, the first message, the tools, the knowledge base
+(`docs/oto/knowledge-base/`), the model, guardrails, call limits and
+private-agent auth. Dashboard edits are overwritten on the next run. It
+refuses to push a fee rate from any of them, refuses a model the account can't
+use, and warns when the model is being retired.
+
+Run it with `--dry-run` first. It writes to the live agent.

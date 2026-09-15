@@ -1,0 +1,17 @@
+{
+  "stamp": "2026-09-07_18-16-28",
+  "at": "2026-09-07T18:16:28.800Z",
+  "agentId": "agent_1201ks2vzy5dfrxaswhp5pds5gng",
+  "repeat": 1,
+  "credits": {
+    "tier": "free",
+    "limit": 10000,
+    "used": 10000,
+    "remaining": 0,
+    "resets": "2026-09-28 03:48"
+  },
+  "sim": {
+    "skipped": true,
+    "reason": "no credits"
+  }
+}

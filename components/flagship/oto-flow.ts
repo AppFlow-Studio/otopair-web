@@ -59,7 +59,8 @@ export interface Shop {
   rating: number;
   eta: string;
   price: number;
-  bestValue?: boolean;
+  /** The sample mechanic shown on the sample receipt for this shop. */
+  mechanic?: string;
 }
 
 export interface Slot {
@@ -147,6 +148,17 @@ export interface ChatMessage {
 }
 
 // ---- Defaults (mirror the Figma flagship frames) ---------------------------
+//
+// Everything in the booking walkthrough is a SAMPLE, and every sample tells
+// the same story: one Brake Pad Replacement at $312 — the example the site's
+// own app screens use on /pricing, /how-it-works and /cancellation-policy.
+// The shop names are invented samples, never listings (the verified shops
+// live at otopair.com/shops), and every card that shows them says "Sample".
+// use-oto-agent.ts only accepts these shop names from the agent and never
+// takes a price from it.
+
+/** The one sample job every walkthrough card is priced for. */
+export const SAMPLE_JOB = "Brake Pad Replacement";
 
 export const DEFAULT_SHOPS: Shop[] = [
   {
@@ -155,8 +167,8 @@ export const DEFAULT_SHOPS: Shop[] = [
     distance: "0.8 mi",
     rating: 4.9,
     eta: "Today",
-    price: 124,
-    bestValue: true,
+    price: 312,
+    mechanic: "Marcus T.",
   },
   {
     id: "precision",
@@ -164,7 +176,8 @@ export const DEFAULT_SHOPS: Shop[] = [
     distance: "1.2 mi",
     rating: 4.5,
     eta: "Today",
-    price: 320,
+    price: 326,
+    mechanic: "Joe R.",
   },
   {
     id: "forest",
@@ -173,6 +186,7 @@ export const DEFAULT_SHOPS: Shop[] = [
     rating: 4.7,
     eta: "Tomorrow",
     price: 340,
+    mechanic: "Sam V.",
   },
 ];
 
@@ -184,12 +198,16 @@ export const DEFAULT_SLOTS: Slot[] = [
 ];
 
 export const DEFAULT_BOOKING: Booking = {
-  service: "Brake Pad Replacement",
+  service: SAMPLE_JOB,
   shop: "Eltingville Auto Care",
-  mechanic: "Jay M.",
-  date: "May 29, 2026",
-  time: "10:30 AM",
-  total: 295,
+  mechanic: "Marcus T.",
+  // A weekday, not a calendar date: the sample receipt must never go stale
+  // (it read "May 29, 2026" for months after that day passed). Matches the
+  // week strip's selected Wednesday.
+  date: "Wednesday",
+  // One of DEFAULT_SLOTS, so the receipt never shows a time the picker didn't.
+  time: "11:00 AM",
+  total: 312,
 };
 
 // Week strip shown in the scheduling / date cards (selected = Wed 14).
@@ -283,10 +301,13 @@ export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
   },
 ];
 
-// Sample line-item receipt (RAG doc 06). Illustrative only — real prices are
-// built per-vehicle in the app. No fee line: the service-fee rate is a
-// locked-decision secret (Aug 2026) and the landing shows it folded into the
-// locked total everywhere else (oto-panel Review & Pay, path-section quotes).
+// Sample line-item breakdown (RAG doc 06). The site's own example, line for
+// line: the Review & Pay screen on /pricing, /how-it-works and /download
+// shows Labor $176.00 + Parts $104.00 + "Tax + service fee" $32.00 = $312.00.
+// Tax and the service fee stay ONE combined line, exactly as the site shows
+// them, so the card never states the fee on its own: the service-fee rate is
+// a locked-decision secret (Aug 2026). The card labels the whole thing a
+// sample.
 export interface PricingLine {
   label: string;
   amount: number;
@@ -294,84 +315,90 @@ export interface PricingLine {
   emphasize?: boolean;
 }
 export const PRICING_DEMO = {
-  service: "Brake Pad Replacement",
+  service: SAMPLE_JOB,
   lines: [
-    { label: "Labor", amount: 150 },
-    { label: "Parts", amount: 95, note: "OEM-equivalent" },
-    { label: "NY Sales Tax", amount: 21.74 },
+    { label: "Labor", amount: 176 },
+    { label: "Parts", amount: 104, note: "OEM" },
+    { label: "Tax + service fee", amount: 32 },
   ] as PricingLine[],
-  total: 266.74,
+  total: 312,
 };
 
-// Vehicle Health Score (RAG doc 10). Calm, predictive, paired with next steps.
+// Vehicle Health Score (RAG doc 10). Grades upkeep — oil, brakes, tires, the
+// 12-volt battery and the state inspection — never a safety rating. Gains are
+// points on the 0–100 score, as the site's app screens show them ("+7").
 export const HEALTH_DEMO = {
   score: 82,
-  status: "Well protected",
+  status: "Upkeep on track",
   recommendations: [
-    { title: "Brake fluid flush", detail: "Recommended — time-based", gain: 6 },
+    { title: "Tire rotation", detail: "Past its interval", gain: 7 },
     { title: "Oil change", detail: "Coming up in ~800 mi", gain: 5 },
   ],
 };
 
-// Tires (RAG doc 05). Tier-based — NEVER quote tire dollar amounts or brands.
-export const TIRE_TIERS = [
-  { tier: "Premium", blurb: "Top-quality — built to last and perform in all conditions." },
-  { tier: "Plus", blurb: "Strong mid-range balance of quality and value." },
-  { tier: "Standard", blurb: "Solid everyday tires at the most cost-friendly end." },
+// Tires (RAG doc 05). Tire Replacement is a quote request: shops quote the
+// exact tire. NEVER quote tire dollar amounts or recommend brands.
+export const TIRE_QUOTE_STEPS = [
+  { step: "Post a request", blurb: "The app already knows your tire size from your car's profile." },
+  {
+    step: "Shops quote the exact tire",
+    blurb: "Brand and model, price per tire, how many, labor, the total and a time they can do it.",
+  },
+  { step: "Accept one", blurb: "The booking goes to that shop at that time; the rest are set aside." },
 ];
 
-// Ratings (RAG doc 12). One-way (driver → shop/mechanic, completed bookings only).
+// Ratings (RAG doc 12). One-way (driver → shop, and optionally the mechanic;
+// completed bookings only). A SAMPLE shop page: a shop-level star rating and
+// review count, as the site's shop pages show — no per-mechanic sub-scores.
 export const RATINGS_DEMO = {
-  mechanic: "Jay M.",
   shop: "Eltingville Auto Care",
   overall: 4.9,
-  jobs: 312,
-  breakdown: [
-    { label: "Professionalism", value: 4.9 },
-    { label: "Punctuality", value: 4.8 },
-    { label: "Quality of work", value: 5.0 },
+  reviews: 18,
+  rules: [
+    "One review per completed booking",
+    "Shops can't review drivers",
+    "Shops can't edit or remove a review",
+    "Same credit, whatever the rating",
   ],
 };
 
-// Rewards — Ownership Credit (RAG doc 13). Dollar credit, not points.
+// Rewards — Ownership Credit (RAG doc 13). Dollar credit, not points — and not
+// switched on in the driver app yet (its rewards screen is disabled for
+// launch), so the card promises no balance, gift card or amounts. Uploading a
+// service record no longer earns credit in the backend.
 export const REWARDS_DEMO = {
   motto: "When things go wrong, you matter more.",
-  tier: "Driver",
-  rate: "1.0% back",
-  balance: 24,
-  bonuses: [
-    { action: "Verified review", amount: 5 },
-    { action: "Referral after first booking", amount: 15 },
-  ],
+  earn: ["Completed bookings", "Leaving a review", "Referring a friend"],
 };
 
 // Overview (RAG doc 01).
 export const OVERVIEW_DEMO = {
   tagline: "A trust-first car repair marketplace for NYC.",
   facts: [
-    "Book a specific mechanic by name — or just book a bay",
+    "Tell Oto what the car is doing — it scopes a job shops can price",
     "Independent shops only, each reviewed and approved before going live",
-    "Every line shown before you confirm — the total you see is the total you pay",
-    "Reviews only from drivers who completed a job",
-    "Live in Staten Island · iOS & Android",
+    "Each shop's full total for your car before you book — it can't go up without your yes",
+    "Reviews only from drivers who completed a booking",
+    "Live in Staten Island · app coming soon to iPhone & Android",
   ],
 };
 
-// Where it works (RAG doc 02).
+// Where it works (RAG doc 02). Planned quarters, as the site publishes them —
+// never a month, a day or an app launch date.
 export const COVERAGE_DEMO = {
   launch: "Staten Island",
   date: "Live now",
-  expansion: ["Brooklyn", "Queens", "The Bronx", "Manhattan"],
-  note: "Live in Staten Island, then expanding across NYC borough by borough.",
+  expansion: ["Brooklyn · Q4 2026", "Queens · Q1 2027", "The Bronx · Q2 2027", "Manhattan · Q3 2027"],
+  note: "Planned quarters — each borough opens once enough verified shops are on the network there.",
 };
 
 // Payments (RAG doc 07).
 export const PAYMENTS_DEMO = {
   methods: ["Apple Pay", "Google Pay", "Visa", "Mastercard", "Amex", "Discover", "Debit"],
   points: [
-    "Authorizes at booking, captures on completion",
-    "Refunds & disputes handled in-app — no chasing the shop",
-    "Card details are never stored on Otopair",
+    "A $20 hold at booking, not a charge — you pay when the job is done",
+    "A problem? Message the shop, then open a dispute in the app",
+    "Your card number never reaches Otopair",
   ],
 };
 
@@ -381,44 +408,43 @@ export const SERVICE_HISTORY_DEMO = {
   benefits: [
     "Avoids recommending services already done",
     "Sharpens time-based reminders (brake fluid, coolant)",
-    "Improves diagnostics when symptoms come up",
+    "Helps Oto scope the job when a symptom comes up",
   ],
-  reward: "Every record makes your quotes more accurate",
+  reward: "Every record makes recommendations more accurate",
 };
 
-// Quarterly check-in (RAG doc 11).
+// Quarterly check-in (RAG doc 11), as the driver app runs it: the first one
+// before a car's first booking, then a banner on the Cars tab every 90 days.
+// The question set depends on the car, so no count — and the app itself says
+// "about a minute".
 export const CHECKIN_DEMO = {
   cadence: "Every 90 days",
-  questions: [
-    "Current mileage",
-    "Services done elsewhere",
-    "Any warning lights",
-    "Anything unusual lately?",
-  ],
-  note: "A soft in-app banner — never a push, never required, ~60 seconds.",
+  banner: "Quick check-in for your car",
+  questions: ["Current mileage", "Recent service", "Warning lights"],
+  note: "About a minute. The first one comes before a car's first booking — no push notifications, no badge.",
 };
 
 // Bookings tab (RAG doc 14).
 export const BOOKINGS_DEMO = {
   tabs: [
     {
-      name: "Live Tracker",
-      desc: "Follow your car through check-in, work, and complete — no calls.",
+      name: "Bookings",
+      desc: "Every booking with its live status — confirmed, in service, ready for pickup.",
     },
     {
-      name: "Upcoming",
-      desc: "Confirmed appointments with full price breakdown + PDF receipt.",
+      name: "Quotes",
+      desc: "Tire quotes as shops respond — accept one to book it, or cancel free.",
     },
-    { name: "Quotes", desc: "Pending tire quotes as shops respond." },
+    { name: "Recommended", desc: "Work a mechanic recommended for your car." },
   ],
 };
 
 // Notifications (RAG doc 15).
 export const NOTIFICATIONS_DEMO = {
   sends: [
-    "Booking confirmation",
+    "Booking updates as the job moves",
     "Appointment reminders, when your shop sets them",
-    "Live job status updates",
+    "Approval requests — 24 hours to answer",
     "Tire quote responses",
   ],
   never: [
@@ -435,17 +461,20 @@ export const TRUST_DEMO = {
     "Hide fees",
     "Use upsells, scarcity, or countdowns",
     "Use panic or guilt language",
-    "Sell or rent your data",
+    // Privacy Policy v6.1: VIN-keyed vehicle history may be licensed;
+    // what is never sold is the person — name, contact, messages, payment.
+    "Sell your name, contact or payment details",
     "Push services your car doesn’t need",
     "Send marketing notification blasts",
   ],
 };
 
-// Scheduling-preview card content (Figma "Instant Scheduling").
+// Scheduling-preview card content (Figma "Instant Scheduling"). The same
+// sample job, shop and price as the rest of the walkthrough.
 export const SCHEDULING_PREVIEW = {
-  service: "Oil & Filter Service",
-  price: 124,
-  shop: "Precision Motors",
+  service: SAMPLE_JOB,
+  price: 312,
+  shop: "Eltingville Auto Care",
   distance: "0.8 MI",
 };
 
@@ -455,13 +484,16 @@ export const DEMO_USER_OPENER =
   "Oto, my brakes are squeaking when I slow down. Can you check shops nearby?";
 
 // One Oto line per step we transition INTO (partial — some steps push their
-// own bespoke message, e.g. the VIN decode).
+// own bespoke message, e.g. the VIN decode). These run whenever the live agent
+// can't be reached, so they follow the same rules the agent does: the
+// walkthrough is a sample, nothing is booked, no "certified" mechanics, no
+// "instant booking", and no diagnosis.
 export const OTO_LINES: Partial<Record<Exclude<OtoStep, "intro">, string>> = {
   scheduling:
-    "On it — pulling up instant scheduling with fixed pricing near you.",
+    "Here's a sample of how scheduling looks in the Otopair app — the price is locked before you book.",
   shops:
-    "Analyzing sound description… I've found 3 certified mechanics within 2 miles with instant booking available for brake pad replacement.",
-  datetime: "Great pick. Here are the open times at that shop today.",
+    "Here's how picking a shop looks in the app: each verified shop shows its own total for your car. These are sample shops — the real ones are listed at otopair.com/shops.",
+  datetime: "Next you'd pick an open time at that shop. These are sample times.",
   confirmed:
-    "Done — I've built your car in the app and locked in your booking.",
+    "That's the whole flow, as a sample — nothing was booked. In the app, the booking goes to the shop to accept, with a $20 hold on your card. Want the launch email so you can try it for real?",
 };

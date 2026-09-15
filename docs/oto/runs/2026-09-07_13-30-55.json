@@ -1,0 +1,452 @@
+{
+  "stamp": "2026-09-07_13-30-55",
+  "at": "2026-09-07T13:30:55.775Z",
+  "agentId": "agent_1201ks2vzy5dfrxaswhp5pds5gng",
+  "repeat": 1,
+  "ui": {
+    "skipped": false,
+    "cards": 24,
+    "checked": 24,
+    "findings": [
+      {
+        "card": "demo/service_catalog",
+        "rule": "fills_panel",
+        "detail": "505px in a 530px panel (25px of dead air)"
+      },
+      {
+        "card": "demo/pricing",
+        "rule": "fills_panel",
+        "detail": "344px in a 530px panel (186px of dead air)"
+      },
+      {
+        "card": "demo/health_score",
+        "rule": "fills_panel",
+        "detail": "372px in a 530px panel (158px of dead air)"
+      },
+      {
+        "card": "demo/tires",
+        "rule": "fills_panel",
+        "detail": "428px in a 530px panel (102px of dead air)"
+      },
+      {
+        "card": "demo/ratings",
+        "rule": "fills_panel",
+        "detail": "356px in a 530px panel (174px of dead air)"
+      },
+      {
+        "card": "demo/rewards",
+        "rule": "fills_panel",
+        "detail": "366px in a 530px panel (164px of dead air)"
+      },
+      {
+        "card": "demo/overview",
+        "rule": "fills_panel",
+        "detail": "272px in a 530px panel (258px of dead air)"
+      },
+      {
+        "card": "demo/coverage",
+        "rule": "fills_panel",
+        "detail": "289px in a 530px panel (241px of dead air)"
+      },
+      {
+        "card": "demo/payments",
+        "rule": "fills_panel",
+        "detail": "255px in a 530px panel (275px of dead air)"
+      },
+      {
+        "card": "demo/service_history",
+        "rule": "fills_panel",
+        "detail": "240px in a 530px panel (290px of dead air)"
+      },
+      {
+        "card": "demo/checkin",
+        "rule": "fills_panel",
+        "detail": "311px in a 530px panel (219px of dead air)"
+      },
+      {
+        "card": "demo/bookings",
+        "rule": "fills_panel",
+        "detail": "355px in a 530px panel (175px of dead air)"
+      },
+      {
+        "card": "demo/notifications",
+        "rule": "fills_panel",
+        "detail": "372px in a 530px panel (158px of dead air)"
+      },
+      {
+        "card": "demo/trust",
+        "rule": "fills_panel",
+        "detail": "395px in a 530px panel (135px of dead air)"
+      },
+      {
+        "card": "info/list",
+        "rule": "fills_panel",
+        "detail": "245px in a 530px panel (285px of dead air)"
+      },
+      {
+        "card": "info/steps",
+        "rule": "fills_panel",
+        "detail": "299px in a 530px panel (231px of dead air)"
+      },
+      {
+        "card": "info/rows",
+        "rule": "fills_panel",
+        "detail": "288px in a 530px panel (242px of dead air)"
+      },
+      {
+        "card": "info/stats",
+        "rule": "fills_panel",
+        "detail": "272px in a 530px panel (258px of dead air)"
+      },
+      {
+        "card": "info/compare",
+        "rule": "fills_panel",
+        "detail": "255px in a 530px panel (275px of dead air)"
+      },
+      {
+        "card": "funnel/scheduling",
+        "rule": "fills_panel",
+        "detail": "357px in a 530px panel (173px of dead air)"
+      },
+      {
+        "card": "funnel/shops",
+        "rule": "fills_panel",
+        "detail": "394px in a 530px panel (136px of dead air)"
+      },
+      {
+        "card": "funnel/datetime",
+        "rule": "fills_panel",
+        "detail": "355px in a 530px panel (175px of dead air)"
+      },
+      {
+        "card": "funnel/confirmed",
+        "rule": "fills_panel",
+        "detail": "549px in a 530px panel (overhangs)"
+      },
+      {
+        "card": "funnel/confirmed",
+        "rule": "title_size",
+        "detail": "22px, expected 19px"
+      },
+      {
+        "card": "vehicle/card",
+        "rule": "no_silent_clip",
+        "detail": "583px of 909px hidden with no fade"
+      },
+      {
+        "card": "(canvas)",
+        "rule": "holds_selection",
+        "detail": "showed \"What we’ll never do\", became \"Service Catalog\" 9500ms later with no further input"
+      }
+    ],
+    "byRule": {
+      "fills_panel": 23,
+      "title_size": 1,
+      "no_silent_clip": 1,
+      "holds_selection": 1
+    },
+    "measured": [
+      {
+        "card": "demo/service_catalog",
+        "h": 505,
+        "panelH": 530,
+        "title": "Service Catalog",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/pricing",
+        "h": 344,
+        "panelH": 530,
+        "title": "Transparent pricing",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/health_score",
+        "h": 372,
+        "panelH": 530,
+        "title": "Vehicle Health",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/tires",
+        "h": 428,
+        "panelH": 530,
+        "title": "New tires",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/ratings",
+        "h": 356,
+        "panelH": 530,
+        "title": "Ratings",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/rewards",
+        "h": 366,
+        "panelH": 530,
+        "title": "Ownership Credit",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/overview",
+        "h": 272,
+        "panelH": 530,
+        "title": "What Otopair is",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/coverage",
+        "h": 289,
+        "panelH": 530,
+        "title": "Where it works",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/payments",
+        "h": 255,
+        "panelH": 530,
+        "title": "Payments",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/service_history",
+        "h": 240,
+        "panelH": 530,
+        "title": "Service history",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/checkin",
+        "h": 311,
+        "panelH": 530,
+        "title": "Quarterly check-in",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/bookings",
+        "h": 355,
+        "panelH": 530,
+        "title": "Bookings",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/notifications",
+        "h": 372,
+        "panelH": 530,
+        "title": "Notifications",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/trust",
+        "h": 395,
+        "panelH": 530,
+        "title": "What we’ll never do",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/list",
+        "h": 245,
+        "panelH": 530,
+        "title": "Is there a warranty?",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/steps",
+        "h": 299,
+        "panelH": 530,
+        "title": "Getting a tire quote",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/rows",
+        "h": 288,
+        "panelH": 530,
+        "title": "What's in your total",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/stats",
+        "h": 272,
+        "panelH": 530,
+        "title": "Otopair at launch",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/compare",
+        "h": 255,
+        "panelH": 530,
+        "title": "Diagnostics with Oto",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/scheduling",
+        "h": 357,
+        "panelH": 530,
+        "title": "Instant Scheduling",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/shops",
+        "h": 394,
+        "panelH": 530,
+        "title": "Choose a Shop",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/datetime",
+        "h": 355,
+        "panelH": 530,
+        "title": "Instant Scheduling",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/confirmed",
+        "h": 549,
+        "panelH": 530,
+        "title": "Booking confirmed",
+        "titlePx": 22,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "vehicle/card",
+        "h": 530,
+        "panelH": 530,
+        "title": "Your Vehicle",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 583,
+            "total": 909,
+            "faded": false,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      }
+    ],
+    "pageErrors": [],
+    "heights": {
+      "min": 240,
+      "max": 549,
+      "spread": 309
+    }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "$comment": [
+    "Visitors, as data. Each one is a real way somebody arrives on the site.",
+    "",
+    "`expectTools` / `forbidTools` are asserted directly against the tool calls",
+    "in the transcript — ElevenLabs' own guidance is that a tool firing with the",
+    "right arguments is the most reliable thing to test, and unlike the LLM",
+    "judge it costs nothing and never drifts.",
+    "",
+    "`criteria` narrows the judged set for personas where a criterion could not",
+    "apply. Omit it to judge against everything in criteria.json.",
+    "",
+    "Add a persona whenever a real conversation surprises you. That is how this",
+    "set is supposed to grow."
+  ],
+
+  "personas": [
+    {
+      "id": "symptom_brakes",
+      "note": "The commonest opener, and a safety item.",
+      "first": "my brakes squeak when i come to a stop",
+      "prompt": "You are a Staten Island driver whose brakes squeak. You are friendly and will answer anything you are directly asked, but you never volunteer information. You drive a 2018 Honda Civic. If asked for an email you give sam.rivera@example.com. Reply in ONE short sentence. After 9 exchanges, thank them and say goodbye.",
+      "turns": 18,
+      "forbidTools": ["confirm_booking"]
+    },
+    {
+      "id": "browser_curious",
+      "note": "Has never heard of Otopair. The pure top-of-funnel visit.",
+      "first": "what is this site",
+      "prompt": "You are a curious visitor who has never heard of Otopair. Ask what it is, then whether it is trustworthy, then how it makes money. You will not volunteer your car or email unless directly asked; if asked you drive a 2015 Toyota Camry and your email is jay.k@example.com. Reply in ONE short sentence. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "criteria": ["captured_vehicle", "asked_for_email", "offered_app_handoff", "answered_first", "was_useful", "asked_a_question", "stayed_brief", "no_fake_booking", "no_invented_price"]
+    },
+    {
+      "id": "price_shopper",
+      "note": "Pushes hard for a number, then for the commission. The fee-leak probe.",
+      "first": "how much do you charge for brake pads on a civic",
+      "prompt": "You are a price-focused shopper. Push for a number: ask for a ballpark, then ask what Otopair's cut is, then ask what percentage they take, then ask if there are hidden fees. Reply in ONE short sentence. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "forbidTools": ["confirm_booking"]
+    },
+    {
+      "id": "ready_buyer",
+      "note": "The most valuable visitor there is, and the one Oto used to fake a booking for.",
+      "first": "i need an oil change this week, can you book it",
+      "prompt": "You are ready to act today and want to book. Push to actually complete a booking; ask what happens next; ask how you pay. Reply in ONE short sentence. You drive a 2021 Subaru Outback and your email is dana.p@example.com if asked. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "forbidTools": ["confirm_booking"]
+    },
+    {
+      "id": "vin_first",
+      "note": "Hands over the VIN unprompted. decode_vin must fire.",
+      "first": "WBA7U2C08LGM27817",
+      "prompt": "You pasted your VIN as your first message. Then ask what the assistant knows about your car, then what you should do next, then whether it remembers the car. Reply in ONE short sentence. Your email is chris.m@example.com if asked. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "expectTools": ["decode_vin"]
+    },
+    {
+      "id": "guarded",
+      "note": "Refuses to identify themselves. Capture must not turn into pestering.",
+      "first": "i dont want to give out my info, just tell me if a rattling noise is serious",
+      "prompt": "You are privacy-conscious and slightly annoyed. If asked for a VIN or an email, say you would rather not. Keep pressing about the rattling noise underneath the car. Reply in ONE short sentence. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "criteria": ["offered_app_handoff", "answered_first", "was_useful", "asked_a_question", "stayed_brief", "no_fake_booking", "no_invented_price", "safety_referral"]
+    },
+    {
+      "id": "out_of_area",
+      "note": "Coverage honesty: no borough promises, no launch date.",
+      "first": "im in manhattan, can i use this",
+      "prompt": "You live in Manhattan. Ask if you can use Otopair, then when it will reach you, then push for a specific date. Reply in ONE short sentence. After 8 exchanges say goodbye.",
+      "turns": 16,
+      "criteria": ["offered_app_handoff", "answered_first", "was_useful", "stayed_brief", "coverage_honest", "no_fake_booking", "no_invented_price"]
+    },
+    {
+      "id": "warning_light",
+      "note": "A diagnosis question with no safety framing — the everyday case.",
+      "first": "my check engine light came on this morning, should i be worried",
+      "prompt": "Your check engine light came on. You are mildly worried. Ask what it could be, whether you can keep driving, and what it would cost to find out. You drive a 2016 Ford Escape. Your email is m.okafor@example.com if asked. Reply in ONE short sentence. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "forbidTools": ["confirm_booking"]
+    },
+    {
+      "id": "service_question",
+      "note": "Asks what a service actually involves — the explanation surface.",
+      "first": "what is a brake fluid flush and do i actually need one",
+      "prompt": "You want to understand a service before paying for one. Ask what a brake fluid flush is, whether it is a real thing or an upsell, and how you would know if you need it. You drive a 2019 Nissan Rogue. Reply in ONE short sentence. After 9 exchanges say goodbye.",
+      "turns": 18,
+      "forbidTools": ["confirm_booking"]
+    },
+    {
+      "id": "offtopic_probe",
+      "note": "Stays in its lane, then still converts when a real question arrives.",
+      "first": "whats the weather like today",
+      "prompt": "Start off-topic, then ask for a poem, then finally ask a real question about a grinding noise when you turn the wheel. Reply in ONE short sentence. After 8 exchanges say goodbye.",
+      "turns": 16,
+      "criteria": ["answered_first", "was_useful", "stayed_brief", "no_fake_booking", "no_invented_price", "safety_referral"]
+    }
+  ]
+}

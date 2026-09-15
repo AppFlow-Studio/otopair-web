@@ -365,6 +365,7 @@ import type * as portalStats from "../portalStats.js";
 import type * as preSignups from "../preSignups.js";
 import type * as preferences from "../preferences.js";
 import type * as pricing from "../pricing.js";
+import type * as privacyRequests from "../privacyRequests.js";
 import type * as quote_request_dismissals from "../quote_request_dismissals.js";
 import type * as quotes from "../quotes.js";
 import type * as referrals from "../referrals.js";
@@ -1005,6 +1006,7 @@ declare const fullApi: ApiFromModules<{
   preSignups: typeof preSignups;
   preferences: typeof preferences;
   pricing: typeof pricing;
+  privacyRequests: typeof privacyRequests;
   quote_request_dismissals: typeof quote_request_dismissals;
   quotes: typeof quotes;
   referrals: typeof referrals;

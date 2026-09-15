@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, Sparkles, X } from "lucide-react";
-import { CARD } from "./demo-cards";
+import { OtoCard } from "./oto-card";
 import type { InfoCardPayload } from "./info-card";
 import { Step } from "./shared";
 
@@ -115,16 +115,10 @@ function CompareCol({
 export function DynamicCard({ payload }: { payload: InfoCardPayload }) {
   const { title, summary, layout, items, rows, stats, pros, cons, footnote } = payload;
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            {title}
-          </h3>
-        </div>
-        {summary && <p className="mt-1 text-[12px] leading-snug text-[#1a1a1a]/55">{summary}</p>}
-      </Step>
+    // The agent composes this card's content at runtime, so it is the ONE
+    // card whose length nobody can eyeball in advance — which is exactly why
+    // it must inherit the shell's cap and its fade at the cut.
+    <OtoCard icon={Sparkles} title={title} subtitle={summary}>
 
       {layout === "list" && items && <Bullets items={items} />}
       {layout === "steps" && items && <Bullets items={items} ordered />}
@@ -142,6 +136,6 @@ export function DynamicCard({ payload }: { payload: InfoCardPayload }) {
           <p className="mt-4 text-[11px] leading-relaxed text-[#1a1a1a]/45">{footnote}</p>
         </Step>
       )}
-    </div>
+    </OtoCard>
   );
 }

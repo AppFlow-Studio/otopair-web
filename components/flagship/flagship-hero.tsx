@@ -26,7 +26,9 @@ import {
   VehicleCard,
 } from "./cards";
 import { DemoCard } from "./demo-cards";
+import { CardSurfaceProvider } from "./oto-card";
 import { DynamicCard } from "./dynamic-card";
+import { ServiceCard, SymptomCard } from "./explainer-cards";
 import DebugTriggers from "./debug-triggers"; // TEMP — remove with debug-triggers.tsx
 import { useOtoAgent, type OtoAgent } from "./use-oto-agent";
 
@@ -163,10 +165,16 @@ function HeroInner() {
 
   // The right "canvas" panel — Oto's screen. Defaults to the schedule preview
   // and swaps to whatever Oto is currently demonstrating.
-  const rightKey = oto.dynamicCard
-    ? `dynamic:${oto.dynamicCard.title}`
-    : oto.demoFeature ?? (oto.step === "intro" ? "schedule" : oto.step);
+  const rightKey = oto.symptomCard
+    ? `symptom:${oto.symptomCard.id}`
+    : oto.serviceCard
+      ? `service:${oto.serviceCard.service}`
+      : oto.dynamicCard
+        ? `dynamic:${oto.dynamicCard.title}`
+        : oto.demoFeature ?? (oto.step === "intro" ? "schedule" : oto.step);
   const renderRightCard = () => {
+    if (oto.symptomCard) return <SymptomCard symptom={oto.symptomCard} />;
+    if (oto.serviceCard) return <ServiceCard service={oto.serviceCard} />;
     if (oto.dynamicCard) return <DynamicCard payload={oto.dynamicCard} />;
     if (oto.demoFeature) return <DemoCard feature={oto.demoFeature} />;
     if (oto.step === "vehicle" && oto.vehicle)
@@ -203,6 +211,8 @@ function HeroInner() {
     return null;
   };
   const hasCard =
+    oto.symptomCard !== null ||
+    oto.serviceCard !== null ||
     oto.dynamicCard !== null ||
     oto.demoFeature !== null ||
     oto.step === "vehicle" ||
@@ -493,7 +503,7 @@ function HeroInner() {
               >
                 {/* Audio-reactive ring — pulses with Oto's voice while it narrates. */}
                 <motion.div
-                  className="relative w-full rounded-[22px]"
+                  className="relative h-full w-full rounded-[22px]"
                   style={reduce ? undefined : { boxShadow: canvasShadow, scale: canvasScale }}
                 >
                   {/* Quick crossfade between cards — each card runs its own
@@ -505,9 +515,17 @@ function HeroInner() {
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.99 }}
                       transition={{ duration: 0.22, ease: "easeOut" }}
-                      className="w-full"
+                      className="h-full w-full"
                     >
-                      {renderRightCard()}
+                      {/* "panel": the card fills this fixed-height frame and
+                          scrolls inside itself, so the canvas stops
+                          re-centring every time Oto shows something new. The
+                          mobile copy below stays "inline" — there the card is
+                          one item in a scrolling transcript with no height of
+                          its own. */}
+                      <CardSurfaceProvider surface="panel">
+                        {renderRightCard()}
+                      </CardSurfaceProvider>
                     </motion.div>
                   </AnimatePresence>
                 </motion.div>

@@ -62,7 +62,7 @@ export default function ApplyPage() {
             Sign in to your dashboard
           </a>
           . Not sure yet? The <a href="/for-shops" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">for-shops tour</a> shows the dashboard page by page, and{" "}
-          <a href="/how-shops-are-verified" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">how shops are verified</a> lists what the review checks.
+          <a href="/trust" className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]">how shops are verified</a> lists what the review checks.
         </p>
       </Reveal>
     </PageShell>

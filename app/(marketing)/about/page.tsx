@@ -25,7 +25,7 @@ export const metadata: Metadata = {
  * paragraph as a self-contained statement of what Otopair is. Company facts
  * come from lib/site.ts; every product claim is one the product enforces
  * and is stated the same way on the page that owns it (trust-and-safety,
- * how-shops-are-verified, the cancellation policy).
+ * /trust, /cancellation).
  *
  * Two product objects: the same booking as the driver and the shop see it,
  * and the provenance card for the vehicle-data asset. Everything else is
@@ -79,7 +79,7 @@ const RULES: { rule: string; how: string }[] = [
   },
   {
     rule: "No fee is hidden, and nothing is sold on urgency.",
-    how: "The total includes parts, labor, tax and Otopair’s service fee. No upsells, no countdowns, no scarcity, no marketing blasts, and your data is never sold or rented.",
+    how: "The total includes parts, labor, tax and Otopair’s service fee. No upsells, no countdowns, no scarcity, no marketing blasts, and your name, contact details, messages and payment details are never sold or shared.",
   },
 ];
 
@@ -89,7 +89,7 @@ const NOT: { claim: string; body: string; href: string; label: string }[] = [
   {
     claim: "Not a garage.",
     body: "The shop does the repair, sets the price and owns the relationship with you. Otopair verifies the shop, locks the price and keeps the record.",
-    href: "/how-shops-are-verified",
+    href: "/trust",
     label: "The verification standard",
   },
   {
@@ -107,7 +107,7 @@ const NOT: { claim: string; body: string; href: string; label: string }[] = [
   {
     claim: "Not a licence or insurance check.",
     body: "Verified means Otopair reviewed and approved the shop. It does not certify licences, insurance or mechanic credentials, and the standard says so in full.",
-    href: "/how-shops-are-verified",
+    href: "/trust",
     label: "What is not checked",
   },
   {
@@ -438,7 +438,7 @@ export default function AboutPage() {
                 <p>
                   Verification is Otopair&rsquo;s own approval and nothing more. It does not check licences beyond the
                   New York DMV inspection-station licence, does not verify insurance or mechanic certifications, and
-                  does not include an in-person visit. <Link href="/how-shops-are-verified">The full standard</Link>{" "}
+                  does not include an in-person visit. <Link href="/trust">The full standard</Link>{" "}
                   says exactly what is and is not checked; shops apply at <Link href="/apply">otopair.com/apply</Link>{" "}
                   with no subscription and no setup fee.
                 </p>

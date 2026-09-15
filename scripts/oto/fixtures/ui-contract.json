@@ -1,0 +1,66 @@
+{
+  "$comment": [
+    "One contract for every component an Oto tool call renders.",
+    "",
+    "The rules are deliberately few and all of them are things that were",
+    "actually broken on 2026-09-07, not aspirations:",
+    "  fills_panel    — the card fills the fixed canvas panel, so the panel",
+    "                   stops re-centring on every swap. Was 241-549px.",
+    "  has_title      — the card says what it is. RatingsCard did not.",
+    "  has_icon       — service catalog, pricing and tires had lost theirs.",
+    "  title_size     — 19px everywhere; the receipt had drifted to 22px.",
+    "  no_silent_clip — anything scrolled out of view fades at the cut, so",
+    "                   hidden content reads as hidden. Service Catalog hid a",
+    "                   whole category behind an invisible fold.",
+    "  holds_selection— the canvas still shows what it was told to show after",
+    "                   the connect-timeout window. Regression test for the",
+    "                   fallback that used to overwrite an explicit choice.",
+    "",
+    "`trigger` is the dev-panel button label (components/flagship/",
+    "debug-triggers.tsx). Adding a card there is what puts it under test."
+  ],
+
+  "panelHeight": 530,
+  "titlePx": 19,
+  "settleMs": 1600,
+  "ownershipWaitMs": 9500,
+
+  "cards": [
+    { "id": "demo/service_catalog", "trigger": "service catalog" },
+    { "id": "demo/pricing", "trigger": "pricing" },
+    { "id": "demo/health_score", "trigger": "health score" },
+    { "id": "demo/tires", "trigger": "tires" },
+    { "id": "demo/ratings", "trigger": "ratings" },
+    { "id": "demo/rewards", "trigger": "rewards" },
+    { "id": "demo/overview", "trigger": "overview" },
+    { "id": "demo/coverage", "trigger": "coverage" },
+    { "id": "demo/payments", "trigger": "payments" },
+    { "id": "demo/service_history", "trigger": "service history" },
+    { "id": "demo/checkin", "trigger": "checkin" },
+    { "id": "demo/bookings", "trigger": "bookings" },
+    { "id": "demo/notifications", "trigger": "notifications" },
+    { "id": "demo/trust", "trigger": "trust" },
+    { "id": "info/list", "trigger": "list" },
+    { "id": "info/steps", "trigger": "steps" },
+    { "id": "info/rows", "trigger": "rows" },
+    { "id": "info/stats", "trigger": "stats" },
+    { "id": "info/compare", "trigger": "compare" },
+    { "id": "funnel/scheduling", "trigger": "scheduling" },
+    { "id": "funnel/shops", "trigger": "shops" },
+    { "id": "funnel/datetime", "trigger": "datetime" },
+    {
+      "id": "funnel/confirmed",
+      "trigger": "confirmed",
+      "allowTitlePx": 22,
+      "why": "Deliberate exception: the terminal celebration, with a centred check mark and a larger title, rather than another explainer. Declared here so the difference stays a decision instead of becoming drift. This card is also slated for replacement — nothing can actually be booked from the website."
+    },
+    { "id": "vehicle/card", "trigger": "decode VIN", "slow": true },
+
+    { "id": "service/oil_change", "trigger": "oil change" },
+    { "id": "service/brake_pads", "trigger": "brake pad replacement" },
+    { "id": "service/brake_fluid", "trigger": "brake fluid flush" },
+    { "id": "symptom/brake_squeal", "trigger": "squealing when you brake" },
+    { "id": "symptom/grinding", "trigger": "grinding when you brake" },
+    { "id": "symptom/check_engine", "trigger": "check engine light" }
+  ]
+}

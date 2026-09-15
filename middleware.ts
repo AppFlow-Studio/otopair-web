@@ -17,6 +17,14 @@ const isPublicRoute = createRouteMatcher([
   "/llms.txt",
   "/privacy",
   "/terms",
+  "/shop-portal-terms",
+  // Counsel's site policy pages (2026-09-15). The URLs they replace
+  // (/cancellation-policy, /warranty, /how-shops-are-verified) redirect in
+  // next.config.ts, which runs before middleware.
+  "/cancellation",
+  "/warranties",
+  "/trust",
+  "/accessibility",
   "/contact",
   "/sign-in(.*)",
   "/sign-up(.*)",

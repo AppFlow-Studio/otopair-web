@@ -17,6 +17,7 @@ import {
 const FOOTER_LINKS = [
   { href: "/privacy", label: "Privacy" },
   { href: "/terms", label: "Terms" },
+  { href: "/shop-portal-terms", label: "Shop portal terms" },
   { href: "/contact", label: "Contact" },
 ] as const;
 

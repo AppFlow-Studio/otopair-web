@@ -104,10 +104,10 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/services", changeFrequency: "monthly", priority: 0.8 },
   // Tier 4 — trust, conversion, compliance
   { path: "/trust-and-safety", changeFrequency: "monthly", priority: 0.6 },
-  { path: "/how-shops-are-verified", changeFrequency: "monthly", priority: 0.6 },
+  { path: "/trust", changeFrequency: "monthly", priority: 0.6 },
   { path: "/vehicle-health-score", changeFrequency: "monthly", priority: 0.6 },
-  { path: "/warranty", changeFrequency: "yearly", priority: 0.4 },
-  { path: "/cancellation-policy", changeFrequency: "yearly", priority: 0.5 },
+  { path: "/warranties", changeFrequency: "yearly", priority: 0.4 },
+  { path: "/cancellation", changeFrequency: "yearly", priority: 0.5 },
   { path: "/security", changeFrequency: "yearly", priority: 0.4 },
   { path: "/accessibility", changeFrequency: "yearly", priority: 0.3 },
   { path: "/careers", changeFrequency: "monthly", priority: 0.3 },

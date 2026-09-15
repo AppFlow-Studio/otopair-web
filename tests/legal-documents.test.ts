@@ -14,6 +14,7 @@ import {
 } from "@/lib/legal";
 import { SITE_POLICY_FILE, assertPublishable, blockText, readLegalDocument, readSitePolicyPage } from "@/lib/legal-content";
 import { fillTokens, parseLegalMarkdown, splitSitePolicyPages, type LegalBlock } from "@/lib/legal-markdown";
+import { PUBLIC_ROUTES } from "@/lib/site";
 
 const read = (file: string) => readFileSync(join(process.cwd(), "content", "legal", file), "utf8");
 const DOCS = [
@@ -269,9 +270,13 @@ describe("the pages the site policy pages replace", () => {
     }
   });
 
-  it("are gone from the app", () => {
-    for (const source of Object.keys(OLD_TO_NEW)) {
+  it("are gone from the app and the sitemap; the new pages are in it", () => {
+    const paths = PUBLIC_ROUTES.map((r) => r.path);
+    for (const [source, destination] of Object.entries(OLD_TO_NEW)) {
       expect(existsSync(join(process.cwd(), "app", "(marketing)", source.slice(1)))).toBe(false);
+      expect(paths).not.toContain(source);
+      expect(paths).toContain(destination);
     }
+    expect(paths).toContain("/accessibility");
   });
 });

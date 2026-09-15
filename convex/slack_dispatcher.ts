@@ -125,6 +125,29 @@ export const recordSlackResult = internalMutation({
   },
 });
 
+/**
+ * Direct send test — bypasses the outbox, templates, and stale guard so you can
+ * confirm the provider + webhook actually deliver:
+ *   npx convex run slack_dispatcher:sendTestSlack '{}'
+ *   npx convex run slack_dispatcher:sendTestSlack '{"text":"hello from otopair"}'
+ * Returns { status: "sent" | "stubbed" | "failed", ... }. "stubbed" means no
+ * SLACK_WEBHOOK_URL / bot token is configured on this deployment.
+ */
+export const sendTestSlack = internalAction({
+  args: { text: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<any> => {
+    const text =
+      args.text ??
+      ":white_check_mark: Otopair Slack test — if you can read this, the dispatcher + webhook work.";
+    const result = await ctx.runAction((internal as any).lib.slack_provider.sendSlack, {
+      text,
+      category: "test",
+    });
+    console.log("[slack_dispatcher] sendTestSlack result:", JSON.stringify(result));
+    return result;
+  },
+});
+
 export const dispatchPendingSlack = internalAction({
   args: {},
   handler: async (ctx) => {

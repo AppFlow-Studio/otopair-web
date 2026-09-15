@@ -25,8 +25,22 @@
 - 84 pages rendered and checked by four parallel audits: 16 KB docs corrected, 5 added (17–21), prompt and cards aligned (`9060fab`).
 - 47 questions written from those pages, asked through the localhost site chat (`scripts/oto/qa.mjs`). Oto's replies were swapping the card the agent had chosen, and bubbles repeated; both fixed in `39a61f8`. Three wording slips fixed in the prompt and KB docs 04/18 (`e969361`).
 - Final run of all 47: 0 answers contradicting the site, 0 exact duplicate bubbles, 2 answers re-worded twice, 1 must-not flag cleared on review (a correct "no separate rotor resurfacing service").
-- Open decisions from the audit, for Waleed: self_harm moderation ends the chat before the 988 line can be given; whether Oto may say how Otopair makes money (a service fee inside the total, as /about says); the "Tax + service fee $32" sample line; typical job times vs the /trust-and-safety sentence. Plus 25 site-copy bugs, worst first: "bookable today" before launch, and one warning light mapped to one repair. None of these block the PR.
-**Waleed's actions:** rotate the ElevenLabs key; set Vercel production env (§5).
+- Decisions Waleed took on 2026-09-15: self-harm out of content moderation so the 988 line gets through; Oto may give /about's answer on how Otopair makes money; the "$32" sample line stays. Site copy is out of scope for this branch ("only Oto changes").
+
+**2026-09-15 — Oto only (`5899fe7`…`376ddc0`):**
+- **Checked against the driver app** (`Desktop\otopair-1` + Convex): rewards are disabled for launch (no gift card, no auto-apply, no record-upload credit); the first quarterly check-in gates a car's first booking, later ones are a Cars-tab banner of 6–9 questions ("about a minute"); every notification category can be turned off; Bookings / Quotes / Recommended with history under Past Services; no Re-Book, no one-tap Home switcher, no "Best value" badge. KB docs 03/08/10–15/19, the cards and the demo lines now say what the app does.
+- **Production would never have gone live:** `agentConfigured` read `NEXT_PUBLIC_ELEVENLABS_AGENT_ID`, but §5 sets only server-side keys. Fixed — the private route is always tried.
+- **A refused session got a card and no words** (`startSession()` never rejects in `@elevenlabs/react` 1.6.4). Fixed — `onError` answers queued messages with the scripted demo in ~1s.
+- Reworded repeat bubbles are merged in place (`oto-chat-text.ts`, unit-tested on real replies); a first-message VIN no longer shows twice; the safety net waits 3.5s so the agent's card lands first.
+- **Model: gpt-5.6-luna** (no reasoning), chosen side by side through the site chat over gemini-3.8-flash and claude-haiku-4-5; gemini-2.5-flash shuts down 2026-10-20. The prompt now stops it ending the call after a self-harm mention.
+- **Simulated visitors:** `scripts/oto/chat-sim.mjs`, 8 multi-turn scenarios. Final run 8/8 with no failures or warnings; all 47 site questions live, a card on every one, no repeats; one invented claim ("reviews shops in person") fixed in doc 17.
+
+**Blocking go-live:**
+1. **ElevenLabs credits.** The account is on Starter (30,000 credits/month, no overage) and is at 0 until 2026-10-10 — testing used it up. Oto can't hold a conversation until the plan is upgraded or credits are added; until then the site answers with the scripted demo. Starter can't carry a public site agent anyway.
+2. Rotate the ElevenLabs key; set Vercel production `ELEVENLABS_API_KEY` + `ELEVENLABS_AGENT_ID` (server-side only — no `NEXT_PUBLIC_` variable needed any more) and redeploy (§5).
+
+**Site copy that now disagrees with the app (not changed here):** /oto promises gift cards and automatic credit; /vehicle-health-score shows "three questions · about 30 seconds" and an estimated score; plus the 25 site bugs from the audit.
+**Waleed's actions:** the two blockers above.
 **Left for the nav workstream:** `nav-menu.ts`, `pill-nav.tsx`, `page-shell.tsx`, `contact-client.tsx` stay uncommitted (session "App navigation for new pages/routes").
 
 > **For the session running this plan:** read it end to end before acting.

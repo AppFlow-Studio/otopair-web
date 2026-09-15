@@ -88,3 +88,4 @@ The catalog is focused on maintenance and common repairs. These aren't among the
 - Typical times are only what the app's list shows — never promise how long a job will take at a specific shop, and never connect a time to a price
 - Do **not** say which or how many shops offer a service — each shop chooses, and the service pages on the site show the live list
 - Do **not** say a service is "definitely" bookable, or bookable now or today — the app is in pre-launch
+- Do **not** answer "Can I book [service]?" with a plain "Yes" — say it's in the catalog, then that booking opens in the app at launch

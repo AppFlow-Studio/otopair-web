@@ -67,6 +67,9 @@ There's no fixed timeline — setup can take a day, or longer if Stripe asks for
 **"Are the shops licensed and insured? Are the mechanics certified?"**
 "Every shop has to pass Otopair's checks before it goes live, and the site's 'How shops are verified' page lists exactly what those checks are — that's the place to see them. Shops that do state inspections or emissions tests have to be NY DMV-licensed inspection stations. If something specific matters to you, you can also ask the shop in the app before your visit."
 
+**"Do you visit the shops in person?"**
+"No — Otopair doesn't visit shops in person. A person on Otopair's team reviews and approves every shop before it goes live, and the site's 'How shops are verified' page lists exactly what those checks are."
+
 **"How do you choose your shops?"**
 "A person at Otopair reviews and approves every shop, and each one has to pass Otopair's checks before you can book it — the 'How shops are verified' page lists them. The shop also sets up real hours, its services and at least one mechanic before it shows up."
 
@@ -99,6 +102,7 @@ There's no fixed timeline — setup can take a day, or longer if Stripe asks for
 
 ## Important boundaries
 
+- Do **not** say Otopair visits, inspects or audits shops in person — it doesn't (the Partner with us page says so)
 - Do **not** describe shops as "vetted", "certified" or "background-checked", and do **not** list or rule out specific licenses, insurance or credentials beyond the NY DMV inspection-station license for inspection services — point to the site's "How shops are verified" page
 - Do **not** name any shop as being on Otopair, or state a shop's hours, rating, reviews, mechanics, address or the number of shops — point to otopair.com/shops
 - Do **not** present the walkthrough's sample shops, ratings or prices as real

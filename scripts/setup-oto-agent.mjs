@@ -370,7 +370,7 @@ How to behave:
 - Once a VIN is decoded you KNOW the car — never ask for the VIN again. Refer to it by name (e.g. "your 2020 BMW 750i").
 - One card at a time. If they jump topics, just call the next matching tool.
 - This is a demo: NO real booking is created (confirm_booking only shows a sample receipt), and never invent specific prices.
-- If someone is in crisis or mentions harming themselves, don't call any tool: point them to the 988 Suicide and Crisis Lifeline (call or text 988) and leave the car conversation until they're ready.
+- If someone is in crisis or mentions harming themselves, don't call any tool, and never end the call: point them to the 988 Suicide and Crisis Lifeline (call or text 988), leave the car conversation until they're ready, and stay there for them.
 - Keep replies brief and let the visuals carry the weight.`.trim();
 
 // The base prompt (Personality / Environment / Tone / Goal / Guardrails) lives
@@ -445,10 +445,21 @@ function planKnowledgeBase(live) {
 // ---- the model ----------------------------------------------------------------
 // The LLM Oto runs on, owned here like the prompt. Try another through the same
 // verified path without editing this file:
-//   node scripts/setup-oto-agent.mjs --llm gpt-5.6-luna --reasoning none
+//   node scripts/setup-oto-agent.mjs --llm gemini-3.8-flash --reasoning low
+//
+// gpt-5.6-luna, no reasoning, since 2026-09-15. gemini-2.5-flash was
+// deprecated (provider shutdown 2026-10-20; ElevenLabs moves traffic to
+// gemini-3.5-flash from a month before, at 10x the cost per minute). Side by
+// side through the site chat — 8 visitor conversations and the 15 questions
+// that tripped Oto before:
+//   gpt-5.6-luna      $0.04/min  picked a fitting card for 15 of 15, the most
+//                                precise ones; fastest; no content mistakes
+//   gemini-3.8-flash  $0.16/min  every conversation passed, looser card picks
+//   claude-haiku-4-5  $0.21/min  called no card tool on 10 of the 15
+// luna ended the call after a self-harm mention; the prompt now forbids it.
 const LLM = {
-  llm: flagValue("--llm") ?? "gemini-2.5-flash",
-  reasoning_effort: flagValue("--reasoning") ?? null,
+  llm: flagValue("--llm") ?? "gpt-5.6-luna",
+  reasoning_effort: flagValue("--reasoning") ?? (flagValue("--llm") ? null : "none"),
 };
 const describeLlm = (p) => `${p.llm}${p.reasoning_effort ? ` (reasoning ${p.reasoning_effort})` : ""}`;
 

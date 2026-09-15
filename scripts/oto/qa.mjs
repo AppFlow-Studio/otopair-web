@@ -15,7 +15,7 @@
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
-import { agentRepeated, launchBrowser, openChat, repeatsVerbatim } from "./site-chat.mjs";
+import { agentRepeated, checkCredits, launchBrowser, openChat, repeatsVerbatim } from "./site-chat.mjs";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -36,6 +36,7 @@ let questions = files.flatMap((f) =>
 );
 if (ONLY > 0) questions = questions.slice(0, ONLY);
 
+await checkCredits();
 const browser = await launchBrowser();
 const results = [];
 let next = 0;
@@ -54,7 +55,9 @@ async function ask(q) {
       answer: turn.answer,
       card: turn.card,
       tools: turn.tools.map((t) => t.name),
-      live: chat.log.credentialStatus === 200,
+      // A session credential AND words from the agent: a refused session still
+      // gets a 200 from the route, then the site's scripted demo answers.
+      live: chat.log.credentialStatus === 200 && turn.agentTexts.length > 0,
       must_not_say_hits: (q.must_not_say ?? []).filter((p) => p && lower.includes(String(p).toLowerCase())),
       // On screen: the same paragraph shown twice in a row.
       repeated_bubble: repeatsVerbatim(turn.bubbles),

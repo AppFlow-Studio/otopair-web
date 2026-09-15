@@ -12,8 +12,30 @@
  */
 
 import { chromium } from "@playwright/test";
+import { API_KEY } from "./lib.mjs";
 
 export const GREETING = /^Hi, I'?m Oto from Otopair/i;
+
+/**
+ * Stop before a run when the ElevenLabs account has no credits left. Every
+ * conversation here spends real credits (a full run is ~100 conversations),
+ * and an exhausted account doesn't fail loudly: sessions are refused and the
+ * site answers with its scripted demo instead (2026-09-15: the Starter plan's
+ * 30,000 monthly credits ran out mid-run).
+ */
+export async function checkCredits() {
+  if (!API_KEY) return;
+  const res = await fetch("https://api.elevenlabs.io/v1/user/subscription", { headers: { "xi-api-key": API_KEY } }).catch(() => null);
+  if (!res?.ok) return;
+  const s = await res.json();
+  const left = (s.character_limit ?? 0) - (s.character_count ?? 0);
+  const reset = s.next_character_count_reset_unix ? new Date(s.next_character_count_reset_unix * 1000).toISOString().slice(0, 10) : "unknown";
+  console.log(`ElevenLabs credits: ${left.toLocaleString()} of ${(s.character_limit ?? 0).toLocaleString()} left (${s.tier} plan, resets ${reset})`);
+  if (left <= 0) {
+    console.error("✖ No ElevenLabs credits left — every conversation would be refused. Add credits or wait for the reset.");
+    process.exit(1);
+  }
+}
 const OTO_BUBBLES = ".lg\\:order-1 div.flex.justify-start > p";
 const CARD_TITLE = ".order-3 div.rounded-\\[20px\\] h3";
 const INPUT = 'input[aria-label="Message Oto"]:visible, textarea[aria-label="Message Oto"]:visible';
@@ -85,6 +107,10 @@ export async function openChat(browser, base) {
       }
       if (m.type === "client_tool_call") {
         log.events.push({ t: since(), kind: "tool", name: m.client_tool_call?.tool_name, params: m.client_tool_call?.parameters ?? {} });
+      } else if (m.type === "agent_tool_response") {
+        // Every tool the agent ran, system tools included (end_call, etc.).
+        const r = m.agent_tool_response ?? {};
+        log.events.push({ t: since(), kind: "tool_response", name: r.tool_name, toolType: r.tool_type, isError: r.is_error });
       } else if (m.type === "agent_response") {
         log.events.push({ t: since(), kind: "agent", text: String(m.agent_response_event?.agent_response ?? "") });
       }
@@ -149,6 +175,7 @@ export async function openChat(browser, base) {
       answer: bubbles.join("\n"),
       card: card?.trim() ?? null,
       tools: turn.filter((e) => e.kind === "tool").map((e) => ({ name: e.name, params: e.params })),
+      systemTools: turn.filter((e) => e.kind === "tool_response" && e.toolType === "system").map((e) => e.name),
       agentTexts,
       firstReplyMs: firstAgent ? firstAgent.t - sentAt : null,
       firstToolMs: firstTool ? firstTool.t - sentAt : null,

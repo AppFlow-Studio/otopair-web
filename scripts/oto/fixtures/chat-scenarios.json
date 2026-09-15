@@ -306,7 +306,7 @@
         "say": "I live in Brooklyn. When can I start using Otopair?",
         "expect": {
           "all": [
-            "Q4 2026"
+            "Q4 2026|fourth quarter of 2026"
           ]
         }
       },
@@ -314,7 +314,7 @@
         "say": "What about the Bronx?",
         "expect": {
           "all": [
-            "Q2 2027"
+            "Q2 2027|second quarter of 2027"
           ]
         }
       },
@@ -379,7 +379,7 @@
             "inside",
             "included",
             "part of the (total|price)",
-            "built into"
+            "built (right )?into"
           ]
         }
       },

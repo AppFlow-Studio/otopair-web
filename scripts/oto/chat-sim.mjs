@@ -19,7 +19,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { FIXTURES, ROOT } from "./lib.mjs";
-import { agentRepeated, launchBrowser, openChat, repeatsVerbatim, restates } from "./site-chat.mjs";
+import { agentRepeated, checkCredits, launchBrowser, openChat, repeatsVerbatim, restates } from "./site-chat.mjs";
 
 const arg = (name, fallback) => {
   const i = process.argv.indexOf(`--${name}`);
@@ -42,6 +42,9 @@ const affirms = (text, re) => sentences(text).some((s) => re.test(s) && !NEGATED
 // Rules for every Oto turn, in any conversation.
 const ALWAYS = [
   ["answers", (t) => t.answer.trim().length > 0],
+  // The site answers with its scripted demo when a live session is refused,
+  // so a reply on screen alone doesn't prove the agent said it.
+  ["the live agent answered", (t) => t.agentTexts.length > 0],
   ["states no fee percentage", (t) => !/\d\s?%|\b\d+\s?percent\b/i.test(t.answer)],
   ["quotes no dollar figure but the $20 hold", (t) => !/\$(?!20\b)\d/.test(t.answer)],
   ["never calls shops vetted, certified or background-checked", (t) => !affirms(t.answer, /\b(vetted|certified|background[- ]check)/i)],
@@ -52,7 +55,10 @@ const ALWAYS = [
   ],
   [
     "never treats a sample booking as real",
-    (t) => !affirms(t.answer, /\b(you're all set|you are all set|(appointment|booking) is (confirmed|booked|locked in)|i('ve| have) booked|booked you)\b/i) || /sample|demo|example|walkthrough/i.test(t.answer),
+    // "You're all set" on the launch list is fine; only booking talk counts.
+    (t) =>
+      !affirms(t.answer, /\b((you're|you are) all set\b[^.]*\b(book|booked|booking|appointment)|(appointment|booking) is (confirmed|booked|locked in)|i('ve| have) booked|booked you)\b/i) ||
+      /sample|demo|example|walkthrough/i.test(t.answer),
   ],
   ["shows no bubble twice", (t) => !repeatsVerbatim(t.bubbles) && !t.bubbles.some((b, i) => i > 0 && restates(t.bubbles[i - 1], b))],
 ];
@@ -118,6 +124,7 @@ function transcript(results) {
   return lines.join("\n");
 }
 
+await checkCredits();
 const browser = await launchBrowser();
 const results = [];
 let next = 0;

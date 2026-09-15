@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useConvex, useMutation } from "convex/react";
+import { useConvex } from "convex/react";
 import {
   useConversation,
   useConversationClientTool,
@@ -163,7 +163,6 @@ export function useOtoAgent() {
   // so the chat + schedule panels slide in together ("Oto just woke up").
   const [awake, setAwake] = useState(false);
   const demoTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
-  const createStub = useMutation(api.preSignups.createStub);
   const convex = useConvex();
   const stepRef = useRef<OtoStep>("intro");
   const connectedRef = useRef(false);
@@ -345,50 +344,54 @@ export function useOtoAgent() {
   /**
    * Turn an interested visitor into a lead: put them on the app launch list
    * (the same list the site's store buttons open — one email the day the app
-   * is live) and keep a pre-signup stub so their car is waiting at signup.
-   * Oto is the site's marketing agent; before this, the email it collected
-   * reached only the stub and never the launch email.
+   * is live). /api/waitlist saves every sign-up as a user in Convex, so the
+   * car Oto decoded goes along with the email and is waiting at signup.
    */
   const savePreSignup = useCallback(
     async (rawEmail: string): Promise<string> => {
       const email = rawEmail.trim();
       if (!isValidEmail(email)) return "That doesn't look like a valid email — ask them to check it.";
-      const [stub, launchList] = await Promise.allSettled([
-        createStub({
-          email,
-          vin: vehicle?.vin,
-          year: vehicle?.year,
-          make: vehicle?.make,
-          model: vehicle?.model,
-          trim: vehicle?.trim,
-          displacementL: vehicle?.displacementL,
-          cylinders: vehicle?.cylinders,
-          fuelType: vehicle?.fuelType,
-        }),
-        fetch("/api/waitlist", {
+      let result: { saved?: boolean } | null = null;
+      try {
+        const res = await fetch("/api/waitlist", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email, list: "app", elapsedMs: Date.now() - mountedAtRef.current }),
-        }).then((res) => {
-          if (!res.ok) throw new Error(`waitlist responded ${res.status}`);
-        }),
-      ]);
-      if (stub.status === "rejected") console.warn("[oto] pre-signup save failed:", stub.reason);
-      if (launchList.status === "rejected") console.warn("[oto] launch-list signup failed:", launchList.reason);
+          body: JSON.stringify({
+            email,
+            list: "app",
+            elapsedMs: Date.now() - mountedAtRef.current,
+            ...(vehicle
+              ? {
+                  vehicle: {
+                    vin: vehicle.vin,
+                    year: vehicle.year,
+                    make: vehicle.make,
+                    model: vehicle.model,
+                    trim: vehicle.trim,
+                    displacementL: vehicle.displacementL,
+                    cylinders: vehicle.cylinders,
+                    fuelType: vehicle.fuelType,
+                  },
+                }
+              : {}),
+          }),
+        });
+        if (res.ok) result = await res.json().catch(() => ({}));
+        else console.warn("[oto] launch-list signup failed:", res.status);
+      } catch (err) {
+        console.warn("[oto] launch-list signup failed:", err);
+      }
 
-      if (launchList.status === "fulfilled") {
-        setPresignupSaved(true);
-        return vehicle
-          ? "Saved — they're on the launch list (one email the day the app is live), and their car will be waiting when they sign up with the same email."
-          : "Saved — they're on the launch list (one email the day the app is live).";
+      if (!result) return "Couldn't save their email just now — suggest they tap Get Oto on the site instead.";
+      setPresignupSaved(true);
+      if (vehicle && result.saved === false) {
+        return "They're on the launch list (one email the day the app is live), but their car couldn't be saved for signup this time.";
       }
-      if (stub.status === "fulfilled") {
-        setPresignupSaved(true);
-        return "Their car is saved for signup, but the launch-list signup didn't go through — suggest they tap Get Oto to get the launch email.";
-      }
-      return "Couldn't save their email just now — suggest they tap Get Oto on the site instead.";
+      return vehicle
+        ? "Saved — they're on the launch list (one email the day the app is live), and their car will be waiting when they sign up with the same email."
+        : "Saved — they're on the launch list (one email the day the app is live).";
     },
-    [createStub, vehicle]
+    [vehicle]
   );
 
   /** Summon an explainer demo card on the component side. The hero renders a

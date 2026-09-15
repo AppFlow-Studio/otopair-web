@@ -103,7 +103,9 @@ async function runScenario(browser, s) {
   }
   const scenarioChecks = [["live agent session", chat.log.credentialStatus === 200]];
   if (s.expectBlockedWrites) {
-    scenarioChecks.push(["launch-list save stayed in the browser", chat.log.blockedWrites > 0 && chat.log.mockedLaunchList > 0]);
+    // The sign-up is saved server-side by /api/waitlist, which the harness
+    // answers in the browser, so the save must have gone there and no further.
+    scenarioChecks.push(["launch-list sign-up stayed in the browser", chat.log.mockedLaunchList > 0 && chat.log.blockedWrites === 0]);
   }
   if (error) scenarioChecks.push([`ran to the end (${error})`, false]);
   await chat.close();

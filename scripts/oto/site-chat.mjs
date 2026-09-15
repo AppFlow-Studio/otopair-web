@@ -5,10 +5,10 @@
  * chat-sim.mjs (multi-turn scenarios).
  *
  * Nothing a test types reaches an inbox or the shared database. The
- * launch-list POST is answered in the browser (the real route emails the
- * visitor AND the team), and the Convex mutation that saves a pre-signup is
- * refused before it leaves the page. Oto's save_presignup tool still runs end
- * to end against those stand-ins.
+ * launch-list POST is answered in the browser: the real route saves the
+ * sign-up as a Convex user AND emails the visitor and the team. Any Convex
+ * pre-signup mutation sent from the page itself is refused too. Oto's
+ * save_presignup tool still runs end to end against those stand-ins.
  */
 
 import { chromium } from "@playwright/test";
@@ -64,7 +64,7 @@ export async function openChat(browser, base) {
     return route.fulfill({
       status: 200,
       contentType: "application/json",
-      body: JSON.stringify({ message: "Successfully joined waitlist!" }),
+      body: JSON.stringify({ success: true, message: "Successfully joined waitlist!", saved: true }),
     });
   });
   await page.routeWebSocket(/\.convex\.cloud\//, (ws) => {

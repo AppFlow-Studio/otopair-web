@@ -70,6 +70,8 @@ We may license Vehicle History Data to vehicle-history report providers and auto
 
 **With the Partner Shop you book.** When you book a service, we share with that Partner Shop the information necessary to perform it: your name, contact information, vehicle information, the requested service, appointment details, and any related notes. Where you request quotes, we send your vehicle and service details — but not your name or contact information — to more than one Partner Shop in your area so that they can respond. Your name and contact information are shared only with the Partner Shop whose quote you select. Partner Shops are independent businesses; their use of your information is subject to our partner agreements and to their own privacy practices.
 
+**With other users of your vehicle.** Where more than one Otopair account is associated with the same vehicle, each of those users can see that vehicle’s service history, inspection findings, and health score. Add a vehicle only if you are its owner or are authorized to manage it.
+
 **With service providers.** We share information with vendors that perform services on our behalf, including payment processing (Stripe), cloud hosting, analytics, customer messaging, and the providers of the language models that power Oto. Model providers process your conversations only to generate responses and are contractually restricted from using them for their own purposes, including to train their models. Service providers are contractually restricted to using information only as necessary to provide services to Otopair. Any third party with whom we share user data — including analytics providers, third-party software development kits, service providers, and our affiliates — is contractually required to provide the same or equal protection of user data as described in this Policy.
 
 **Data Products and Vehicle History Data.** We share, sell, or license Data Products and Vehicle History Data as described in Section 3.
@@ -92,13 +94,13 @@ Your mobile phone number and your consent to receive text messages from Otopair 
 
 **Vehicle History Data.** You can exclude your vehicle(s) from Vehicle History Data at any time in the app at Settings → Privacy → Vehicle History Reports, or through the “Your Privacy Choices” link at {{PRIVACY_CHOICES_URL}}. We do not require you to verify your identity or provide additional information in order to opt out, and the setting takes effect immediately. We also honour browser opt-out preference signals, including Global Privacy Control, as a request to opt out. Opting out stops your vehicle’s service records from being included in Vehicle History Data we license after your opt-out, and we will direct recipients to delete previously licensed records for your vehicle. Opting out does not affect Data Products, which are aggregated and de-identified.
 
-**Account deletion.** You can delete your account in the app at Settings → Account → Delete Account, at {{DELETE_ACCOUNT_URL}}, or by emailing {{PRIVACY_EMAIL}}. When you delete your account, we delete or de-identify your Personal Information, except for records we are required or permitted to retain as described in Section 10. Deleting your account also excludes your vehicles from Vehicle History Data we license after deletion.
+**Account deletion.** You can delete your account in the app at Settings → Account → Delete Account, at {{DELETE_ACCOUNT_URL}}, or by emailing {{SUPPORT_EMAIL}}. When you delete your account, we delete or de-identify your Personal Information, except for records we are required or permitted to retain as described in Section 10. Deleting your account also excludes your vehicles from Vehicle History Data we license after deletion.
 
 **7. Your U.S. State Privacy Rights**
 
 Depending on the U.S. state in which you reside, you may have the right to: (a) know and access the Personal Information we have collected about you, including in a portable format; (b) correct inaccurate Personal Information; (c) delete Personal Information; (d) opt out of the sale of Personal Information, the sharing or processing of Personal Information for targeted advertising, and certain profiling (other than the licensing of Vehicle History Data described in Sections 3 through 6, from which you may opt out, Otopair does not engage in these activities); and (e) not receive discriminatory treatment for exercising your rights.
 
-**Exercising your rights.** You may submit a request in the app or by emailing {{PRIVACY_EMAIL}}. We will verify your request using your account credentials and the email address or phone number on file, and we will respond within the time required by applicable law (generally 45 days, subject to permitted extensions). Where permitted, you may use an authorized agent to submit a request; we will require proof of the agent’s authorization and verification of your identity.
+**Exercising your rights.** You may submit a request in the app or by emailing {{SUPPORT_EMAIL}}. We will verify your request using your account credentials and the email address or phone number on file, and we will respond within the time required by applicable law (generally 45 days, subject to permitted extensions). Where permitted, you may use an authorized agent to submit a request; we will require proof of the agent’s authorization and verification of your identity.
 
 **Appeals.** If we decline to act on a request, we will explain why. You may appeal our decision by replying with “Appeal” in the subject line. If your appeal is denied, you may contact the Attorney General of your state.
 
@@ -108,13 +110,13 @@ Depending on the U.S. state in which you reside, you may have the right to: (a) 
 
 The only category of Personal Information we sell is vehicle information — vehicle attributes, VIN, mileage at service, services performed, service dates, and servicing shop — which we license as Vehicle History Data to one category of third party: vehicle-history report providers and automotive marketplaces. We do not sell or share any other category of Personal Information, and we do not share any Personal Information for cross-context behavioural advertising. You may opt out at any time via Settings → Privacy → Vehicle History Reports or the “Your Privacy Choices” link, and we will honor verified opt-out requests within 15 business days. We do not knowingly collect or sell the Personal Information of consumers under 16 years of age. California “Shine the Light”: we do not disclose Personal Information to third parties for their own direct marketing purposes.
 
-**Nevada.** Nevada residents may direct opt-out requests regarding covered information to {{PRIVACY_EMAIL}}.
+**Nevada.** Nevada residents may direct opt-out requests regarding covered information to {{SUPPORT_EMAIL}}.
 
 **8. Notice of Financial Incentive**
 
 **Service records upload credit.** If you upload service records for your vehicle, we may award you Ownership Credit, currently $10 per submission. Because this credit is offered in connection with information you provide, it may be treated as a financial incentive under California law.
 
-**Material terms.** You may take part by uploading records in the app, and you may withdraw at any time by deleting the records or by emailing {{PRIVACY_EMAIL}}. Participation is voluntary and declining does not affect your access to the Platform or the price of any service.
+**Material terms.** You may take part by uploading records in the app, and you may withdraw at any time by deleting the records or by emailing {{SUPPORT_EMAIL}}. Participation is voluntary and declining does not affect your access to the Platform or the price of any service.
 
 **How we value the information.** We calculate the value of the information by reference to the credit we award for it, which reflects our good-faith estimate of the cost of obtaining equivalent service history from other sources. We do not otherwise place a monetary value on your Personal Information.
 
@@ -128,11 +130,11 @@ This Section applies to you if you use the Otopair shop portal as an owner, mana
 
 **How we share it.** With your Partner Shop, which can see your activity in the shop portal; with vehicle owners, limited to your first name where you are assigned to their booking and to the inspection findings, estimates, and updates you submit for their vehicle; with our service providers as described in Section 4; and as required by law or in a corporate transaction as described in Section 4. We do not sell information about shop portal users and we do not use it for marketing to you beyond communications about the shop portal.
 
-**Retention and your rights.** We retain shop portal user information for as long as your Partner Shop remains on the Platform and thereafter as needed for the record-keeping purposes in Section 10. The submissions you make become part of a vehicle’s service history and are retained with it. The rights described in Section 7 apply to you according to the law of the state in which you reside; requests may be made to {{PRIVACY_EMAIL}}.
+**Retention and your rights.** We retain shop portal user information for as long as your Partner Shop remains on the Platform and thereafter as needed for the record-keeping purposes in Section 10. The submissions you make become part of a vehicle’s service history and are retained with it. The rights described in Section 7 apply to you according to the law of the state in which you reside; requests may be made to {{SUPPORT_EMAIL}}.
 
 **10. Data Retention**
 
-We retain Personal Information for no longer than reasonably necessary for the purposes described in this Policy. Specifically: account and vehicle information is retained for the life of your account; transaction and payment records are retained for up to seven years to satisfy tax, accounting, and legal requirements; and automatically collected log and diagnostic data is retained for up to 24 months. When a retention period expires, or when you delete your account, we delete or de-identify the information; de-identified information and Vehicle History Data may thereafter be retained and used as described in Section 3, subject to your opt-out rights under Section 6.
+We retain Personal Information for no longer than reasonably necessary for the purposes described in this Policy. Specifically: account and vehicle information is retained for the life of your account; transaction and payment records are retained for up to seven years to satisfy tax, accounting, and legal requirements; automatically collected log and diagnostic data is retained for up to 24 months; and conversations with Oto are retained for up to 24 months. When a retention period expires, or when you delete your account, we delete or de-identify the information; de-identified information and Vehicle History Data may thereafter be retained and used as described in Section 3, subject to your opt-out rights under Section 6.
 
 **11. Security**
 
@@ -140,7 +142,7 @@ We maintain administrative, technical, and physical safeguards designed to prote
 
 **12. Children’s Privacy**
 
-The Platform is intended for users 18 years of age or older, and account holders confirm at registration that they are 18 or older. We do not collect date of birth. We do not knowingly collect Personal Information from anyone under 18. If you believe a person under 18 has provided us with Personal Information, contact {{PRIVACY_EMAIL}} and we will delete it within fourteen days. We do not sell the Personal Information of anyone we know to be under 18.
+The Platform is intended for users 18 years of age or older, and account holders confirm at registration that they are 18 or older. We do not collect date of birth. We do not knowingly collect Personal Information from anyone under 18. If you believe a person under 18 has provided us with Personal Information, contact {{SUPPORT_EMAIL}} and we will delete it within fourteen days. We do not sell the Personal Information of anyone we know to be under 18.
 
 **13. Third-Party Services**
 
@@ -158,4 +160,4 @@ Attn: Privacy
 
 {{MAILING_ADDRESS}}
 
-Email: {{PRIVACY_EMAIL}}
+Email: {{SUPPORT_EMAIL}}

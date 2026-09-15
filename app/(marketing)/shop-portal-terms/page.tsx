@@ -11,7 +11,8 @@ export const metadata: Metadata = {
 };
 
 /**
- * Otopair Shop Portal Terms of Use v1, from counsel (received 2026-09-14).
+ * Otopair Shop Portal Terms of Use v1.1, from counsel (received 2026-09-14;
+ * replaces v1).
  * The wording lives in content/legal/shop-portal-terms.md; placeholders resolve
  * from lib/legal.ts. Shown to portal users at sign-in and sign-up
  * (components/legal/portal-terms-notice.tsx), because §2 makes signing in the

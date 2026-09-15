@@ -45,10 +45,29 @@ describe("counsel's legal documents", () => {
     expect(doc.sections.find((s) => s.number === "9")!.title).toBe("Shop Portal Users");
   });
 
+  it("fills in the facts v6.1 and v1.1 state, effective 2026-09-15", () => {
+    for (const d of DOCS) {
+      const doc = parseLegalMarkdown(fillTokens(read(d.file), legalTokens(d.kind)));
+      expect(doc.effectiveLine).toBe("Effective Date: September 15, 2026");
+      expect(doc.sections.at(-1)!.blocks.map((b) => (b.type === "p" ? b.text : b.type))).toEqual([
+        "Otopair Inc.",
+        d.kind === "privacy" ? "Attn: Privacy" : "Attn: Legal",
+        "200 Vesey Street, 24th Floor, New York, NY 10281",
+        "Email: support@otopair.com",
+      ]);
+      expect(read(d.file)).not.toMatch(/privacy@|legal@/);
+    }
+  });
+
+  it("still leaves /privacy pending on the privacy-choices and delete-account pages v6.1 names", () => {
+    expect(pendingTokens(read("privacy-policy.md"), legalTokens("privacy"))).toEqual(["PRIVACY_CHOICES_URL", "DELETE_ACCOUNT_URL"]);
+    expect(pendingTokens(read("shop-portal-terms.md"), legalTokens("portal-terms"))).toEqual([]);
+  });
+
   it("fills known tokens and marks the ones still pending", () => {
-    const facts = { ...LEGAL_FACTS, entityName: "Example Co.", privacyEmail: null };
+    const facts = { ...LEGAL_FACTS, entityName: "Example Co.", mailingAddress: null };
     const tokens = legalTokens("privacy", facts);
-    expect(fillTokens("{{ENTITY_NAME}} — {{PRIVACY_EMAIL}}", tokens)).toBe("Example Co. — ⟦PRIVACY_EMAIL⟧");
-    expect(pendingTokens("{{ENTITY_NAME}} {{PRIVACY_EMAIL}} {{SITE_DOMAIN}}", tokens)).toEqual(["PRIVACY_EMAIL"]);
+    expect(fillTokens("{{ENTITY_NAME}} — {{MAILING_ADDRESS}}", tokens)).toBe("Example Co. — ⟦MAILING_ADDRESS⟧");
+    expect(pendingTokens("{{ENTITY_NAME}} {{MAILING_ADDRESS}} {{SITE_DOMAIN}}", tokens)).toEqual(["MAILING_ADDRESS"]);
   });
 });

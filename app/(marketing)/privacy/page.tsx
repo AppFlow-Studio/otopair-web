@@ -11,11 +11,12 @@ export const metadata: Metadata = {
 };
 
 /**
- * Otopair Privacy Policy v5, from counsel (received 2026-09-14). The wording
- * lives in content/legal/privacy-policy.md — replace that file with counsel's
- * next version rather than editing the text here. Placeholders resolve from
- * lib/legal.ts; the page will not build for a production deploy while any are
- * unset.
+ * Otopair Privacy Policy v6.1, from counsel (received 2026-09-14; replaces
+ * v5). The wording lives in content/legal/privacy-policy.md — replace that
+ * file with counsel's next version rather than editing the text here.
+ * Placeholders resolve from lib/legal.ts; the page will not build for a
+ * production deploy while any are unset (today: the /privacy-choices and
+ * /delete-account pages §6 names).
  */
 export default function PrivacyPage() {
   const { doc, toc, pending } = loadLegalDocument("privacy");

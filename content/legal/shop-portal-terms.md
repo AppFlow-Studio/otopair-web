@@ -124,4 +124,4 @@ Attn: Legal
 
 {{MAILING_ADDRESS}}
 
-Email: {{LEGAL_EMAIL}}
+Email: {{SUPPORT_EMAIL}}

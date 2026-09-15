@@ -4,6 +4,11 @@ import PageShell, { Section } from "@/components/flagship/page-shell";
 import PrivacyRequestForm from "@/components/legal/privacy-request-form";
 import { SUPPORT_EMAIL } from "@/lib/site";
 
+// Link text a shade darker than the site's #4B82A5, which is 4.17:1 on white
+// and fails WCAG AA for body text; #3a6f92 is 5.43:1 (4.91:1 on the sky tint).
+// The prose shell styles links with a descendant selector, so this needs `!`.
+const LINK = "text-[#3a6f92]!";
+
 export const metadata: Metadata = {
   title: "Delete your account",
   description:
@@ -33,13 +38,13 @@ export default function DeleteAccountPage() {
       <Section first id="request" title="Request account deletion" after={<PrivacyRequestForm kind="delete_account" />}>
         <p>
           Enter the email on your Otopair account. You can also delete your account in the app’s settings, or by
-          emailing <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
+          emailing <a className={LINK} href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>.
         </p>
         <ul>
           <li>
             <strong>What’s deleted.</strong> Otopair deletes or de-identifies your personal information, except
             records it’s required or permitted to keep, which Section 10 of the{" "}
-            <Link href="/privacy">Privacy Policy</Link> describes.
+            <Link className={LINK} href="/privacy">Privacy Policy</Link> describes.
           </li>
           <li>
             <strong>Your cars.</strong> Your vehicles are left out of the Vehicle History Data Otopair licenses
@@ -58,7 +63,7 @@ export default function DeleteAccountPage() {
       <Section id="instead" title="Only want to stop something?">
         <p>
           You don’t have to delete your account to stop your car’s service records being licensed.{" "}
-          <Link href="/privacy-choices">Opt out on Your Privacy Choices</Link> instead. Every marketing email also
+          <Link className={LINK} href="/privacy-choices">Opt out on Your Privacy Choices</Link> instead. Every marketing email also
           has an unsubscribe link.
         </p>
       </Section>

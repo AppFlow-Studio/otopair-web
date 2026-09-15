@@ -34,6 +34,8 @@ const noSubscription = () => () => {};
 const readGpc = () => (navigator as Navigator & { globalPrivacyControl?: boolean }).globalPrivacyControl === true;
 
 // The contact form's field and label styles (components/flagship/contact-form.tsx).
+// Its link blue (#4B82A5, 4.17:1 on white) fails WCAG AA, so the mailto link
+// below uses #3a6f92 (5.43:1).
 const FIELD =
   "h-12 w-full rounded-full border bg-white px-5 text-[15px] text-[#1a1a1a] outline-none placeholder:text-[#8f8a82] focus-visible:border-[#4B82A5] focus-visible:ring-2 focus-visible:ring-[#4B82A5]/30";
 const LABEL = "text-[13px] tracking-[0.02em] text-[#4c5661]";
@@ -176,7 +178,7 @@ export default function PrivacyRequestForm({ kind }: { kind: PrivacyRequestKind 
           Or email{" "}
           <a
             href={`mailto:${SUPPORT_EMAIL}`}
-            className="text-[#4B82A5] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
+            className="text-[#3a6f92] underline decoration-[#4B82A5]/40 underline-offset-[3px] hover:decoration-[#4B82A5]"
           >
             {SUPPORT_EMAIL}
           </a>

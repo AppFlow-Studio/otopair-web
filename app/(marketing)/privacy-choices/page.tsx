@@ -4,6 +4,11 @@ import PageShell, { Section } from "@/components/flagship/page-shell";
 import PrivacyRequestForm from "@/components/legal/privacy-request-form";
 import { SUPPORT_EMAIL } from "@/lib/site";
 
+// Link text a shade darker than the site's #4B82A5, which is 4.17:1 on white
+// and fails WCAG AA for body text; #3a6f92 is 5.43:1 (4.91:1 on the sky tint).
+// The prose shell styles links with a descendant selector, so this needs `!`.
+const LINK = "text-[#3a6f92]!";
+
 export const metadata: Metadata = {
   title: "Your privacy choices",
   description:
@@ -66,17 +71,17 @@ export default function PrivacyChoicesPage() {
             <strong>Push notifications.</strong> Turn off marketing notifications in your device settings.
           </li>
           <li>
-            <strong>Delete your account.</strong> <Link href="/delete-account">Request deletion</Link>, or delete
+            <strong>Delete your account.</strong> <Link className={LINK} href="/delete-account">Request deletion</Link>, or delete
             it in the app’s settings.
           </li>
           <li>
             <strong>See or correct your information.</strong> Email{" "}
-            <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Otopair responds within the time the law
+            <a className={LINK} href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>. Otopair responds within the time the law
             requires, generally 45 days.
           </li>
         </ul>
         <p>
-          The <Link href="/privacy">Privacy Policy</Link> explains each of these in full.
+          The <Link className={LINK} href="/privacy">Privacy Policy</Link> explains each of these in full.
         </p>
       </Section>
     </PageShell>

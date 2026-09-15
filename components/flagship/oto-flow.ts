@@ -396,7 +396,7 @@ export const COVERAGE_DEMO = {
 export const PAYMENTS_DEMO = {
   methods: ["Apple Pay", "Google Pay", "Visa", "Mastercard", "Amex", "Discover", "Debit"],
   points: [
-    "A $20 hold at booking — charged when the job is done",
+    "A $20 hold at booking, not a charge — you pay when the job is done",
     "A problem? Message the shop, then open a dispute in the app",
     "Your card number never reaches Otopair",
   ],
@@ -461,7 +461,7 @@ export const TRUST_DEMO = {
     "Hide fees",
     "Use upsells, scarcity, or countdowns",
     "Use panic or guilt language",
-    "Sell or rent your data",
+    "Sell your contact or payment details",
     "Push services your car doesn’t need",
     "Send marketing notification blasts",
   ],

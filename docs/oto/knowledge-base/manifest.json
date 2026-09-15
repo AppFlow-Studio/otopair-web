@@ -37,10 +37,10 @@
       "uploaded_at": "2026-09-15T02:56:41.263Z"
     },
     "07_Payments.md": {
-      "id": "A1Hy2VDZs3fW2kzKVC3z",
+      "id": "Q2aZHToEAzWnq2GhHNuI",
       "name": "Payments",
-      "sha256": "e7a840bd12d589a4cb2d1b308449498f0523dd2a0938ab7bc442908a37cd88b8",
-      "uploaded_at": "2026-09-14T22:52:38.601Z"
+      "sha256": "c40aa1e6529bde67137297e6b615ba2925fe392653d12bda593208a7dc4dfc0a",
+      "uploaded_at": "2026-09-15T11:57:13.145Z"
     },
     "08_Vehicle_Onboarding.md": {
       "id": "oHj7JzTlkljTzO74J7gD",
@@ -67,10 +67,10 @@
       "uploaded_at": "2026-09-15T02:56:41.888Z"
     },
     "12_Ratings.md": {
-      "id": "nvOwl3dUwiQdr36HtwJa",
+      "id": "Bm2amsupBpAbVZIQCydp",
       "name": "Ratings and Reviews",
-      "sha256": "54d6cee151975330e1548ed435adfcdc8d9eb5d57be0258d706723dfcdd9e3ec",
-      "uploaded_at": "2026-09-15T02:56:42.086Z"
+      "sha256": "ce9ab3fbb52a1632bda02081bbb1b25332f2d14cf27e344a39ab3f3fb2c99dfc",
+      "uploaded_at": "2026-09-15T11:57:13.342Z"
     },
     "13_Rewards_Ownership_Credit.md": {
       "id": "ZwMTpaq6lJ9TwWpU3Ysx",
@@ -91,28 +91,28 @@
       "uploaded_at": "2026-09-15T02:56:42.802Z"
     },
     "16_What_Otopair_Will_Not_Do.md": {
-      "id": "GCxxs0YE7VCvc3h3XCMM",
+      "id": "xEr0IpBi6bLa0sLJrTdS",
       "name": "What Otopair Will Not Do",
-      "sha256": "f74df42900ea1be2fec9c5b695a1d699753bc4975bca5e2edc027c9787f5cf07",
-      "uploaded_at": "2026-09-14T22:52:40.552Z"
+      "sha256": "19519b8d0d4b33e440718ba9e5987e227eefdb7fd8206dbe17e1b65eaa40a79f",
+      "uploaded_at": "2026-09-15T12:02:47.580Z"
     },
     "17_Shops_on_Otopair.md": {
-      "id": "YP0tIGRpDKcd1wdxdLky",
+      "id": "fKKHi6YHPcoSK6PAKBa0",
       "name": "Shops on Otopair",
-      "sha256": "a8cc42c39fd0632c0fd70badeaa1a22e1cd9e601edec103feb76a3880a2be93d",
-      "uploaded_at": "2026-09-15T03:33:17.716Z"
+      "sha256": "770bee38ac34cc401c4632743555366d8a59e46ce4146090f2db808337a91c14",
+      "uploaded_at": "2026-09-15T11:57:13.754Z"
     },
     "18_Cancellations_Disputes_and_Warranty.md": {
-      "id": "rvXoEV5X4lDL1gf6PpLn",
+      "id": "mui4mtwVupww2YIEQxhh",
       "name": "Cancellations, Disputes and Warranty",
-      "sha256": "36e8f36f8a9dbd486d1996d69e8637b53ea4fbd6227e6c1dec67ba071763f374",
-      "uploaded_at": "2026-09-14T23:20:34.999Z"
+      "sha256": "f596b182461118ef86f1d61b3af79783cd14871e4e49126a6abf5878076bc89c",
+      "uploaded_at": "2026-09-15T11:57:13.959Z"
     },
     "19_Contact_Support_and_Oto.md": {
-      "id": "8KcPIT46Z69beVgqHJ89",
+      "id": "KlOpIgF3Is0QmNihH8El",
       "name": "Contact, Support and Oto",
-      "sha256": "69fce7d9ea4f1f6ebeeb45ac2a0ca31d80f0a4bf1366cd4154be48da5ab62946",
-      "uploaded_at": "2026-09-15T02:56:43.222Z"
+      "sha256": "203c221425b085a88fe3d5af2722c39d4aa4afea904d9fb4e3d16797b6070107",
+      "uploaded_at": "2026-09-15T11:57:14.168Z"
     },
     "20_Warning_Lights_and_Safety.md": {
       "id": "Y8gYDoMMQzvtYs5zZjRH",
@@ -121,10 +121,10 @@
       "uploaded_at": "2026-09-14T22:52:41.369Z"
     },
     "21_Privacy_Security_and_the_Terms.md": {
-      "id": "bLkGsxfnehSnSrbVkwZ8",
+      "id": "ssmwBF5nhli6M2KLhalo",
       "name": "Privacy, Security and the Terms",
-      "sha256": "cd6cdd712efbb890408ef80a8b2816f4ed247ceb8095b1b43266dc94734e9c96",
-      "uploaded_at": "2026-09-14T22:52:41.589Z"
+      "sha256": "6a748ae6590243af7948348abc9ab38d9c470f4028e63ba167351898cba43eac",
+      "uploaded_at": "2026-09-15T12:02:47.791Z"
     }
   }
 }

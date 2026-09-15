@@ -14,7 +14,8 @@ Reviews on Otopair go one way. A driver can review the shop, and optionally the 
 
 - A shop's page shows its star rating, its review count and the reviews themselves
 - A new shop starts with no reviews
-- Otopair's team can hide a review that breaks the rules — for example, one that contains someone's personal details. It doesn't delete reviews
+- Otopair's team can hide a review that breaks the rules — for example, one that contains someone's personal details. It doesn't delete reviews, it never removes one for being negative, and it never removes one because a shop asked
+- Every shop has signed Otopair's rules: no conditioning service on a review, and no retaliating for one
 
 ## Reviews and verification
 
@@ -29,7 +30,7 @@ Reviews are separate from verification. Every shop is reviewed and approved by O
 "No. Reviews go one way — from you to the shop, and optionally the mechanic, after a completed booking. Shops can't review you, and they can't edit or remove your review."
 
 **"Can a shop delete a bad review?"**
-"No. A shop can't edit or remove a review of itself. Otopair's team can hide a review that breaks the rules, like one with someone's personal details, but it doesn't delete reviews."
+"No. A shop can't edit or remove a review of itself. Otopair's team can hide a review that breaks the rules, like one with someone's personal details, but it never removes one for being negative or because a shop asked."
 
 **"Do I get more credit for a good review?"**
 "No — credit for a review is the same whatever the rating. Rewards aren't switched on in the app yet, though."

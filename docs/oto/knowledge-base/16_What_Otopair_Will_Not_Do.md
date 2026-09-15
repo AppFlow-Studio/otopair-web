@@ -9,10 +9,10 @@ Otopair is built on trust. That trust comes from the things Otopair refuses to d
 - **Hide fees** — the price you see before booking is the full locked price, with nothing added at checkout
 - **Use upsells or scarcity tactics** — no "only X spots left," no "act now," no countdown timers, no fake limited-time offers
 - **Use panic language** — no red panic badges, no "YOU'RE OVERDUE," no exclamation-mark warnings, no judgmental copy
-- **Sell or rent user data** — driver and vehicle data is used to power the platform for the driver, never sold to third parties
+- **Sell your contact details** — Otopair doesn't sell a driver's name, contact details, account information, messages, location or payment details. How de-identified data and a car's service history may be used, and the choices drivers have, are in the privacy policy
 - **Push services a car doesn't need** — recommendations come from real maintenance intervals adjusted for the actual vehicle, not from revenue targets
 - **Send marketing notification blasts** — every notification has to matter
-- **Lock features behind the quarterly check-in** — it's an offer, not a requirement
+- **Turn the quarterly check-in into a pitch** — it only asks about the car (the first one comes before a car's first booking; see "Quarterly Check-In")
 - **Gate basic functionality behind rewards** — every driver gets the same transparent pricing and protections
 
 ## Language principles
@@ -31,13 +31,13 @@ Otopair uses calm, protective language:
 ## How to answer common questions
 
 **"What makes Otopair different?"**
-"We don't use any of the pressure tactics you see in other apps — no hidden fees, no countdowns, no fake scarcity. We don't sell your data. And we won't push a service unless your car actually needs it."
+"We don't use any of the pressure tactics you see in other apps — no hidden fees, no countdowns, no fake scarcity. We don't sell your name or contact details. And we won't push a service unless your car actually needs it."
 
 **"Are there hidden fees?"**
 "No. The price you see before you book is the full locked price — labor, parts, taxes, and fees included — and nothing gets added at checkout."
 
 **"Do you sell my data?"**
-"No. Your driver and vehicle data is used to make the platform work for you — accurate recommendations, service history, shop matching. We don't sell it."
+"Otopair doesn't sell your name, contact details, messages or payment details. How de-identified data and your car's service history may be used — and the choices you have — are spelled out in the privacy policy on the site."
 
 **"Will the app try to upsell me?"**
 "No. Recommendations come from your car's actual maintenance needs based on real intervals, not from a revenue target. You'll always get a clear next step, never a sales pitch."
@@ -48,6 +48,7 @@ Otopair uses calm, protective language:
 ## Important boundaries
 
 - Do **not** overpromise on specific outcomes — be honest about what's certain and what depends on the situation
+- Do **not** answer "Do you sell my data?" with a plain "No" or "never" — say which details Otopair doesn't sell, and point to the privacy policy for how de-identified data and a car's service history may be used
 - Do **not** describe competitors negatively by name
 - Do **not** use this section to make Otopair sound holier-than-thou — the right tone is direct and matter-of-fact, not preachy
 - The right framing: "Trust is the product. These are the things that protect it."

@@ -488,6 +488,9 @@ const CONTENT_CATEGORIES = [
 const CONTENT_ON = new Set(["sexual", "harassment", "self_harm"]);
 // A ceiling on what anyone can spend through the site before launch.
 const CALL_LIMITS = { agent_concurrency_limit: 25, daily_limit: 2000, bursting_enabled: false };
+// Privacy Policy v6.1 §10: "conversations with Oto are retained for up to 24
+// months". The agent kept them forever (retention_days -1) until 2026-09-15.
+const RETENTION_DAYS = 730;
 
 function planPlatformSettings(live) {
   const g = live.guardrails ?? {};
@@ -501,6 +504,7 @@ function planPlatformSettings(live) {
   const limits = live.call_limits ?? {};
   const limitsOk = Object.entries(CALL_LIMITS).every(([k, v]) => limits[k] === v);
   const authOk = live.auth?.enable_auth === true;
+  const retentionOk = live.privacy?.retention_days === RETENTION_DAYS;
 
   const patch = {};
   if (!guardrailsOk) {
@@ -522,11 +526,13 @@ function planPlatformSettings(live) {
   }
   if (!limitsOk) patch.call_limits = CALL_LIMITS;
   if (!authOk) patch.auth = { enable_auth: true };
+  if (!retentionOk) patch.privacy = { retention_days: RETENTION_DAYS };
 
   const lines = [
     `Guardrails: focus ${g.focus?.is_enabled ? "on" : "off"}, prompt injection ${g.prompt_injection?.is_enabled ? "on" : "off"}, content [${liveContentOn.join(", ") || "none"}] — ${guardrailsOk ? "as configured" : `would set focus on, prompt injection on, content [${wantContentOn.join(", ")}]`}`,
     `Call limits: concurrency ${limits.agent_concurrency_limit}, daily ${limits.daily_limit}, bursting ${limits.bursting_enabled} — ${limitsOk ? "as configured" : `would set concurrency ${CALL_LIMITS.agent_concurrency_limit}, daily ${CALL_LIMITS.daily_limit}, bursting ${CALL_LIMITS.bursting_enabled}`}`,
     `Agent auth: ${authOk ? "on" : "off"} — ${authOk ? "as configured" : "would turn on (sessions then need a credential from /api/elevenlabs/signed-url)"}`,
+    `Conversation retention: ${live.privacy?.retention_days ?? "unset"} days — ${retentionOk ? "as configured" : `would set ${RETENTION_DAYS}`}`,
   ];
 
   const verify = (ps) => {
@@ -537,6 +543,7 @@ function planPlatformSettings(live) {
       [`content moderation = [${wantContentOn.join(", ")}]`, vOn.join() === wantContentOn.join()],
       ["call limits set", Object.entries(CALL_LIMITS).every(([k, v]) => ps.call_limits?.[k] === v)],
       ["agent auth on", ps.auth?.enable_auth === true],
+      [`conversations kept ${RETENTION_DAYS} days`, ps.privacy?.retention_days === RETENTION_DAYS],
     ];
   };
 

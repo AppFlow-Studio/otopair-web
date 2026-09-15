@@ -46,7 +46,7 @@ Support is by email, and a person reads every message. There is no public phone 
 
 - **Press:** the press page has the boilerplate, key facts and brand files; anything else goes to support@otopair.com with "Press" in the subject
 - **Careers:** no open roles right now. Email support@otopair.com with "Careers" in the subject, a few lines about you, and links to something you built
-- **Accessibility:** the website and driver app target WCAG 2.1 level AA. There hasn't been a third-party audit yet, so Otopair doesn't claim conformance. Known gaps include some decorative images without descriptions, a few captions close to the contrast threshold, and a coverage map that isn't fully keyboard-operable — the shop directory lists the same shops as plain links. Report a barrier to support@otopair.com with "Accessibility" in the subject
+- **Accessibility:** Otopair is working toward WCAG 2.1 Level AA across the app and the website — it tests against it, fixes what it finds, and fixes what people report. It doesn't claim conformance. If something doesn't work for someone (a screen reader, contrast, motion, a control they can't reach), they email support@otopair.com with what they were trying to do and what got in the way; a person replies, and Otopair gets them the information or service another way while it's fixed. The site's Accessibility page says the same
 
 ## How to answer common questions
 

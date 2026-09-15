@@ -78,7 +78,9 @@
             "possib",
             "often",
             "usually",
-            "a few things"
+            "a few things",
+            "can come from",
+            "(isn'?t|not) a diagnosis"
           ],
           "never": [
             "you (definitely )?need new (brake )?pads",
@@ -143,7 +145,7 @@
         }
       },
       {
-        "say": "Tuesday at 11 works. Book it.",
+        "say": "Wednesday at 11 works. Book it.",
         "expect": {
           "any": [
             "sample",
@@ -160,7 +162,7 @@
         }
       },
       {
-        "say": "Wait, so is my car actually booked for Tuesday?",
+        "say": "Wait, so is my car actually booked for Wednesday?",
         "expect": {
           "any": [
             "sample",
@@ -477,6 +479,122 @@
         "expect": {
           "any": [
             "past services"
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "name": "policy-questions",
+    "about": "Asks about the things counsel's policy pages and Privacy Policy v6.1 now state: shop checks, the 7-day window, refunds, the hold, reviews, data, retention, accessibility.",
+    "turns": [
+      {
+        "say": "Are the shops on Otopair licensed and insured?",
+        "expect": {
+          "any": [
+            "DMV"
+          ],
+          "all": [
+            "insur"
+          ]
+        }
+      },
+      {
+        "say": "Is the $20 hold a charge?",
+        "expect": {
+          "any": [
+            "not a charge",
+            "isn'?t a charge"
+          ],
+          "never": [
+            "raised to"
+          ]
+        }
+      },
+      {
+        "say": "How long do I have to tell you if something's wrong after a repair?",
+        "expect": {
+          "all": [
+            "7 days|seven days"
+          ],
+          "never": [
+            "14 days|fourteen days"
+          ]
+        }
+      },
+      {
+        "say": "If I get a refund, how long until it's back on my card?",
+        "expect": {
+          "any": [
+            "5.{1,3}10 business days",
+            "five to ten business days"
+          ]
+        }
+      },
+      {
+        "say": "Could a shop keep my car if there's a problem with the payment?",
+        "expect": {
+          "any": [
+            "can'?t hold",
+            "cannot hold",
+            "won'?t hold",
+            "not hold",
+            "never held",
+            "can'?t keep",
+            "cannot keep",
+            "not to hold",
+            "agreed not"
+          ]
+        }
+      },
+      {
+        "say": "Would you take down a bad review if the shop asked you to?",
+        "expect": {
+          "any": [
+            "never remove",
+            "won'?t remove",
+            "doesn'?t remove",
+            "don'?t remove",
+            "not remove"
+          ]
+        }
+      },
+      {
+        "say": "Do you sell my data?",
+        "expect": {
+          "any": [
+            "name",
+            "contact",
+            "payment"
+          ],
+          "never": [
+            "never sell",
+            "never sold",
+            "don'?t sell your data",
+            "do not sell your data",
+            "^no\b"
+          ]
+        }
+      },
+      {
+        "say": "How long do you keep my conversations with Oto?",
+        "expect": {
+          "any": [
+            "24 months",
+            "two years"
+          ]
+        }
+      },
+      {
+        "say": "Is your site accessible if I use a screen reader?",
+        "expect": {
+          "any": [
+            "WCAG",
+            "2.1"
+          ],
+          "deny": [
+            "fully (accessible|compliant|conformant)",
+            "(are|'re) (compliant|conformant)"
           ]
         }
       }

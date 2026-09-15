@@ -435,7 +435,7 @@ export const TRUST_DEMO = {
     "Hide fees",
     "Use upsells, scarcity, or countdowns",
     "Use panic or guilt language",
-    // Privacy Policy v5: VIN-keyed vehicle history is licensed (opt-out-able);
+    // Privacy Policy v6.1: VIN-keyed vehicle history may be licensed;
     // what is never sold is the person — name, contact, messages, payment.
     "Sell your name, contact or payment details",
     "Push services your car doesn’t need",

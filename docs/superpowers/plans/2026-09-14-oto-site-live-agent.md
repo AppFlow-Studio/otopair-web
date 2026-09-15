@@ -35,12 +35,20 @@
 - **Model: gpt-5.6-luna** (no reasoning), chosen side by side through the site chat over gemini-3.8-flash and claude-haiku-4-5; gemini-2.5-flash shuts down 2026-10-20. The prompt now stops it ending the call after a self-harm mention.
 - **Simulated visitors:** `scripts/oto/chat-sim.mjs`, 8 multi-turn scenarios. Final run 8/8 with no failures or warnings; all 47 site questions live, a card on every one, no repeats; one invented claim ("reviews shops in person") fixed in doc 17.
 
-**Blocking go-live:**
-1. **ElevenLabs credits.** The account is on Starter (30,000 credits/month, no overage) and is at 0 until 2026-10-10 — testing used it up. Oto can't hold a conversation until the plan is upgraded or credits are added; until then the site answers with the scripted demo. Starter can't carry a public site agent anyway.
-2. Rotate the ElevenLabs key; set Vercel production `ELEVENLABS_API_KEY` + `ELEVENLABS_AGENT_ID` (server-side only — no `NEXT_PUBLIC_` variable needed any more) and redeploy (§5).
+**Later on 2026-09-15 (`f57053d`…`09b71be`):**
+- **Self-harm ends the chat** (moderation back on, Waleed's call) and the site chat shows the 988 line itself, before the agent's reply can be cut off (`f57053d`).
+- **Every website sign-up is a Convex user** (`c4e2ba7`): `/api/waitlist` saves the pre-signup user (email, name, and the car from Oto) for the launch-list modal, borough waitlists, navbar form and Oto. Linking at app sign-up (`claimToken`, `getOrCreateMe`) is a colleague's work and untouched.
+- **Oto matches counsel's policy pages** (`09b71be`): the /trust checks, 7-day window, 5–10 day refunds, a hold that's "not a charge", data wording true under v5 and v6.1, reviews, accessibility. Conversation retention set to 730 days (v6.1 §10).
+- Live, after credits were added: all 9 simulated visitors pass (a new `policy-questions` visitor included), 11 conversations, ~2,000 credits; 22,990 left.
 
-**Site copy that now disagrees with the app (not changed here):** /oto promises gift cards and automatic credit; /vehicle-health-score shows "three questions · about 30 seconds" and an estimated score; plus the 25 site bugs from the audit.
-**Waleed's actions:** the two blockers above.
+**Blocking go-live:**
+1. **ElevenLabs plan.** Starter: 55,000 credits this period after a top-up, no overage, resets 2026-10-10. A public site agent needs a bigger plan; a conversation here costs ~180 credits.
+2. Rotate the ElevenLabs key; set Vercel production `ELEVENLABS_API_KEY` + `ELEVENLABS_AGENT_ID` (server-side only — no `NEXT_PUBLIC_` variable needed any more) and redeploy (§5).
+3. Ship this branch with `shop-portal-policies`: Oto now describes counsel's /trust, /cancellation and /warranties pages, which exist only on that branch.
+
+**Policy conflicts to settle (Oto avoids both sides):** counsel's /cancellation says the $20 hold is released when you show up, the app raises it to the confirmed price; counsel's /warranties says warranty terms show on shop listings, neither the app nor the site shows them; v6.1 promises a $10 service-record credit the backend removed; the site's /terms says 14 days where counsel says 7.
+**Site copy that now disagrees with the app (not changed here):** /oto promises gift cards and automatic credit; /vehicle-health-score shows "three questions · about 30 seconds" and an estimated score; /trust-and-safety says data is "never sold or rented"; plus the 25 site bugs from the audit.
+**Waleed's actions:** the three blockers above.
 **Left for the nav workstream:** `nav-menu.ts`, `pill-nav.tsx`, `page-shell.tsx`, `contact-client.tsx` stay uncommitted (session "App navigation for new pages/routes").
 
 > **For the session running this plan:** read it end to end before acting.

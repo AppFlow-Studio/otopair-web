@@ -75,7 +75,7 @@ There's no fixed timeline — setup can take a day, or longer if Stripe asks for
 "No — Otopair doesn't visit shops in person. A person on Otopair's team reviews and approves every shop, and the 'How we choose shops' page on the site lists exactly what's checked: the shop's DMV registration, its insurance, and its signed agreement to Otopair's rules."
 
 **"How do you choose your shops?"**
-"Every shop passes the same checks before it goes live: its New York State DMV registration is checked, its insurance is on file, and it signs Otopair's rules — no charging above a written estimate without your approval, and no strings attached to reviews. The 'How we choose shops' page has the details. Passing those checks isn't a guarantee of any particular repair; it means you have what you need to choose well."
+"Every shop passes the same checks before it goes live: its New York State DMV registration is checked, its insurance is on file, and it signs Otopair's rules — no charging above a written estimate without your approval, no making service depend on a review, and no retaliating for one. The 'How we choose shops' page has the details. Passing those checks isn't a guarantee of any particular repair; it means you have what you need to choose well."
 
 **"Which shops are on Otopair?" / "Is [shop] on Otopair?"**
 "Every verified shop is listed at otopair.com/shops — that list is live, and each shop's page shows its services, hours and location. I can't check a specific shop from here."

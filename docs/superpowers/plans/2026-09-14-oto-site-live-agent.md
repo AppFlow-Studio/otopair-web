@@ -39,10 +39,10 @@
 - **Self-harm ends the chat** (moderation back on, Waleed's call) and the site chat shows the 988 line itself, before the agent's reply can be cut off (`f57053d`).
 - **Every website sign-up is a Convex user** (`c4e2ba7`): `/api/waitlist` saves the pre-signup user (email, name, and the car from Oto) for the launch-list modal, borough waitlists, navbar form and Oto. Linking at app sign-up (`claimToken`, `getOrCreateMe`) is a colleague's work and untouched.
 - **Oto matches counsel's policy pages** (`09b71be`): the /trust checks, 7-day window, 5–10 day refunds, a hold that's "not a charge", data wording true under v5 and v6.1, reviews, accessibility. Conversation retention set to 730 days (v6.1 §10).
-- Live, after credits were added: all 9 simulated visitors pass (a new `policy-questions` visitor included), 11 conversations, ~2,000 credits; 22,990 left.
+- Live, after credits were added: all 9 simulated visitors pass (a new `policy-questions` visitor included), 11 conversations (59 turns), ~2,850 credits; 22,152 left.
 
 **Blocking go-live:**
-1. **ElevenLabs plan.** Starter: 55,000 credits this period after a top-up, no overage, resets 2026-10-10. A public site agent needs a bigger plan; a conversation here costs ~180 credits.
+1. **ElevenLabs plan.** Starter: 55,000 credits this period after a top-up, no overage, resets 2026-10-10. A public site agent needs a bigger plan; a turn here costs ~50 credits (~220 for a typical 5-turn conversation).
 2. Rotate the ElevenLabs key; set Vercel production `ELEVENLABS_API_KEY` + `ELEVENLABS_AGENT_ID` (server-side only — no `NEXT_PUBLIC_` variable needed any more) and redeploy (§5).
 3. Ship this branch with `shop-portal-policies`: Oto now describes counsel's /trust, /cancellation and /warranties pages, which exist only on that branch.
 

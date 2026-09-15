@@ -2,19 +2,18 @@
 
 ## Overview
 
-Otopair's rewards program is called **Ownership Credit**. It's real dollar credit, not points. Credit applies to the driver's next booking automatically, or the balance can be converted to a gift card. The exact amounts, tiers and terms — including how credit is earned, applied and when it expires — are shown on the rewards screen in the app.
+Otopair's rewards are called **Ownership Credit**: real dollar credit, not points. **Rewards aren't switched on in the app yet.** When they are, the app will show how credit is earned, what it's worth, how it can be used and when it expires. Until then there are no amounts, tiers or terms to share, and nothing about rewards should be promised.
 
 ## Motto
 
 **"When things go wrong, you matter more."**
 
-The principle is simple: rewards aren't about getting people to spend more. They're about being there when something goes wrong — covering a diagnostic, smoothing a difficult moment, making the driver feel protected.
+The principle is simple: rewards aren't about getting people to spend more. They're about being there when something goes wrong — smoothing a difficult moment, making the driver feel protected.
 
-## How Ownership Credit is earned
+## What credit is for
 
-- **Completing a booking** through Otopair — maintenance, diagnostics and repairs
-- **Leaving a review** after a completed booking — the same small credit whatever the rating
-- **Uploading a service record**
+- **Completing a booking** through Otopair
+- **Leaving a review** after a completed booking — the same credit whatever the rating
 - **Referring a friend** who completes their first booking
 
 ## What rewards never affect
@@ -26,22 +25,22 @@ The principle is simple: rewards aren't about getting people to spend more. They
 ## How to answer common questions
 
 **"How do rewards work?"**
-"You earn real dollar credit on every completed booking, plus extra for leaving a review, uploading a service record, or referring a friend who completes their first booking. It applies to your next booking automatically, or you can turn your balance into a gift card. The exact amounts and terms are shown in the app."
+"Otopair's rewards are called Ownership Credit — real dollar credit for things like completed bookings, reviews and referrals. They aren't switched on in the app yet, and when they are, the app will show exactly how credit is earned and what it's worth."
 
 **"How much credit do I get?"**
-"The rewards screen in the app shows the exact amounts — I don't have figures to quote here."
+"There aren't amounts to share yet — rewards aren't switched on in the app. The app will show them when they are."
 
-**"Do credits expire?"**
-"The rewards screen in the app spells out how credit is earned, applied and when it expires."
+**"Can I turn my credit into a gift card?" / "Does credit come off my next booking?"**
+"I can't promise that. Rewards aren't switched on in the app yet, and the app will spell out how credit can be used when they are."
 
-**"Are there tiers?"**
-"The app shows the tiers and their terms. Every driver gets the same transparent pricing either way."
+**"Do I get credit for uploading my service records?"**
+"Uploading records is about accuracy — it stops the app recommending work that's already been done. I can't promise credit for it."
 
 ## Important boundaries
 
-- Do **not** quote reward amounts, percentages, expiry periods, tier names or thresholds — they're shown in the app
+- Do **not** say rewards are live, or promise credit amounts, percentages, tiers, thresholds or expiry periods
+- Do **not** promise that credit converts to a gift card or comes off a booking automatically
+- Do **not** say uploading a service record earns credit
 - Do **not** say a good rating earns more — every review earns the same credit
-- Do **not** describe per-vehicle tier tracking mechanics
-- Do **not** explain the internal economics of how credit issuance is funded
-- Do **not** make rewards sound like a primary reason to use Otopair — they are a thank-you, not a hook
-- The right framing is: "Rewards eliminate real pain — they're not the reason to use Otopair, but they make the experience better"
+- Do **not** explain the internal economics of how credit is funded
+- Do **not** make rewards sound like a reason to use Otopair — they're a thank-you, not a hook

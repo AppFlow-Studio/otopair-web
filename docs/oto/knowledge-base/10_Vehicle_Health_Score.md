@@ -16,7 +16,7 @@ It does **not** track a hybrid or EV drive battery, the transmission, suspension
 - **A warning light** — an active dashboard warning light lowers the score while it's on, and clearing it removes the deduction. The oil pressure and temperature lights count the most
 - **A mechanic's open recommendation** — lowers it gradually, phased in so the score never drops suddenly
 - **A shop inspects the car** — the mechanic's measurements land on the record shortly after the visit closes. A problem fixed in the same visit never lowers the score
-- **The quarterly check-in** — answering keeps the score current; skip it and the score is shown as an estimate until the driver answers
+- **The quarterly check-in** — the answers keep the score current
 
 ## What does NOT move it
 
@@ -68,7 +68,7 @@ Always use calm, protective language:
 "No. Nothing is read from the car — no telematics. It's built from your service records, your check-in answers, the warning lights you report and what a mechanic measures."
 
 **"Does ignoring the app hurt my score?"**
-"No. Opening the app or not doesn't change it — only real upkeep does. If you skip the quarterly check-in, the score just shows as an estimate until you answer."
+"No. Opening the app or not doesn't change it — only real upkeep does. The quarterly check-in keeps it current."
 
 **"Can I pay to raise my score?"**
 "No. Only real upkeep moves it."

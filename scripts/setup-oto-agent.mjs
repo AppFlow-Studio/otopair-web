@@ -6,6 +6,7 @@
  *
  *   node scripts/setup-oto-agent.mjs --dry-run   # show what would change
  *   node scripts/setup-oto-agent.mjs             # apply
+ *   node scripts/setup-oto-agent.mjs --llm <model> [--reasoning <effort>]   # try another model
  *
  * The repo is the source of truth for the prompt. Edits made in the ElevenLabs
  * dashboard are overwritten on the next run — --dry-run reports that drift
@@ -69,6 +70,10 @@ function loadEnv() {
 // real visitors, so pushing to it is a deliberate act, not a side effect of
 // running a script.
 const DRY = process.argv.includes("--dry-run") || process.argv.includes("--check");
+const flagValue = (name) => {
+  const i = process.argv.indexOf(name);
+  return i !== -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith("--") ? process.argv[i + 1] : undefined;
+};
 
 const env = loadEnv();
 const API_KEY = env.ELEVENLABS_API_KEY;
@@ -195,7 +200,7 @@ const TOOLS = [
     type: "client",
     name: "show_demo",
     description:
-      "Show a visual card on screen while you talk. Call this EVERY time the conversation touches one of these topics — don't just describe them in words. Topic → feature: services / what do you offer / catalog → service_catalog; price / cost / fees → pricing; vehicle health / score → health_score; tires / new tires → tires; reviews / ratings / how shops are verified → ratings; rewards / credit / loyalty → rewards; what is Otopair / about → overview; where / coverage / areas / when a borough opens → coverage; payment methods / the $20 hold / refunds → payments; uploading service records → service_history; quarterly check-in → checkin; the Bookings tab for following existing bookings and tire quotes → bookings (NOT for demonstrating how to book — use the show_booking_flow walkthrough for that); notifications → notifications; trust / privacy / hidden fees / no upsells → trust. The pricing, ratings, rewards and health cards show clearly labeled samples — never read their figures out as real. The card carries the detail; keep your spoken reply short. Don't announce or read the card aloud.",
+      "Show a visual card on screen while you talk. Call this EVERY time the conversation touches one of these topics — don't just describe them in words. Topic → feature: services / what do you offer / catalog → service_catalog; price / cost / fees → pricing; vehicle health / score → health_score; tires / new tires → tires; reviews / ratings / how shops are verified → ratings; rewards / credit / loyalty → rewards (rewards are not switched on in the app yet — say so, and promise no amounts, gift cards or how credit is used); what is Otopair / about → overview; where / coverage / areas / when a borough opens → coverage; payment methods / the $20 hold / refunds → payments; uploading service records → service_history; quarterly check-in → checkin; the Bookings tab for following existing bookings and tire quotes → bookings (NOT for demonstrating how to book — use the show_booking_flow walkthrough for that); notifications → notifications; trust / privacy / hidden fees / no upsells → trust. The pricing, ratings and health cards show clearly labeled samples — never read their figures out as real. The card carries the detail; keep your spoken reply short. Don't announce or read the card aloud.",
     parameters: {
       type: "object",
       properties: {
@@ -348,7 +353,7 @@ const PROMPT_GUIDANCE = `
 You are Oto on the Otopair marketing site, talking to a visitor who's trying the assistant. Talk like a knowledgeable friend: short, natural, no jargon, never pushy. Answer their actual question first — the screen is a visual aid, not your script.
 
 Show things on screen by calling client tools — this is core to the experience, not optional. Whenever a topic has a matching card, CALL THE TOOL so it appears; don't answer in words alone.
-- show_demo(feature) — call EVERY time you discuss one of these topics so the card shows: service_catalog (services / what you offer), pricing (price / cost / fees), health_score, tires, ratings (reviews / how shops are verified), rewards (credit / loyalty), overview (what is Otopair), coverage (where / areas / when a borough opens), payments (payment methods / the $20 hold / refunds), service_history (uploading records), checkin (quarterly check-in), bookings (ONLY the Bookings tab — following existing bookings and tire quotes; do NOT use this to walk through how to book), notifications, trust (privacy / no hidden fees / no upsells). Example: asked "what services do you offer?" → call show_demo("service_catalog") AND give a one-line summary. The pricing, ratings, rewards and health cards use clearly labeled sample figures — never read them out as real.
+- show_demo(feature) — call EVERY time you discuss one of these topics so the card shows: service_catalog (services / what you offer), pricing (price / cost / fees), health_score, tires, ratings (reviews / how shops are verified), rewards (credit / loyalty — not switched on in the app yet, so no amounts, gift cards or promises), overview (what is Otopair), coverage (where / areas / when a borough opens), payments (payment methods / the $20 hold / refunds), service_history (uploading records), checkin (quarterly check-in), bookings (ONLY the Bookings tab — following existing bookings and tire quotes; do NOT use this to walk through how to book), notifications, trust (privacy / no hidden fees / no upsells). Example: asked "what services do you offer?" → call show_demo("service_catalog") AND give a one-line summary. The pricing, ratings and health cards use clearly labeled sample figures — never read them out as real.
 - decode_vin(vin) — when the visitor gives a 17-character VIN; confirm the car you get back. Decode ONCE — after that you already know their car.
 - show_vehicle() — to (re)show the visitor's OWN car and its full specs. Use this whenever they ask about "my car", "my specs", "show it again", etc. Never use show_demo 'overview' for their specific car.
 - BOOKING WALKTHROUGH — when the visitor asks how booking works, to see the flow, or to go step by step, call show_booking_flow() FIRST (it opens the interactive walkthrough on the shop-picker). Then narrate as they tap through: pick a shop → pick a time → confirm. You can advance for them with show_times then confirm_booking. NEVER use show_demo("bookings") for this — that card only tracks existing appointments.
@@ -437,13 +442,28 @@ function planKnowledgeBase(live) {
   return { manifest, keep, upload, detach };
 }
 
+// ---- the model ----------------------------------------------------------------
+// The LLM Oto runs on, owned here like the prompt. Try another through the same
+// verified path without editing this file:
+//   node scripts/setup-oto-agent.mjs --llm gpt-5.6-luna --reasoning none
+const LLM = {
+  llm: flagValue("--llm") ?? "gemini-2.5-flash",
+  reasoning_effort: flagValue("--reasoning") ?? null,
+};
+const describeLlm = (p) => `${p.llm}${p.reasoning_effort ? ` (reasoning ${p.reasoning_effort})` : ""}`;
+
 // ---- platform settings the repo owns ----------------------------------------
 // Oto is a public marketing chat about cars. Guardrails keep it on topic and
-// resistant to prompt injection. Content moderation blocks sexual content,
-// harassment and self-harm; violence (crash talk), profanity (frustrated
-// drivers), religion/politics (focus already covers off-topic) and
-// medical/legal (safety and insurance questions are on-topic) stay off, because
-// a trigger ends the visitor's conversation.
+// resistant to prompt injection. Content moderation blocks sexual content and
+// harassment. Violence (crash talk), profanity (frustrated drivers),
+// religion/politics (focus already covers off-topic) and medical/legal (safety
+// and insurance questions are on-topic) stay off, because a trigger ends the
+// visitor's conversation.
+//
+// Self-harm is off too, deliberately. The trigger action is one setting for
+// every category, and it ends the call, so a visitor who mentioned hurting
+// themselves was cut off before Oto could point them to the 988 Suicide and
+// Crisis Lifeline, as its prompt tells it to. The prompt handles it instead.
 const CONTENT_CATEGORIES = [
   "sexual",
   "violence",
@@ -453,7 +473,7 @@ const CONTENT_CATEGORIES = [
   "religion_or_politics",
   "medical_and_legal_information",
 ];
-const CONTENT_ON = new Set(["sexual", "harassment", "self_harm"]);
+const CONTENT_ON = new Set(["sexual", "harassment"]);
 // A ceiling on what anyone can spend through the site before launch.
 const CALL_LIMITS = { agent_concurrency_limit: 25, daily_limit: 2000, bursting_enabled: false };
 
@@ -571,6 +591,21 @@ async function main() {
 
   console.log(`  · Base prompt (scripts/oto/base-prompt.md): ${BASE_PROMPT.length} chars — live ${liveBase.length} chars, ${baseSame ? "identical" : "DIFFERENT, would be replaced"}`);
   console.log(`  · Guidance block: ${PROMPT_GUIDANCE.length} chars — live ${liveBlock.length} chars, ${blockSame ? "identical" : "DIFFERENT, would be replaced"}`);
+  const llmSame = promptCfg.llm === LLM.llm && (promptCfg.reasoning_effort ?? null) === LLM.reasoning_effort;
+  console.log(`  · Model: live ${describeLlm(promptCfg)} — ${llmSame ? "as configured" : `DIFFERENT, would set ${describeLlm(LLM)}`}`);
+  // Refuse a model the platform won't run, and say so when one is being
+  // retired: gemini-2.5-flash sat in its deprecation window unnoticed until
+  // 2026-09-14, weeks before ElevenLabs began moving its traffic elsewhere.
+  const llms = (await api("/v1/convai/llm/list")).llms ?? [];
+  const chosen = llms.find((m) => m.llm === LLM.llm);
+  if (!chosen) throw new Error(`${LLM.llm} is not an LLM this account can use (see /v1/convai/llm/list).`);
+  if (LLM.reasoning_effort && !(chosen.available_reasoning_efforts ?? []).includes(LLM.reasoning_effort)) {
+    throw new Error(`${LLM.llm} has no reasoning effort "${LLM.reasoning_effort}" (it offers: ${(chosen.available_reasoning_efforts ?? []).join(", ") || "none"}).`);
+  }
+  const dep = chosen.deprecation_info;
+  if (dep?.is_deprecated) {
+    console.log(`  ⚠ ${LLM.llm} is deprecated: provider shutdown ${dep.provider_deprecation_date?.slice(0, 10)}, replacement ${dep.replacement_model}.`);
+  }
   const liveFirst = (agent?.conversation_config?.agent?.first_message ?? "").trim();
   console.log(`  · First message (scripts/oto/first-message.txt): ${liveFirst === FIRST_MESSAGE ? "identical" : `DIFFERENT, would be replaced — live: "${liveFirst}"`}`);
   if (!baseSame && liveBase && FEE_RATE.test(liveBase)) {
@@ -619,12 +654,18 @@ async function main() {
       conversation_config: {
         agent: {
           first_message: FIRST_MESSAGE,
-          prompt: { tool_ids: mergedIds, prompt: newPrompt, knowledge_base: knowledgeBase },
+          prompt: {
+            llm: LLM.llm,
+            reasoning_effort: LLM.reasoning_effort,
+            tool_ids: mergedIds,
+            prompt: newPrompt,
+            knowledge_base: knowledgeBase,
+          },
         },
       },
     }),
   });
-  console.log(`  ✓ Prompt, ${mergedIds.length} tool(s) and ${knowledgeBase.length} knowledge-base docs set.`);
+  console.log(`  ✓ Model ${describeLlm(LLM)}, prompt, ${mergedIds.length} tool(s) and ${knowledgeBase.length} knowledge-base docs set.`);
 
   if (settings.patch) {
     await api(`/v1/convai/agents/${AGENT_ID}`, {
@@ -640,6 +681,7 @@ async function main() {
   const vKb = new Set((vp.knowledge_base ?? []).map((d) => d.id));
   const checks = [
     ["prompt matches the repo", (vp.prompt ?? "").trim() === newPrompt.trim()],
+    [`model is ${describeLlm(LLM)}`, vp.llm === LLM.llm && (vp.reasoning_effort ?? null) === LLM.reasoning_effort],
     ["first message matches the repo", (verify?.conversation_config?.agent?.first_message ?? "").trim() === FIRST_MESSAGE],
     [`all ${mergedIds.length} tools attached`, mergedIds.every((id) => (vp.tool_ids ?? []).includes(id))],
     [

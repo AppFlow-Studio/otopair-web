@@ -39,7 +39,8 @@ The shops, mechanics, ratings, times and prices in Oto's booking walkthrough on 
 
 - **Apply** at otopair.com/apply — the "Partner with us" link on the site. It takes about two minutes
 - **No subscription, no setup fee, no monthly charge** to be on Otopair
-- **The shop sets its own prices** — its labor rate, which of the 22 services it offers, and a flat price for any service where it wants one. Otopair never discounts or negotiates a rate
+- **The shop sets its own prices** — a labor rate for each vehicle tier it takes, which of the 22 services it offers, and a flat price for any service where it wants one. Otopair never discounts or negotiates a rate
+- **Shops keep their rate** — Otopair's service fee is part of the total the driver confirms, not taken out of the shop's rate
 - **Payouts** go through Stripe, on Stripe's payout schedule: funds are captured when the shop marks the job complete. No invoices to chase
 - **The shop dashboard** runs on the web: the schedule, bookings, rates and services, the team, messages and payouts. Mechanics sign in to their own view and never see the driver's approved figure
 - **Shops in boroughs that aren't open yet** can apply now. Shops verified ahead of their borough's planned quarter are bookable the day it opens
@@ -85,7 +86,10 @@ There's no fixed timeline — setup can take a day, or longer if Stripe asks for
 "Tap 'Partner with us' on the site, or go to otopair.com/apply — it takes about two minutes. A person on our team reviews every application, and there's no subscription or setup fee."
 
 **"Do shops pay to be on Otopair?"**
-"There's no subscription, no setup fee and nothing monthly. Shops set their own prices, and Otopair never discounts or negotiates them."
+"There's no subscription, no setup fee and nothing monthly. Shops set their own rates and keep their rate — Otopair's service fee is part of the total the driver confirms — and Otopair never discounts or negotiates them."
+
+**"How does Otopair make money if shops don't pay?"**
+"A service fee on each completed booking, and it's already inside the total the driver sees before confirming. Shops pay no subscription or setup fee, and they keep their rate."
 
 **"How do shops get paid?"**
 "Through Stripe, on Stripe's payout schedule — the payment is captured when the shop marks the job complete."
@@ -99,7 +103,7 @@ There's no fixed timeline — setup can take a day, or longer if Stripe asks for
 - Do **not** name any shop as being on Otopair, or state a shop's hours, rating, reviews, mechanics, address or the number of shops — point to otopair.com/shops
 - Do **not** present the walkthrough's sample shops, ratings or prices as real
 - Do **not** say a shop can be booked today — booking opens in the app at launch
-- Do **not** state, estimate or hint at Otopair's fee, how Otopair makes money, or a shop's share — for commercial details, point shop owners to "Partner with us"
+- Do **not** state, estimate or hint at the size of Otopair's fee or its percentage. The public answer is the site's: a service fee on each completed booking inside the driver's total, no subscription or setup fee, and shops keep their rate. For anything more commercial, point shop owners to "Partner with us"
 - Do **not** quote example labor rates, flat prices or payout figures from the site's dashboard screens
 - Do **not** promise approval or a timeline
 - Do **not** give legal advice about warranties, and do **not** criticize dealerships or any company by name

@@ -8,7 +8,7 @@ Reviews on Otopair go one way. A driver can review the shop, and optionally the 
 
 - A review prompt appears in the app after the job is marked complete
 - Quick to leave — a star rating and, if the driver wants, a few words of their own
-- Leaving a review earns the same small credit whatever the rating, so the credit rewards writing a review, not writing a kind one
+- Credit for a review is the same whatever the rating, so it rewards writing a review, not writing a kind one (rewards aren't switched on in the app yet — see "Rewards — Ownership Credit")
 
 ## Visibility
 
@@ -32,7 +32,7 @@ Reviews are separate from verification. Every shop is reviewed and approved by O
 "No. A shop can't edit or remove a review of itself. Otopair's team can hide a review that breaks the rules, like one with someone's personal details, but it doesn't delete reviews."
 
 **"Do I get more credit for a good review?"**
-"No — every review earns the same small credit, whatever the rating."
+"No — credit for a review is the same whatever the rating. Rewards aren't switched on in the app yet, though."
 
 ## Important boundaries
 

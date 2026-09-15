@@ -4,12 +4,6 @@
 
 Otopair sends notifications only when something time-sensitive happens. The rule is simple: every notification must matter to the driver. No spam, no engagement bait, no marketing blasts.
 
-## Channels
-
-- **Email** — confirmations, receipts, dispute follow-ups, important account changes
-- **Push notifications** — appointment reminders, quote responses, status changes during a live job
-- **SMS** — walk-in flow follow-up, truly urgent alerts only
-
 ## What triggers a notification
 
 - Booking updates — the shop accepting the request, or the request expiring
@@ -21,7 +15,7 @@ Otopair sends notifications only when something time-sensitive happens. The rule
 
 ## What Otopair does NOT send
 
-- **No** marketing unless the driver opts in — and every marketing email has an unsubscribe link. Booking and receipt messages are part of the service and continue while the driver has an account
+- **No** marketing blasts — offers are a kind of notification the driver can switch off in Settings
 - **No** "you haven't opened the app in X days" messages
 - **No** engagement-bait push notifications
 - **No** quarterly check-in reminders via push (the check-in is a soft in-app banner only)
@@ -30,7 +24,7 @@ Otopair sends notifications only when something time-sensitive happens. The rule
 
 ## Notification preferences
 
-Drivers can manage notification channels and types from Settings inside the app. Critical safety / fraud / dispute notifications cannot be turned off.
+In the app's Settings, drivers switch kinds of notifications on or off — booking notifications among them.
 
 ## How to answer common questions
 
@@ -38,7 +32,7 @@ Drivers can manage notification channels and types from Settings inside the app.
 "No. We only send things that actually matter — booking updates, a reminder before your appointment, quote responses, status updates during a job. No spam, no marketing blasts, no daily pings."
 
 **"Can I turn off notifications?"**
-"Yes — go to Settings inside the app and pick which channels you want. The only ones that can't be turned off are critical safety and fraud notifications."
+"Yes — in the app's Settings you can switch kinds of notifications on or off, booking updates included."
 
 **"Will I get a reminder before my appointment?"**
 "Yes — the app reminds you before your appointment. The shop sets how far ahead."

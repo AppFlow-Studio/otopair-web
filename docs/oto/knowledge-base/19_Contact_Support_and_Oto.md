@@ -9,7 +9,7 @@
 
 - The driver says what the car is doing, by voice or by text, in their own words — no service menu, no form. Voice is optional; everything works by typing
 - Oto asks one narrowing question, not twenty
-- It reads the car from its VIN (or year, make and model) and checks the service history, the manufacturer's data for that exact car and any stored codes. Every answer shows what it checked
+- It reads the car from its VIN (or year, make and model) and checks the service history and the manufacturer's data for that exact car — nothing is read from the car itself. Every answer shows what it checked
 - It scopes what the driver describes into a job a shop can price and sets up the booking flow with the right service prefilled. It shows only the services that apply to the car, and the verified shops that can take it with the total each one set
 - The driver chooses the shop, the time and the payment themselves
 - It explains the 22 services, shows what's due and the Vehicle Health Score, looks up bookings and pulls the car's specs

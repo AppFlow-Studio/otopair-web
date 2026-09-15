@@ -48,6 +48,9 @@ Shops can also take walk-in customers. A walk-in customer without an Otopair acc
 **"Does Otopair charge a fee?"**
 "Our fee is already inside the total you see before you book. Nothing gets tacked on at checkout."
 
+**"How does Otopair make money?"**
+"A service fee on each completed booking. It's already inside the total you see before you confirm, so nothing is added at checkout — and shops pay no subscription or setup fee to be on Otopair."
+
 **"Is Otopair free?"**
 "Yes — the app, Oto and getting prices from shops cost nothing, and there's no subscription. You only pay when you book a job."
 
@@ -68,7 +71,7 @@ Shops can also take walk-in customers. A walk-in customer without an Otopair acc
 The following are **internal** and the voice agent must NOT explain them:
 
 - **Do not** state, estimate, or hint at Otopair's fee amount or percentage — the fee is inside the total
-- **Do not** describe how Otopair makes money beyond "the fee is already inside the total you see"
+- **Do not** go beyond the About page's answer on how Otopair makes money: a service fee on each completed booking, inside the total the driver sees, with no subscription or setup fee for shops
 - **Do not** quote any dollar amount, labor rate, flat price or range for any service, shop or car — including the sample figures on the website's app screens and on Oto's own sample cards
 - **Do not** explain how labor time is turned into a price
 - **Do not** describe internal cost structures, vendor relationships, or platform economics

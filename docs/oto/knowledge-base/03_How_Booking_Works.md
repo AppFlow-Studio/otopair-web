@@ -2,12 +2,12 @@
 
 ## Overview
 
-In the Otopair app, a driver goes from "my car is doing something" to a booked slot in about 90 seconds. There's no service menu to decode: the driver tells Oto what the car is doing — or asks for a service by name — and every verified shop shows its own total for that exact car. A booking is a request the shop accepts, secured by a $20 hold.
+In the Otopair app, a driver goes from "my car is doing something" to a booked slot without decoding a service menu: the driver tells Oto what the car is doing — or asks for a service by name — and every verified shop shows its own total for that exact car. A booking is a request the shop accepts, secured by a $20 hold.
 
 ## How it works, in seven steps
 
 1. **Tell Oto what the car is doing** — by voice or by text, in your own words. No service menu, no form. Oto asks one narrowing question, not twenty
-2. **Oto scopes the job** — it reads the car from its VIN (or year, make and model), checks the service history, the manufacturer's data for that exact car and any stored codes, and names the job a shop can price. A guide, not a diagnosis
+2. **Oto scopes the job** — it reads the car from its VIN (or year, make and model), checks the service history and the manufacturer's data for that exact car, and names the job a shop can price. Nothing is read from the car itself. A guide, not a diagnosis
 3. **Every verified shop shows its total for your car** — each shop sets its own price, and you see the full amounts side by side. You choose the shop and the time yourself, and you can pick one of the shop's mechanics or let any available mechanic take it
 4. **Book & Pay places a $20 hold** — an authorization, not a charge (Apple Pay, Google Pay or card). The booking goes to the shop to accept
 5. **The shop inspects the car and confirms the estimate** — within what you approved, it confirms on its own. You follow along in the Bookings tab
@@ -29,9 +29,10 @@ In the Otopair app, a driver goes from "my car is doing something" to a booked s
 
 ## Features that make booking faster
 
-- **Re-Book** from a past booking pulls the same shop and service
-- **Map or list** of nearby verified shops, sorted by closest, best rated or best price — or take Oto's pick
+- **Your most recent booking** sits at the top of the booking screen — one tap brings back the same services and shop, straight to picking a time
+- **Nearby verified shops**, with the shops that offer everything you chose listed first, then the closest
 - Open times come straight from each shop's schedule
+- A car's first booking starts with its first quarterly check-in (see "Quarterly Check-In")
 
 ## Rescheduling and cancelling
 
@@ -47,7 +48,7 @@ The total you approve when you book is a ceiling. If the shop finds more, it sen
 ## How to answer common questions
 
 **"How do I book?"**
-"In the app: tell Oto what the car's doing, see each verified shop's total for your exact car, pick a shop and a time, and book with a $20 hold. The shop inspects the car and confirms the price, and you're charged when the job's done. It takes about 90 seconds — the app's launching soon, so join the launch list to hear first."
+"In the app: tell Oto what the car's doing, see each verified shop's total for your exact car, pick a shop and a time, and book with a $20 hold. The shop inspects the car and confirms the price, and you're charged when the job's done. The app's launching soon, so join the launch list to hear first."
 
 **"Is my appointment confirmed right away?"**
 "Your booking goes to the shop to accept, with the $20 hold on your card. If the shop doesn't accept in time, the request expires, the hold is released and nothing is charged."

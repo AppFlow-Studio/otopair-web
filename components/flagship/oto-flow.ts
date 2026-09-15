@@ -59,7 +59,6 @@ export interface Shop {
   rating: number;
   eta: string;
   price: number;
-  bestValue?: boolean;
   /** The sample mechanic shown on the sample receipt for this shop. */
   mechanic?: string;
 }
@@ -169,7 +168,6 @@ export const DEFAULT_SHOPS: Shop[] = [
     rating: 4.9,
     eta: "Today",
     price: 312,
-    bestValue: true,
     mechanic: "Marcus T.",
   },
   {
@@ -360,17 +358,17 @@ export const RATINGS_DEMO = {
     "One review per completed booking",
     "Shops can't review drivers",
     "Shops can't edit or remove a review",
-    "Same small credit, whatever the rating",
+    "Same credit, whatever the rating",
   ],
 };
 
-// Rewards — Ownership Credit (RAG doc 13). Dollar credit, not points. The site
-// publishes no amounts, rates, tiers or expiry ("shown in the app"), so the
-// card shows a sample balance and the ways to earn — no figures.
+// Rewards — Ownership Credit (RAG doc 13). Dollar credit, not points — and not
+// switched on in the driver app yet (its rewards screen is disabled for
+// launch), so the card promises no balance, gift card or amounts. Uploading a
+// service record no longer earns credit in the backend.
 export const REWARDS_DEMO = {
   motto: "When things go wrong, you matter more.",
-  balance: 24,
-  earn: ["Completed bookings", "Leaving a review", "Uploading a service record", "Referring a friend"],
+  earn: ["Completed bookings", "Leaving a review", "Referring a friend"],
 };
 
 // Overview (RAG doc 01).
@@ -415,12 +413,15 @@ export const SERVICE_HISTORY_DEMO = {
   reward: "Every record makes recommendations more accurate",
 };
 
-// Quarterly check-in (RAG doc 11). Three questions, about 30 seconds — the
-// /vehicle-health-score page's wording.
+// Quarterly check-in (RAG doc 11), as the driver app runs it: the first one
+// before a car's first booking, then a banner on the Cars tab every 90 days.
+// The question set depends on the car, so no count — and the app itself says
+// "about a minute".
 export const CHECKIN_DEMO = {
   cadence: "Every 90 days",
-  questions: ["Current mileage", "Services done elsewhere", "Warning lights or anything off"],
-  note: "About 30 seconds, and optional — skip it and the score shows as an estimate.",
+  banner: "Quick check-in for your car",
+  questions: ["Current mileage", "Recent service", "Warning lights"],
+  note: "About a minute. The first one comes before a car's first booking — no push notifications, no badge.",
 };
 
 // Bookings tab (RAG doc 14).
@@ -431,10 +432,10 @@ export const BOOKINGS_DEMO = {
       desc: "Every booking with its live status — confirmed, in service, ready for pickup.",
     },
     {
-      name: "Tire quotes",
-      desc: "Quotes as shops respond — accept one to book it, or cancel free.",
+      name: "Quotes",
+      desc: "Tire quotes as shops respond — accept one to book it, or cancel free.",
     },
-    { name: "Past bookings", desc: "Completed jobs with their itemized receipts." },
+    { name: "Recommended", desc: "Work a mechanic recommended for your car." },
   ],
 };
 

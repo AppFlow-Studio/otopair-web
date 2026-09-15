@@ -363,17 +363,15 @@ export function RewardsCard() {
 
       <Step delay={0.16} className="mt-4 flex items-end justify-between rounded-xl bg-[#1a1a1a] px-4 py-4 text-white">
         <div>
-          <p className="text-[11px] uppercase tracking-wide text-white/55">Available credit</p>
-          <CountUp to={r.balance} decimals={2} prefix="$" className="text-[28px] font-semibold leading-none" />
+          <p className="text-[11px] uppercase tracking-wide text-white/55">In the app</p>
+          <p className="text-[20px] font-semibold leading-tight">Coming soon</p>
         </div>
-        <span className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-medium">
-          Sample balance
-        </span>
+        <span className="rounded-full bg-white/15 px-2.5 py-1 text-[11px] font-medium">Not switched on yet</span>
       </Step>
 
       <Step delay={0.28}>
         <p className="mt-4 mb-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/45">
-          Ways to earn
+          What credit is for
         </p>
       </Step>
       <div className="space-y-2">
@@ -391,8 +389,8 @@ export function RewardsCard() {
 
       <Step delay={0.7}>
         <p className="mt-3 text-[11px] text-[#1a1a1a]/45">
-          Real dollars, not points — applied to your next booking, or converted to a gift card. Exact
-          amounts, tiers and terms are shown in the app.
+          Real dollars, not points. How credit is earned, what it&apos;s worth and how you use it will be
+          shown in the app when rewards are switched on.
         </p>
       </Step>
     </OtoCard>
@@ -467,11 +465,11 @@ export function CheckinCard() {
   return (
     <OtoCard icon={CalendarClock} title="Quarterly check-in" subtitle={CHECKIN_DEMO.cadence}>
       <Step delay={0.15} className="mt-4 rounded-xl border border-dashed border-[#1a1a1a]/15 bg-[#1a1a1a]/[0.03] px-4 py-3">
-        <p className="text-[13px] text-[#1a1a1a]">“It’s been a few months — quick check-in to keep your car on track.”</p>
+        <p className="text-[13px] text-[#1a1a1a]">“{CHECKIN_DEMO.banner}”</p>
       </Step>
       <Step delay={0.27}>
         <p className="mt-4 text-[11px] font-semibold uppercase tracking-[0.12em] text-[#1a1a1a]/45">
-          Three quick questions
+          Quick questions, like
         </p>
       </Step>
       <Pills items={CHECKIN_DEMO.questions} base={0.32} />

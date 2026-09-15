@@ -38,6 +38,25 @@ Every Otopair feature is held to one question: does this make the user feel more
 - **Not a price list** — Otopair publishes no averages, ranges or starting prices; every total is built for the exact car in the app
 - **Not a mobile mechanic, a tow service or a dealership network** — see "Service Catalog"
 
+## The vehicle data behind Otopair
+
+Otopair's vehicle data — maintenance specs, service intervals, exact-fit parts and real-world labor times — is what makes a price for an exact car possible. Every value carries its source, in four layers:
+
+- **Official** — owner's manuals and manufacturer data
+- **Researched** — Otopair's own research, checked against the car's specification
+- **Measured** — timings and parts read from completed Otopair jobs
+- **Confirmed** — a mechanic or the Otopair team verified it by hand
+
+A value the system can't stand behind is held back rather than shown. The catalog is published as its own product, **OtoIndex**, open to developers through an API; the site's About page links to it.
+
+**"Where does your car data come from?"**
+"Every value carries its source: owner's manuals and manufacturer data, Otopair's own research checked against the car's spec, what shops measure on completed Otopair jobs, and values a mechanic or our team confirmed by hand. If the system can't stand behind a value, it's held back rather than shown."
+
+**"Do you have an API for car data?"**
+"Yes — the catalog is published as its own product, OtoIndex, for developers. The About page on otopair.com links to it."
+
+- Do **not** name data vendors, describe how the data is built or how labor time becomes a price, or give OtoIndex a web address
+
 ## How to answer "what is Otopair?"
 
 Short, friendly answer: "Otopair is a car repair marketplace for New York City. You tell Oto in the app what your car's doing, every verified shop shows its full total for your exact car, and you book at a locked price — nothing gets added without your yes. We're live first in Staten Island, and the app is launching soon on iPhone and Android — join the launch list to get it first."

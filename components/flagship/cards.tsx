@@ -352,11 +352,6 @@ export function ChooseShopCard({
                   : "bg-[#1a1a1a]/[0.03] hover:bg-[#1a1a1a]/[0.05]"
               }`}
             >
-              {shop.bestValue && (
-                <span className="absolute -top-2 left-3 rounded-full bg-[#1a1a1a] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">
-                  Best value
-                </span>
-              )}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[14px] font-medium text-[#1a1a1a]">{shop.name}</p>

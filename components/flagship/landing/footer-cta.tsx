@@ -16,6 +16,8 @@ import {
 
 const FOOTER_LINKS = [
   { href: "/privacy", label: "Privacy" },
+  // Privacy Policy v6.1 §6 points to a "Your Privacy Choices" link.
+  { href: "/privacy-choices", label: "Your privacy choices" },
   { href: "/terms", label: "Terms" },
   { href: "/shop-portal-terms", label: "Shop portal terms" },
   { href: "/contact", label: "Contact" },

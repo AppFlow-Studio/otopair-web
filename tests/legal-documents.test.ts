@@ -107,21 +107,27 @@ describe("counsel's legal documents", () => {
 });
 
 describe("the production guard", () => {
-  it("still blocks /privacy: the privacy-choices and delete-account pages don't exist yet", () => {
-    expect(readLegalDocument("privacy").pending).toEqual(["PRIVACY_CHOICES_URL", "DELETE_ACCOUNT_URL"]);
-    expect(() => readLegalDocument("privacy", { env: PRODUCTION })).toThrow(/PRIVACY_CHOICES_URL, DELETE_ACCOUNT_URL/);
-    expect(() => readLegalDocument("privacy", { env: { VERCEL_ENV: "production" } })).toThrow();
+  it("blocks /privacy while either page §6 names is unset, and only in production", () => {
+    const facts = { ...LEGAL_FACTS, privacyChoicesPath: null, deleteAccountPath: null };
+    expect(readLegalDocument("privacy", { facts }).pending).toEqual(["PRIVACY_CHOICES_URL", "DELETE_ACCOUNT_URL"]);
+    expect(() => readLegalDocument("privacy", { facts, env: PRODUCTION })).toThrow(/PRIVACY_CHOICES_URL, DELETE_ACCOUNT_URL/);
+    expect(() => readLegalDocument("privacy", { facts, env: { VERCEL_ENV: "production" } })).toThrow();
     // Previews and dev render the draft, marked.
-    expect(() => readLegalDocument("privacy", { env: { VERCEL_ENV: "preview", NODE_ENV: "production" } })).not.toThrow();
+    expect(() => readLegalDocument("privacy", { facts, env: { VERCEL_ENV: "preview", NODE_ENV: "production" } })).not.toThrow();
   });
 
-  it("lets /privacy through once both paths are set, reading exactly as counsel wrote it", () => {
-    const facts = { ...LEGAL_FACTS, privacyChoicesPath: "/privacy-choices", deleteAccountPath: "/delete-account" };
-    const { doc, pending } = readLegalDocument("privacy", { facts, env: PRODUCTION });
+  it("lets /privacy through now that both pages exist, reading exactly as counsel wrote it", () => {
+    const { doc, pending } = readLegalDocument("privacy", { env: PRODUCTION });
     expect(pending).toEqual([]);
     const choices = blockText(doc.sections.find((s) => s.number === "6")!.blocks);
     expect(choices).toContain("through the “Your Privacy Choices” link at otopair.com/privacy-choices. We do not require");
     expect(choices).toContain("at otopair.com/delete-account, or by emailing support@otopair.com. When you delete");
+  });
+
+  it("points §6 at pages that exist", () => {
+    for (const path of [LEGAL_FACTS.privacyChoicesPath, LEGAL_FACTS.deleteAccountPath]) {
+      expect(existsSync(join(process.cwd(), "app", "(marketing)", path!.slice(1), "page.tsx"))).toBe(true);
+    }
   });
 
   it("has nothing left to block on /shop-portal-terms or the site policy pages", () => {

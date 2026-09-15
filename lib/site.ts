@@ -110,6 +110,8 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/cancellation", changeFrequency: "yearly", priority: 0.5 },
   { path: "/security", changeFrequency: "yearly", priority: 0.4 },
   { path: "/accessibility", changeFrequency: "yearly", priority: 0.3 },
+  { path: "/privacy-choices", changeFrequency: "yearly", priority: 0.3 },
+  { path: "/delete-account", changeFrequency: "yearly", priority: 0.3 },
   { path: "/careers", changeFrequency: "monthly", priority: 0.3 },
   { path: "/press", changeFrequency: "yearly", priority: 0.3 },
   { path: "/help", changeFrequency: "weekly", priority: 0.6 },

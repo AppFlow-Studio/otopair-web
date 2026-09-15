@@ -25,12 +25,16 @@ const isPublicRoute = createRouteMatcher([
   "/warranties",
   "/trust",
   "/accessibility",
+  // The two pages Privacy Policy v6.1 §6 names, and the route their forms post to.
+  "/privacy-choices",
+  "/delete-account",
   "/contact",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/accept-invite(.*)",
   "/api/waitlist",
   "/api/contact",
+  "/api/privacy-requests",
   "/api/webhooks(.*)",
   // B2B shop onboarding — public top of funnel (no auth): partner marketing
   // page, the application intake form, and its submit endpoint.

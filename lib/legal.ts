@@ -40,12 +40,10 @@ export const LEGAL_FACTS: LegalFacts = {
   privacyEffectiveDate: "2026-09-15",
   portalTermsEffectiveDate: "2026-09-15",
   mailingAddress: "200 Vesey Street, 24th Floor, New York, NY 10281",
-  // Still open (the owner is raising both with counsel): v6.1 sends people
-  // to otopair.com/privacy-choices and otopair.com/delete-account, and
-  // neither page exists yet. Set each path once its page ships; until then
-  // /privacy will not deploy to production.
-  privacyChoicesPath: null,
-  deleteAccountPath: null,
+  // The two pages v6.1 §6 sends people to (built 2026-09-15). Each is a
+  // form that records the request in Convex and emails support.
+  privacyChoicesPath: "/privacy-choices",
+  deleteAccountPath: "/delete-account",
   // DMV's own consumer guide (dmv.ny.gov/brochure/know-your-rights-auto-repair)
   // says "Use the Find a DMV-regulated Business service to find a registered
   // repair shop in your area" and links this page, which opens the search.

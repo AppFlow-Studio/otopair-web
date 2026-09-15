@@ -7054,4 +7054,25 @@ export default defineSchema({
   })
     .index("by_vin", ["vin"])
     .index("by_status", ["status"]),
+
+  // ── Privacy requests from otopair.com ─────────────────────────────────────
+  // The /privacy-choices and /delete-account forms Privacy Policy v6.1 §6
+  // names. A row is a request for the team to act on, not the action: an email
+  // typed into a public form proves nothing, so a deletion is verified against
+  // the account (v6.1 "Exercising your rights") before anything is removed.
+  // One open row per email and kind; a repeat submit refreshes it.
+  privacy_requests: defineTable({
+    kind: v.union(v.literal("opt_out_vehicle_history"), v.literal("delete_account")),
+    email: v.string(), // trimmed + lowercased
+    /** The account with that email when the request arrived, if there was one. */
+    user_id: v.optional(v.id("users")),
+    /** The browser sent a Global Privacy Control signal (v6.1 honours it as an opt-out). */
+    gpc: v.optional(v.boolean()),
+    source: v.string(), // "website"
+    status: v.string(), // "open" | "done" | "declined"
+    created_at: v.number(),
+    last_submitted_at: v.number(),
+  })
+    .index("by_email_kind_status", ["email", "kind", "status"])
+    .index("by_status", ["status", "created_at"]),
 });

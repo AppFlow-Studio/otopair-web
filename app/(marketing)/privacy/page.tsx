@@ -15,8 +15,8 @@ export const metadata: Metadata = {
  * v5). The wording lives in content/legal/privacy-policy.md — replace that
  * file with counsel's next version rather than editing the text here.
  * Placeholders resolve from lib/legal.ts; the page will not build for a
- * production deploy while any are unset (today: the /privacy-choices and
- * /delete-account pages §6 names).
+ * production deploy while any are unset. §6's /privacy-choices and
+ * /delete-account now exist (app/(marketing)/privacy-choices, delete-account).
  */
 export default function PrivacyPage() {
   const { doc, toc, pending } = loadLegalDocument("privacy");

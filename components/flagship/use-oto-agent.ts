@@ -170,6 +170,11 @@ export function useOtoAgent() {
   // Messages typed while a live session is still opening; the connect effect
   // sends them once it's up.
   const pendingTextRef = useRef<string[]>([]);
+  // The drive-seq when the first of those was queued, and the demo fallback
+  // for when the session never comes up (defined further down, where runDemo
+  // is; onError needs it before that).
+  const queuedAtSeqRef = useRef(0);
+  const answerQueuedWithDemoRef = useRef<() => void>(() => {});
   // When the hero mounted — sent as the waitlist route's `elapsedMs` bot check,
   // which drops sign-ups that arrive faster than a person could type. Stamped
   // in an effect, not during render (Date.now() is impure).
@@ -456,7 +461,12 @@ export function useOtoAgent() {
           if (s !== "intro" && s !== "vehicle") return; // don't hijack an active booking flow
           apply();
         },
-        1000
+        // Give the agent's own card time to land first. Measured through the
+        // site chat on 2026-09-15 (gpt-5.6-luna): its card tool call arrives a
+        // median 2.2s after the message, p90 3.1s (3.2s on a first message,
+        // connecting included). At 1s this fired first on any keyword match,
+        // then the agent's more precise card replaced it a second later.
+        3500
       );
     },
     [decodeVin, showVehicle]
@@ -479,6 +489,9 @@ export function useOtoAgent() {
     },
     onError: (message) => {
       console.warn("[oto] conversation error:", message);
+      // A session that fails to start reports only here; startSession() never
+      // rejects. Answer whatever was waiting on it.
+      if (!connectedRef.current && pendingTextRef.current.length) answerQueuedWithDemoRef.current();
     },
   });
 
@@ -717,11 +730,20 @@ export function useOtoAgent() {
   );
 
   // ---- Scripted demo fallback (only when no live agent is reachable) -------
+  /**
+   * Answer a message with the scripted demo. `keepCanvas` answers in words
+   * only, for a message that waited on a live session while something else
+   * took the canvas — the safety net's card, or one the visitor picked.
+   */
   const runDemo = useCallback(
-    (text: string) => {
+    (text: string, { keepCanvas = false }: { keepCanvas?: boolean } = {}) => {
       const vinMatch = text.match(VIN_RE);
       if (vinMatch) {
-        void decodeVin(vinMatch[0]);
+        if (!keepCanvas) {
+          void decodeVin(vinMatch[0]);
+        } else if (vehicle?.vin === vinMatch[0].toUpperCase()) {
+          pushMessage("oto", `Got it — that's a ${vehicle.label}.`);
+        }
         return;
       }
       // If we already know their car, re-show it when they ask about it.
@@ -731,12 +753,12 @@ export function useOtoAgent() {
           text.toLowerCase()
         )
       ) {
-        showVehicle();
+        if (!keepCanvas) showVehicle();
         return;
       }
       // Booking walkthrough intent → jump straight into the shop picker.
       if (BOOKING_RE.test(text)) {
-        startBookingFlow();
+        if (!keepCanvas) startBookingFlow();
         setThinking(true);
         after(600, () => {
           setThinking(false);
@@ -746,7 +768,7 @@ export function useOtoAgent() {
       }
       const feature = matchDemoFeature(text);
       if (feature) {
-        setDemoFeature(feature);
+        if (!keepCanvas) setDemoFeature(feature);
         setThinking(true);
         after(600, () => {
           setThinking(false);
@@ -754,10 +776,37 @@ export function useOtoAgent() {
         });
         return;
       }
-      advance();
+      if (!keepCanvas) advance();
     },
     [advance, after, decodeVin, pushMessage, showVehicle, startBookingFlow, vehicle]
   );
+
+  /**
+   * The live session didn't come up. Answer everything the visitor typed while
+   * waiting with the scripted demo, so they aren't left with silence.
+   *
+   * @elevenlabs/react's startSession() returns nothing and never rejects: a
+   * session that fails to start only reports through onError, so connect()
+   * "succeeds" before anything has connected. Before this, a failed start left
+   * the safety net's card on screen and no words at all — the eight-second
+   * fallback saw the canvas change and stayed quiet. (Live check, 2026-09-15,
+   * with the ElevenLabs socket refused.)
+   */
+  const answerQueuedWithDemo = useCallback(() => {
+    if (connectTimerRef.current) {
+      clearTimeout(connectTimerRef.current);
+      connectTimerRef.current = null;
+    }
+    const queued = pendingTextRef.current;
+    pendingTextRef.current = [];
+    // Anything that drove the UI since the first message was queued keeps the
+    // canvas — the replay answers in words only.
+    const keepCanvas = driveSeqRef.current !== queuedAtSeqRef.current;
+    queued.forEach((t) => runDemo(t, { keepCanvas }));
+  }, [runDemo]);
+  useEffect(() => {
+    answerQueuedWithDemoRef.current = answerQueuedWithDemo;
+  }, [answerQueuedWithDemo]);
 
   // ---- Public actions ------------------------------------------------------
   /** Type to Oto — opens/uses a live session (no mic needed), else demo. */
@@ -783,6 +832,7 @@ export function useOtoAgent() {
       }
       // Agent configured — open a text-only session (no microphone) and queue.
       if (agentConfigured) {
+        if (!pendingTextRef.current.length) queuedAtSeqRef.current = driveSeqRef.current;
         pendingTextRef.current.push(text);
         sessionModeRef.current = "text";
         const ok = await connect(true);
@@ -792,32 +842,22 @@ export function useOtoAgent() {
           return;
         }
         if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
-        // Snapshot what the canvas was showing when this timer was armed. If
-        // ANYTHING has driven the UI in the eight seconds since — the agent's
-        // own tool call, a chip, the visitor tapping through the walkthrough —
-        // replaying this message would overwrite a newer, more deliberate
-        // choice. That is exactly what used to happen: pick a card, and ~8s
-        // after your last message the panel silently reverted to one derived
-        // from it, permanently. The live-turn fallback below already guards
-        // this way; this path did not. (Found by scripts/oto/ui.mjs.)
-        const armedAtSeq = driveSeqRef.current;
+        // Still not connected after eight seconds, with no error either: answer
+        // with the demo. If anything drove the UI meanwhile — a chip, the
+        // visitor tapping through the walkthrough, the safety net's card — the
+        // replay answers in words and leaves the canvas alone. Replaying the
+        // card used to overwrite a newer, deliberate choice ~8s after the last
+        // message (found by scripts/oto/ui.mjs); dropping the replay instead
+        // left the visitor with no answer at all.
         connectTimerRef.current = setTimeout(() => {
-          if (driveSeqRef.current !== armedAtSeq) {
-            pendingTextRef.current = [];
-            return;
-          }
-          if (!connectedRef.current && pendingTextRef.current.length) {
-            const queued = pendingTextRef.current;
-            pendingTextRef.current = [];
-            queued.forEach((t) => runDemo(t));
-          }
+          if (!connectedRef.current && pendingTextRef.current.length) answerQueuedWithDemo();
         }, 8000);
         return;
       }
       // No agent — local demo.
       runDemo(text);
     },
-    [agentConfigured, connect, conversation, handleVisitorTurn, pushMessage, runDemo]
+    [agentConfigured, answerQueuedWithDemo, connect, conversation, handleVisitorTurn, pushMessage, runDemo]
   );
 
   /** Talk to Oto — opens a live voice (WebRTC) session, else demo. */

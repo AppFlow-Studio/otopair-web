@@ -9,7 +9,7 @@ import {
 import { api } from "@/convex/_generated/api";
 import { isValidEmail } from "@/lib/email";
 import { sanitizeInfoCard, type InfoCardPayload } from "./info-card";
-import { restates } from "./oto-chat-text";
+import { CRISIS_LINE, mentionsSelfHarm, restates } from "./oto-chat-text";
 import {
   findService,
   findSymptom,
@@ -175,6 +175,8 @@ export function useOtoAgent() {
   // is; onError needs it before that).
   const queuedAtSeqRef = useRef(0);
   const answerQueuedWithDemoRef = useRef<() => void>(() => {});
+  // When the site last showed the crisis line itself (see showCrisisLine).
+  const crisisShownAtRef = useRef(0);
   // When the hero mounted — sent as the waitlist route's `elapsedMs` bot check,
   // which drops sign-ups that arrive faster than a person could type. Stamped
   // in an effect, not during render (Date.now() is impure).
@@ -253,6 +255,19 @@ export function useOtoAgent() {
       return [...prev, { id: mkId(), role, text }];
     });
   }, []);
+
+  /**
+   * A visitor mentioned hurting themselves: the site shows the 988 line itself,
+   * straight away. Self-harm moderation ends the live chat (a deliberate call,
+   * 2026-09-15), usually before the agent's reply gets through, and nobody
+   * should be left with nothing. Returns false when the line was just shown.
+   */
+  const showCrisisLine = useCallback(() => {
+    if (Date.now() - crisisShownAtRef.current < 5_000) return false;
+    crisisShownAtRef.current = Date.now();
+    pushMessage("oto", CRISIS_LINE);
+    return true;
+  }, [pushMessage]);
 
   /** Wake the hero into its live layout (called on first engagement). */
   const wake = useCallback(() => setAwake(true), []);
@@ -431,6 +446,10 @@ export function useOtoAgent() {
    */
   const handleVisitorTurn = useCallback(
     (text: string) => {
+      if (mentionsSelfHarm(text)) {
+        showCrisisLine();
+        return; // no card for this turn
+      }
       const m = text.match(VIN_RE);
       if (m && lastVinRef.current !== m[0].toUpperCase()) {
         void decodeVin(m[0]);
@@ -469,7 +488,7 @@ export function useOtoAgent() {
         3500
       );
     },
-    [decodeVin, showVehicle]
+    [decodeVin, showCrisisLine, showVehicle]
   );
 
   const conversation = useConversation({
@@ -482,6 +501,9 @@ export function useOtoAgent() {
         .replace(/\s{2,}/g, " ")
         .trim();
       if (!clean) return;
+      // The site already showed the crisis line for this message; the agent's
+      // own 988 reply (when moderation lets it through) would say it again.
+      if (role === "oto" && Date.now() - crisisShownAtRef.current < 60_000 && /\b988\b/.test(clean)) return;
       pushMessage(role, clean);
       // Safety net runs only for live sessions (demo mode routes via runDemo),
       // and only on the visitor's words.
@@ -737,6 +759,10 @@ export function useOtoAgent() {
    */
   const runDemo = useCallback(
     (text: string, { keepCanvas = false }: { keepCanvas?: boolean } = {}) => {
+      if (mentionsSelfHarm(text)) {
+        showCrisisLine(); // skipped when the visitor turn just showed it
+        return;
+      }
       const vinMatch = text.match(VIN_RE);
       if (vinMatch) {
         if (!keepCanvas) {
@@ -778,7 +804,7 @@ export function useOtoAgent() {
       }
       if (!keepCanvas) advance();
     },
-    [advance, after, decodeVin, pushMessage, showVehicle, startBookingFlow, vehicle]
+    [advance, after, decodeVin, pushMessage, showCrisisLine, showVehicle, startBookingFlow, vehicle]
   );
 
   /**

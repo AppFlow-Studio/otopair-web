@@ -1,5 +1,35 @@
 import { describe, expect, it } from "vitest";
-import { restates } from "../components/flagship/oto-chat-text";
+import { mentionsSelfHarm, restates } from "../components/flagship/oto-chat-text";
+
+describe("mentionsSelfHarm", () => {
+  it("catches a visitor saying they might hurt themselves", () => {
+    for (const text of [
+      "Honestly it's been a terrible week. Sometimes I think about hurting myself.",
+      "I want to kill myself",
+      "I've been having suicidal thoughts",
+      "I don't want to live anymore",
+      "I just want to die",
+      "thinking about ending my life",
+      "I've been cutting myself again",
+      "everyone would be better off dead without me",
+    ]) {
+      expect(mentionsSelfHarm(text), text).toBe(true);
+    }
+  });
+
+  it("leaves car talk alone", () => {
+    for (const text of [
+      "These brake bills are killing me",
+      "My car died on the highway and I'm stuck",
+      "The battery is dead",
+      "I don't want to be here all day waiting for an oil change",
+      "Can the shop cut me a deal on tires?",
+      "My engine is dying when I stop at lights",
+    ]) {
+      expect(mentionsSelfHarm(text), text).toBe(false);
+    }
+  });
+});
 
 // Consecutive Oto bubbles captured verbatim from the live site chat on
 // 2026-09-14 (scripts/oto/qa.mjs). The released-vs-kept pair is written for

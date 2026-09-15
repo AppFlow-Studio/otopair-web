@@ -66,7 +66,10 @@ const ALWAYS = [
 function checkTurn(expect, turn) {
   // Match on straight apostrophes whichever the model used.
   const t = { ...turn, answer: turn.answer.replace(/[’‘]/g, "'") };
-  const hard = ALWAYS.map(([label, test]) => [label, test(t)]);
+  // `crisis`: a self-harm mention. The site shows the 988 line itself and the
+  // chat is meant to end, so the agent needn't answer and needn't stay.
+  const always = expect.crisis ? ALWAYS.filter(([label]) => label !== "the live agent answered") : ALWAYS;
+  const hard = always.map(([label, test]) => [label, test(t)]);
   for (const s of expect.all ?? []) hard.push([`says /${s}/`, rx(s).test(t.answer)]);
   if (expect.any?.length) hard.push([`says one of ${expect.any.map((s) => `/${s}/`).join(" ")}`, expect.any.some((s) => rx(s).test(t.answer))]);
   for (const s of expect.never ?? []) hard.push([`never says /${s}/`, !rx(s).test(t.answer)]);
@@ -90,7 +93,9 @@ async function runScenario(browser, s) {
     for (const [i, turn] of s.turns.entries()) {
       const r = await chat.say(turn.say);
       const { hard, soft } = checkTurn(turn.expect ?? {}, r);
-      if (i < s.turns.length - 1) hard.push(["conversation still open", chat.log.socketClosedAt == null]);
+      if (i < s.turns.length - 1 && !turn.expect?.crisis && !s.turns.slice(0, i).some((p) => p.expect?.crisis)) {
+        hard.push(["conversation still open", chat.log.socketClosedAt == null]);
+      }
       turns.push({ say: turn.say, ...r, hard, soft });
     }
   } catch (e) {

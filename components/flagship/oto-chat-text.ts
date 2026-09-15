@@ -3,6 +3,25 @@
  * that decide what a visitor reads can be tested against real agent replies.
  */
 
+/**
+ * Shown by the site itself when a visitor mentions hurting themselves. Oto's
+ * live chat ends on self-harm (content moderation, by decision on 2026-09-15),
+ * usually before the agent's own reply gets through, so the crisis line can't
+ * depend on the agent.
+ */
+export const CRISIS_LINE =
+  "I'm worried about what you shared. Please call or text 988 to reach the 988 Suicide & Crisis Lifeline — it's free, confidential and open 24/7. If you're in immediate danger, call 911.";
+
+// First-person phrases only, so car talk ("these brake bills are killing me",
+// "the engine died") never triggers it. Missing a softer phrasing is covered
+// twice over: moderation ends the chat, and the agent's prompt gives 988 too.
+const SELF_HARM =
+  /\b(kill(ing)? myself|suicid(e|al)|end(ing)? (it all|my (own )?life)|take my (own )?life|(hurt(ing)?|harm(ing)?|cut(ting)?) myself|self[- ]?harm|(don'?t|do not) want to (live|be alive|exist|be here anymore)|want(ed)? to die|better off dead|no reason to live)\b/i;
+
+export function mentionsSelfHarm(text: string): boolean {
+  return SELF_HARM.test(text);
+}
+
 // Words that carry no claim of their own. Two replies that only share these
 // have not said the same thing.
 const STOPWORDS = new Set(

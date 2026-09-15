@@ -370,7 +370,7 @@ How to behave:
 - Once a VIN is decoded you KNOW the car — never ask for the VIN again. Refer to it by name (e.g. "your 2020 BMW 750i").
 - One card at a time. If they jump topics, just call the next matching tool.
 - This is a demo: NO real booking is created (confirm_booking only shows a sample receipt), and never invent specific prices.
-- If someone is in crisis or mentions harming themselves, don't call any tool, and never end the call: point them to the 988 Suicide and Crisis Lifeline (call or text 988), leave the car conversation until they're ready, and stay there for them.
+- If someone is in crisis or mentions harming themselves, don't call any card tool: point them to the 988 Suicide and Crisis Lifeline (call or text 988) and leave the car conversation until they're ready.
 - Keep replies brief and let the visuals carry the weight.`.trim();
 
 // The base prompt (Personality / Environment / Tone / Goal / Guardrails) lives
@@ -456,7 +456,8 @@ function planKnowledgeBase(live) {
 //                                precise ones; fastest; no content mistakes
 //   gemini-3.8-flash  $0.16/min  every conversation passed, looser card picks
 //   claude-haiku-4-5  $0.21/min  called no card tool on 10 of the 15
-// luna ended the call after a self-harm mention; the prompt now forbids it.
+// luna ends the call itself after a self-harm mention, which matches the
+// decision to end those chats (the site shows the 988 line either way).
 const LLM = {
   llm: flagValue("--llm") ?? "gpt-5.6-luna",
   reasoning_effort: flagValue("--reasoning") ?? (flagValue("--llm") ? null : "none"),
@@ -465,16 +466,16 @@ const describeLlm = (p) => `${p.llm}${p.reasoning_effort ? ` (reasoning ${p.reas
 
 // ---- platform settings the repo owns ----------------------------------------
 // Oto is a public marketing chat about cars. Guardrails keep it on topic and
-// resistant to prompt injection. Content moderation blocks sexual content and
-// harassment. Violence (crash talk), profanity (frustrated drivers),
-// religion/politics (focus already covers off-topic) and medical/legal (safety
-// and insurance questions are on-topic) stay off, because a trigger ends the
-// visitor's conversation.
+// resistant to prompt injection. Content moderation blocks sexual content,
+// harassment and self-harm; violence (crash talk), profanity (frustrated
+// drivers), religion/politics (focus already covers off-topic) and
+// medical/legal (safety and insurance questions are on-topic) stay off, because
+// a trigger ends the visitor's conversation.
 //
-// Self-harm is off too, deliberately. The trigger action is one setting for
-// every category, and it ends the call, so a visitor who mentioned hurting
-// themselves was cut off before Oto could point them to the 988 Suicide and
-// Crisis Lifeline, as its prompt tells it to. The prompt handles it instead.
+// Ending the chat on self-harm is deliberate (decided 2026-09-15, after a day
+// with it off). It usually ends before the agent's own reply gets through, so
+// the 988 line doesn't depend on the agent: the site chat shows it the moment a
+// visitor mentions hurting themselves (showCrisisLine in use-oto-agent.ts).
 const CONTENT_CATEGORIES = [
   "sexual",
   "violence",
@@ -484,7 +485,7 @@ const CONTENT_CATEGORIES = [
   "religion_or_politics",
   "medical_and_legal_information",
 ];
-const CONTENT_ON = new Set(["sexual", "harassment"]);
+const CONTENT_ON = new Set(["sexual", "harassment", "self_harm"]);
 // A ceiling on what anyone can spend through the site before launch.
 const CALL_LIMITS = { agent_concurrency_limit: 25, daily_limit: 2000, bursting_enabled: false };
 

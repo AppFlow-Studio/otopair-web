@@ -15,6 +15,7 @@ import {
   StatCard, BarRow, DualSparkline,
   fmtCurrency, fmtPct, fmtNumber, fmtRelative, money, fmtDate, fmtDateTime,
 } from '../Charts'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // Status label map for the ops activity feed + needs-attention rows (from
 // app/(portals)/ops/page.tsx STATUS_LABEL).
@@ -232,7 +233,7 @@ export const TabOverview = () => {
                   <div style={{ display:'flex', flexDirection:'column', gap:4 }}>
                     {serviceMix.map(s => (
                       <BarRow key={String(s.id)}
-                        label={<span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{s.name}</span>}
+                        label={<span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{formatServiceDisplayName(s.name)}</span>}
                         value={s.count} max={max}
                         valueLabel={<>{s.count} <span style={{ color:'var(--slate-500)' }}>· {fmtCurrency(s.revenue)}</span></>}
                         color="var(--indigo-500, #6366F1)" />
@@ -344,7 +345,7 @@ export const TabOverview = () => {
               {feed.map(e => {
                 const context = [
                   e.vehicleYmm,
-                  e.services.filter(s => s && s !== '—').join(', ') || null,
+                  e.services.filter(s => s && s !== '—').map(formatServiceDisplayName).join(', ') || null,
                   e.shop,
                 ].filter(Boolean).join(' · ')
                 const goDetail = () =>

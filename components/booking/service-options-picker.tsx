@@ -11,6 +11,7 @@ import {
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
 import { cn } from "@/lib/utils";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export type SelectedServiceOption = {
   service_id: Id<"services">;
@@ -141,7 +142,7 @@ export default function ServiceOptionsPicker({
               {groups.map((group: any) => {
                 const picked = selections.get(String(group.serviceId));
                 const optionType = group.options[0]?.option_type ?? null;
-                const serviceName = group.serviceName ?? "Service";
+                const serviceName = formatServiceDisplayName(group.serviceName) || "Service";
                 return (
                   <div key={group.serviceId} className="space-y-2">
                     <div>

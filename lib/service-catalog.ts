@@ -612,15 +612,17 @@ export function warningLightsFor(slug: string): WarningLightCue[] {
  */
 export function formatServiceDisplayName(name: string | null | undefined): string {
   if (!name) return "";
-  return name.replace(/\btiming belt(s?)\b/gi, (match, plural) => {
-    const p = plural ? "s" : "";
-    if (match.toLowerCase() === "timing belt" + p) {
-      if (match.startsWith("T")) {
-        return match.includes("Belt") ? `Drive Belt${p}` : `Drive belt${p}`;
+  return name
+    .replace(/\btiming_belt(s?)\b/gi, (_match, plural) => `Drive Belt${plural ? "s" : ""}`)
+    .replace(/\btiming belt(s?)\b/gi, (match, plural) => {
+      const p = plural ? "s" : "";
+      if (match.toLowerCase() === "timing belt" + p) {
+        if (match.startsWith("T")) {
+          return match.includes("Belt") ? `Drive Belt${p}` : `Drive belt${p}`;
+        }
+        return `drive belt${p}`;
       }
-      return `drive belt${p}`;
-    }
-    return `Drive Belt${p}`;
-  });
+      return `Drive Belt${p}`;
+    });
 }
 

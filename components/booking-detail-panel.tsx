@@ -42,6 +42,7 @@ import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -529,7 +530,7 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
         ) : null}
       </div>
       <div className="text-sm font-semibold">
-        {job.recommendedServiceName ?? "Recommended service"}
+        {formatServiceDisplayName(job.recommendedServiceName) || "Recommended service"}
       </div>
       {job.recommendedServiceNote ? (
         <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
@@ -1832,7 +1833,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     /* ---- Render ---- */
 
     const title = job
-      ? `${job.serviceNames.join(", ")} — ${job.customerName}`
+      ? `${job.serviceNames.map(formatServiceDisplayName).join(", ")} — ${job.customerName}`
       : "Booking Detail";
 
     // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
@@ -2203,7 +2204,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   >
                     <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                        {job.serviceNames.join(", ")}
+                        {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                         {job.customerName ? ` · ${job.customerName}` : ""}
                       </p>
                       {/* Renders only when this booking's car is on a placeholder
@@ -2737,13 +2738,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
               : ""
           }
-          bookingServices={job?.serviceNames ?? []}
+          bookingServices={job?.serviceNames?.map(formatServiceDisplayName) ?? []}
           phase={inspectionPhase}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
@@ -2760,7 +2761,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2822,7 +2823,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2874,7 +2875,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`

@@ -66,7 +66,7 @@ export type TabKey = "routine_upkeep" | "tires_brakes" | "major_service" | "insp
 export const TABS: { key: TabKey; label: string; subtitle: string; icon: LucideIcon; category: string }[] = [
   { key: "routine_upkeep", label: "Routine", subtitle: "Fluids, filters, battery", icon: Wrench, category: "Routine" },
   { key: "tires_brakes", label: "Tires & Brakes", subtitle: "Tires, rotation, brakes", icon: CircleDot, category: "Tires & Brakes" },
-  { key: "major_service", label: "Scheduled service", subtitle: "Spark plugs, timing, fluids", icon: Calendar, category: "Scheduled Service" },
+  { key: "major_service", label: "Scheduled service", subtitle: "Spark plugs, drive belt, fluids", icon: Calendar, category: "Scheduled Service" },
   { key: "inspections", label: "Inspections", subtitle: "State, emissions, diagnostics", icon: ClipboardCheck, category: "Inspections" },
 ];
 

@@ -108,7 +108,7 @@ export const MechanicDetail = ({ mechanicId, onBack, onOpenShop }:
                         <BookingChip id={j.booking_id} onOpen={() => setDrillBooking(j.booking_id as Id<'bookings'>)} />
                       </td>
                       <td style={tableStyles.td}>
-                        <div style={{ color:'var(--slate-700)' }}>{j.services.length > 0 ? j.services.join(', ') : '—'}</div>
+                        <div style={{ color:'var(--slate-700)' }}>{j.services.length > 0 ? j.services.map(formatServiceDisplayName).join(', ') : '—'}</div>
                         {j.vehicle && <div style={{ fontSize:12, color:'var(--slate-400)' }}>{j.vehicle}</div>}
                         {j.notes && <div style={{ fontSize:12, fontStyle:'italic', color:'var(--slate-400)', maxWidth:260 }}>“{j.notes}”</div>}
                       </td>
@@ -201,7 +201,7 @@ export const MechanicDetail = ({ mechanicId, onBack, onOpenShop }:
                 {detail.contributions.map(c => (
                   <tr key={c.id}>
                     <td style={tableStyles.td}><Badge tone={c.status === 'accepted' ? 'green' : c.status === 'rejected' ? 'red' : 'yellow'}>{c.status ?? 'pending'}</Badge></td>
-                    <td style={{ ...tableStyles.td, color:'var(--slate-700)' }}>{c.service ?? '—'}</td>
+                    <td style={{ ...tableStyles.td, color:'var(--slate-700)' }}>{formatServiceDisplayName(c.service) || '—'}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{c.labor_hours != null ? `${c.labor_hours}h` : '—'}</td>
                     <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>{c.parts_correct == null ? '—' : c.parts_correct ? '✓' : '✗'}</td>
                     <td style={{ ...tableStyles.td, textAlign:'right', color:'var(--slate-600)' }}>{c.fields}</td>

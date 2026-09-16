@@ -25,6 +25,7 @@ import {
   getStatusDescription,
   humanizeStatus,
 } from "@/lib/booking-activity-format";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export type StatusHistoryEntry = {
   _id: Id<"booking_status_history">;
@@ -272,7 +273,7 @@ export default function BookingTimelineModal({
                           {ev.type === "booking_created" && (
                             <div className="-mt-1 space-y-0.5 text-xs text-muted-foreground">
                               {ev.data.services.length > 0 && (
-                                <p>{ev.data.services.join(", ")}</p>
+                                <p>{ev.data.services.map(formatServiceDisplayName).join(", ")}</p>
                               )}
                               {ev.data.quotedSetPriceCents != null && (
                                 <p>

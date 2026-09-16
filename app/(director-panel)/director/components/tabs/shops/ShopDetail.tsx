@@ -21,6 +21,7 @@ import type {
   ShopComplianceResult,
 } from './types'
 import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } from '@/lib/license-catalog'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
 
@@ -789,7 +790,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                         {(r.vehicle.ymm || r.service_names.length > 0) && (
                           <div style={{ marginTop:2, display:'flex', flexWrap:'wrap', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-500)' }}>
                             {r.vehicle.ymm && <span>{r.vehicle.ymm}</span>}
-                            {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.join(', ')}</span>}
+                            {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.map(formatServiceDisplayName).join(', ')}</span>}
                             <span onClick={() => setDrillBooking(r.booking_id as Id<'bookings'>)} style={{ color:'var(--blue-600)', cursor:'pointer' }}>booking →</span>
                           </div>
                         )}

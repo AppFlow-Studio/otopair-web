@@ -14,6 +14,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSession, useCan } from "@/app/(portals)/portal-session";
 import { Ceremony } from "@/components/portal/Ceremony";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDate = (ms: number | null) => (ms == null ? "—" : new Date(ms).toLocaleString());
@@ -206,7 +207,7 @@ export default function ServiceCatalogPage() {
                 {g.services.map((s) => (
                   <tr key={s.id} className="border-b border-slate-50">
                     <td className="px-4 py-2 font-medium text-slate-800">
-                      {s.name}
+                      {formatServiceDisplayName(s.name)}
                       {!s.bookable_signal && (
                         <span
                           className={`${pill} ml-2 bg-red-50 text-red-700`}
@@ -265,7 +266,7 @@ export default function ServiceCatalogPage() {
           >
             <div className="flex items-center gap-2">
               <h2 className="text-base font-semibold text-slate-900">
-                {optionsFor.name} — options
+                {formatServiceDisplayName(optionsFor.name)} — options
               </h2>
               <button
                 onClick={() => setOptionsFor(null)}

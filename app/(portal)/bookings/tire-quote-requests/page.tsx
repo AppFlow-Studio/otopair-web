@@ -14,6 +14,7 @@ import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
 import {
   OTHER_QUOTE_BRAND,
@@ -607,7 +608,7 @@ export function TireQuoteSubmissionDialog({
         end.setHours(eh, em, 0, 0);
         return {
           id: b._id,
-          title: `${b.customerName} — ${(b.serviceNames ?? []).join(", ")}`,
+          title: `${b.customerName} — ${(b.serviceNames ?? []).map(formatServiceDisplayName).join(", ")}`,
           start,
           end,
           resourceId: b.mechanicId ?? undefined,

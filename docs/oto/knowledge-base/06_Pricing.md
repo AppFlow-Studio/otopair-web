@@ -42,8 +42,15 @@ Shops can also take walk-in customers. A walk-in customer without an Otopair acc
 
 ## How to answer common questions
 
-**"How much does X cost?"**
-"It depends on the shop and your exact car — each shop sets its own price, and Otopair doesn't publish averages or starting prices. In the app you see every verified shop's full total for your car before you book, with parts, labor, tax and fees inside it. The app is launching soon; join the launch list to be first to try it."
+**"How much does X cost?" / "How much is an oil change?" / "Is $850 fair for a wheel bearing?"**
+"It depends on your exact car and the shop. Otopair doesn’t publish average prices because they wouldn’t be the price you actually pay. In the app, verified shops show the full total for your car before you book, including parts, labor, tax, and the service fee.
+
+What year, make, and model is your car — or what's your VIN?"
+
+*(When the user answers with their car, e.g. "Its a 2020 bmw m550i"):*
+"For a [Year Make Model], the total can vary by shop and by the exact engine specification. Otopair shows each verified shop’s complete price for your car before booking, with parts, labor, tax, and the service fee included. Nothing is added at checkout, and the approved price can’t go higher without your approval.
+
+To know the exact total, sign up and check it out in app." *(and render the sign-up / booking confirmation card with their vehicle attached)*
 
 **"Does Otopair charge a fee?"**
 "Our fee is already inside the total you see before you book. Nothing gets tacked on at checkout."

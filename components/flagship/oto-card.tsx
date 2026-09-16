@@ -34,7 +34,7 @@ import { Step } from "./shared";
 /** The card shell. Previously duplicated byte-for-byte in cards.tsx and
  *  demo-cards.tsx; this is now the only definition. */
 export const CARD =
-  "w-full rounded-[20px] border border-white/40 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_22px_60px_rgba(0,0,0,0.10)]";
+  "w-full rounded-[24px] border border-white/60 bg-white/75 p-6 backdrop-blur-2xl shadow-[0_24px_64px_-12px_rgba(0,0,0,0.12),0_4px_16px_-2px_rgba(0,0,0,0.04)] ring-1 ring-black/[0.03]";
 
 /* ------------------------------------------------------------------ */
 /* Surface — where a card is being rendered.                           */
@@ -89,7 +89,7 @@ function ScrollBody({
     const el = ref.current;
     if (!el) return;
     const slack = el.scrollHeight - el.clientHeight;
-    if (slack <= 1) {
+    if (slack <= 4) {
       setEdges((p) => (p.top || p.bottom ? { top: false, bottom: false } : p));
       return;
     }
@@ -132,7 +132,7 @@ function ScrollBody({
     <div
       ref={ref}
       onScroll={measure}
-      className={`min-h-0 flex-1 overflow-y-auto [scrollbar-width:thin] ${className}`}
+      className={`min-h-0 flex-1 overflow-y-auto overflow-x-hidden [scrollbar-width:thin] [scrollbar-color:rgba(0,0,0,0.12)_transparent] [&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-black/12 hover:[&::-webkit-scrollbar-thumb]:bg-black/25 ${className}`}
       style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
     >
       {children}
@@ -163,16 +163,20 @@ export function CardHead({
     <Step delay={delay}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            {Icon && <Icon className="h-[18px] w-[18px] shrink-0 text-[#1a1a1a]" strokeWidth={1.6} />}
+          <div className="flex items-center gap-2.5">
+            {Icon && (
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-[#2f7bff]/10 text-[#2f7bff] shadow-sm ring-1 ring-[#2f7bff]/20">
+                <Icon className="h-4 w-4" strokeWidth={1.8} />
+              </div>
+            )}
             <h3
-              className="truncate text-[19px] text-[#1a1a1a]"
+              className="truncate text-[20px] font-medium tracking-tight text-[#1a1a1a]"
               style={{ fontFamily: "var(--font-Petrona)" }}
             >
               {title}
             </h3>
           </div>
-          {subtitle && <p className="mt-1 text-[12px] leading-snug text-[#1a1a1a]/55">{subtitle}</p>}
+          {subtitle && <p className="mt-1.5 text-[12px] leading-snug text-[#1a1a1a]/60">{subtitle}</p>}
         </div>
         {aside && <div className="shrink-0">{aside}</div>}
       </div>
@@ -221,14 +225,14 @@ export function OtoCard({
   return (
     <div
       className={`${CARD} ${
-        fill ? "flex h-full max-h-[70vh] flex-col lg:max-h-[530px]" : ""
+        fill ? "flex h-full flex-col !p-4 sm:!p-5" : ""
       } ${className}`}
     >
       {header ?? (title ? <CardHead icon={icon} title={title} subtitle={subtitle} aside={aside} /> : null)}
       <ScrollBody enabled={fill} className={bodyClassName}>
         {children}
       </ScrollBody>
-      {footer ? <div className="shrink-0">{footer}</div> : null}
+      {footer ? <div className="shrink-0 pt-2">{footer}</div> : null}
     </div>
   );
 }

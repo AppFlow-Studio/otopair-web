@@ -4,6 +4,7 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { jobListTotal } from "@/lib/booking-total";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useEntityLabel } from "@/lib/use-entity-label";
@@ -678,6 +679,7 @@ export default function BookingsPage() {
                       value={serviceFilter}
                       options={uniqueServices}
                       onChange={setServiceFilter}
+                      getOptionLabel={formatServiceDisplayName}
                     />
                     <DropdownFilterPill
                       ref={mechanicFilterRef}
@@ -835,7 +837,7 @@ export default function BookingsPage() {
                               </td>
                               <td className="px-3 py-4 text-foreground whitespace-nowrap">{drawerCompact ? (job.vehicleShort ?? job.vehicle) : job.vehicle}</td>
                               <td className="px-3 py-4 text-foreground max-w-48 truncate">
-                                {job.serviceNames.join(", ")}
+                                {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                               </td>
                               <td className="px-3 py-4">
                                 <div className="flex items-center gap-1.5 flex-wrap">
@@ -1065,8 +1067,8 @@ const TextFilterPill = forwardRef<
 /** Dropdown multi-select filter pill */
 const DropdownFilterPill = forwardRef<
   { open: () => void },
-  { label: string; value: string[]; options: string[]; onChange: (v: string[]) => void }
->(function DropdownFilterPill({ label, value, options, onChange }, ref) {
+  { label: string; value: string[]; options: string[]; onChange: (v: string[]) => void; getOptionLabel?: (opt: string) => string }
+>(function DropdownFilterPill({ label, value, options, onChange, getOptionLabel }, ref) {
   const [open, setOpen] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(-1);
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 });
@@ -1099,7 +1101,7 @@ const DropdownFilterPill = forwardRef<
   }
 
   const hasValue = value.length > 0;
-  const pillLabel = value.length === 1 ? value[0] : `${value.length} selected`;
+  const pillLabel = value.length === 1 ? (getOptionLabel ? getOptionLabel(value[0]) : value[0]) : `${value.length} selected`;
 
   return (
     <div className="relative" ref={containerRef}>
@@ -1185,7 +1187,7 @@ const DropdownFilterPill = forwardRef<
                       </svg>
                     )}
                   </span>
-                  {opt}
+                  {getOptionLabel ? getOptionLabel(opt) : opt}
                 </button>
               );
             })

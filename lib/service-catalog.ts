@@ -200,9 +200,9 @@ export const SERVICES: readonly CatalogService[] = [
     requires_emissions_test: false,
   },
   {
-    name: "Timing Belt",
+    name: "Drive Belt",
     slug: "timing_belt",
-    description: "Timing belt kit replacement including tensioner and idler pulleys",
+    description: "Drive belt kit replacement including tensioner and idler pulleys",
     display_order: 9,
     category: "Scheduled Service",
     default_labor_hours: 5.0,
@@ -604,3 +604,23 @@ export const WARNING_LIGHT_CUES: readonly WarningLightCue[] = [
 export function warningLightsFor(slug: string): WarningLightCue[] {
   return WARNING_LIGHT_CUES.filter((c) => c.serviceSlugs.includes(slug));
 }
+
+/**
+ * Display helper: renames "Timing Belt" to "Drive Belt" across all frontend views
+ * (website, mechanic portal, director portal).
+ * Database keys, column names, and backend slugs remain "timing_belt" to avoid breaking changes.
+ */
+export function formatServiceDisplayName(name: string | null | undefined): string {
+  if (!name) return "";
+  return name.replace(/\btiming belt(s?)\b/gi, (match, plural) => {
+    const p = plural ? "s" : "";
+    if (match.toLowerCase() === "timing belt" + p) {
+      if (match.startsWith("T")) {
+        return match.includes("Belt") ? `Drive Belt${p}` : `Drive belt${p}`;
+      }
+      return `drive belt${p}`;
+    }
+    return `Drive Belt${p}`;
+  });
+}
+

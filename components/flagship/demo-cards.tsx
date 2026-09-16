@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import {
+  ArrowUpRight,
   BadgeCheck,
   Bell,
   CalendarClock,
@@ -131,6 +133,17 @@ export function PricingCard() {
       icon={Receipt}
       title="Transparent pricing"
       subtitle={`Sample · ${PRICING_DEMO.service} · the full total before you book`}
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/pricing"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read full pricing details & guarantee</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
     >
       <div className="mt-4 space-y-1">
         {PRICING_DEMO.lines.map((line, i) => (
@@ -189,7 +202,22 @@ export function HealthScoreCard() {
   const offset = circ * (1 - score / 100);
 
   return (
-    <OtoCard icon={ShieldCheck} title="Vehicle Health" subtitle="Sample car · how the score looks in the app">
+    <OtoCard
+      icon={ShieldCheck}
+      title="Vehicle Health"
+      subtitle="Sample car · how the score looks in the app"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/vehicle-health-score"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Learn how Vehicle Health Score works</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
 
       <Step delay={0.15} className="mt-4 flex items-center gap-5">
         <div className="relative h-[110px] w-[110px] shrink-0">
@@ -322,13 +350,28 @@ function Stars({ value }: { value: number }) {
 export function RatingsCard() {
   const r = RATINGS_DEMO;
   return (
-    <OtoCard icon={Star} title="Ratings" subtitle="Only from drivers who completed a booking">
+    <OtoCard
+      icon={Star}
+      title="Ratings"
+      subtitle="Only from drivers who completed a booking"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/shops"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Browse all verified Staten Island shops</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
       <Step delay={0.12} className="mt-4 flex items-center gap-3">
         <div className="min-w-0">
           <p className="truncate text-[16px] font-medium text-[#1a1a1a]">{r.shop}</p>
-          <p className="text-[12px] text-[#1a1a1a]/45">Sample shop · how a shop page looks</p>
+          <p className="text-[12px] text-[#1a1a1a]/45">Verified shop profile · Staten Island, NY</p>
         </div>
-        <span className="ml-auto flex shrink-0 items-center gap-1 rounded-full bg-[#1a1a1a]/[0.06] px-2 py-1 text-[10px] font-medium text-[#1a1a1a]">
+        <span className="ml-auto flex shrink-0 items-center gap-1 rounded-full bg-[#10b981]/10 px-2 py-1 text-[10px] font-medium text-[#059669]">
           <BadgeCheck className="h-3.5 w-3.5" /> Verified
         </span>
       </Step>
@@ -402,7 +445,22 @@ export function RewardsCard() {
 /* ------------------------------------------------------------------ */
 export function OverviewCard() {
   return (
-    <OtoCard icon={Sparkles} title="What Otopair is" subtitle={OVERVIEW_DEMO.tagline}>
+    <OtoCard
+      icon={Sparkles}
+      title="What Otopair is"
+      subtitle={OVERVIEW_DEMO.tagline}
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/about"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Learn more about Otopair</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
       <CheckList items={OVERVIEW_DEMO.facts} base={0.16} />
     </OtoCard>
   );
@@ -413,9 +471,23 @@ export function OverviewCard() {
 /* ------------------------------------------------------------------ */
 export function CoverageCard() {
   return (
-    <OtoCard icon={MapPin} title="Where it works">
+    <OtoCard
+      icon={MapPin}
+      title="Where it works"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/coverage"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>View borough expansion schedule</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
       <Step delay={0.15} className="mt-4 rounded-xl bg-[#1a1a1a] px-4 py-4 text-white">
-        <p className="text-[11px] uppercase tracking-wide text-white/55">Live first</p>
+        <p className="text-[11px] uppercase tracking-wide text-white/55">Live now</p>
         <p className="text-[22px] font-medium leading-tight">{COVERAGE_DEMO.launch}</p>
         <p className="text-[12px] text-white/55">{COVERAGE_DEMO.date}</p>
       </Step>
@@ -549,7 +621,22 @@ export function NotificationsCard() {
 /* ------------------------------------------------------------------ */
 export function TrustCard() {
   return (
-    <OtoCard icon={ShieldCheck} title="What we’ll never do" subtitle="Trust is the product">
+    <OtoCard
+      icon={ShieldCheck}
+      title="What we’ll never do"
+      subtitle="Trust is the product"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/trust"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read our trust & verification standard</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
       <ul className="mt-4 space-y-2">
         {TRUST_DEMO.never.map((it, i) => (
           <Step
@@ -561,6 +648,186 @@ export function TrustCard() {
               <X className="h-3 w-3 text-[#1a1a1a]/55" />
             </span>
             {it}
+          </Step>
+        ))}
+      </ul>
+    </OtoCard>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Warranty standard                                                  */
+/* ------------------------------------------------------------------ */
+export function WarrantyCard() {
+  const points = [
+    "Independent warranty on parts & labor from every verified shop",
+    "Digital repair record stored with full itemized parts breakdown",
+    "Direct messaging with the mechanic who worked on your car",
+    "7-day dispute window if an issue isn't resolved directly",
+  ];
+  return (
+    <OtoCard
+      icon={ShieldCheck}
+      title="Warranty Standard"
+      subtitle="Repairs backed by verified shops"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/warranties"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read our Warranty Standard</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
+      <ul className="mt-4 space-y-2">
+        {points.map((pt, i) => (
+          <Step
+            key={pt}
+            delay={0.15 + i * 0.08}
+            className="flex items-center gap-2.5 rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-2.5 text-[13px] text-[#1a1a1a]"
+          >
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+              <Check className="h-3 w-3" />
+            </span>
+            {pt}
+          </Step>
+        ))}
+      </ul>
+    </OtoCard>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Privacy policy                                                     */
+/* ------------------------------------------------------------------ */
+export function PrivacyCard() {
+  const points = [
+    "Contact, messaging & payment data is strictly protected",
+    "Never sold, rented, or shared with third-party advertisers",
+    "Payment card details processed securely via Stripe",
+    "Service logs tied to VIN solely for vehicle maintenance history",
+  ];
+  return (
+    <OtoCard
+      icon={FileText}
+      title="Privacy Policy"
+      subtitle="Driver data is strictly protected"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/privacy"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read our Privacy Policy</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
+      <ul className="mt-4 space-y-2">
+        {points.map((pt, i) => (
+          <Step
+            key={pt}
+            delay={0.15 + i * 0.08}
+            className="flex items-center gap-2.5 rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-2.5 text-[13px] text-[#1a1a1a]"
+          >
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-[#5299fe]">
+              <Check className="h-3 w-3" />
+            </span>
+            {pt}
+          </Step>
+        ))}
+      </ul>
+    </OtoCard>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Terms of service                                                   */
+/* ------------------------------------------------------------------ */
+export function TermsCard() {
+  const points = [
+    "Locked upfront pricing: prices cannot rise without approval",
+    "100% verified reviews from completed driver bookings only",
+    "Strict shop vetting: DMV registered, licensed & insured",
+    "Transparent marketplace rules with zero hidden platform fees",
+  ];
+  return (
+    <OtoCard
+      icon={Receipt}
+      title="Terms of Service"
+      subtitle="Transparent marketplace rules"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/terms"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read Terms of Service</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
+      <ul className="mt-4 space-y-2">
+        {points.map((pt, i) => (
+          <Step
+            key={pt}
+            delay={0.15 + i * 0.08}
+            className="flex items-center gap-2.5 rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-2.5 text-[13px] text-[#1a1a1a]"
+          >
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-500/10 text-[#5299fe]">
+              <Check className="h-3 w-3" />
+            </span>
+            {pt}
+          </Step>
+        ))}
+      </ul>
+    </OtoCard>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Cancellation policy                                                */
+/* ------------------------------------------------------------------ */
+export function CancellationCard() {
+  const points = [
+    "Free cancellation up to 24 hours prior to appointment",
+    "$20 authorization hold released immediately upon cancellation",
+    "Inside 24 hours, hold is kept as a late-cancellation fee",
+    "Effortlessly reschedule anytime directly through the app",
+  ];
+  return (
+    <OtoCard
+      icon={CalendarClock}
+      title="Cancellation Policy"
+      subtitle="Driver-first appointment flexibility"
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/cancellation"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Read Cancellation Policy</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
+      <ul className="mt-4 space-y-2">
+        {points.map((pt, i) => (
+          <Step
+            key={pt}
+            delay={0.15 + i * 0.08}
+            className="flex items-center gap-2.5 rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-2.5 text-[13px] text-[#1a1a1a]"
+          >
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-500/10 text-emerald-600">
+              <Check className="h-3 w-3" />
+            </span>
+            {pt}
           </Step>
         ))}
       </ul>
@@ -586,6 +853,10 @@ const REGISTRY: Record<DemoFeature, () => React.JSX.Element> = {
   bookings: BookingsCard,
   notifications: NotificationsCard,
   trust: TrustCard,
+  warranty: WarrantyCard,
+  privacy: PrivacyCard,
+  terms: TermsCard,
+  cancellation: CancellationCard,
 };
 
 export function DemoCard({ feature }: { feature: DemoFeature }) {

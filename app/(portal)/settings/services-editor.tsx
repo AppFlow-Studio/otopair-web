@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -9,7 +9,7 @@ import ServicePriceTierStrip, {
   clearInactivePricingDraft,
   countPricedServiceGroups,
   emptyServicePricingDraft,
-  pricingRecordToDraft,
+  mergeInitialServicePricingDrafts,
   servicePricingDraftToCents,
   type SavedServicePricing,
   type ServicePricingDraft,
@@ -40,6 +40,8 @@ export default function ServicesEditor() {
   const [pricingBaseline, setPricingBaseline] = useState<
     Record<string, ServicePricingDraft>
   >({});
+  const pricingByServiceRef = useRef<Record<string, ServicePricingDraft>>({});
+  const didHydratePricing = useRef(false);
 
   const initialSelected = useMemo(() => {
     if (!data?.serviceCategories) return null;
@@ -57,13 +59,15 @@ export default function ServicesEditor() {
   }, [initialSelected]);
 
   useEffect(() => {
-    if (!servicePricing) return;
-    const next: Record<string, ServicePricingDraft> = {};
-    for (const [serviceId, saved] of Object.entries(servicePricing)) {
-      next[serviceId] = pricingRecordToDraft(saved as SavedServicePricing);
-    }
-    setPricingByService(next);
-    setPricingBaseline(next);
+    if (!servicePricing || didHydratePricing.current) return;
+    didHydratePricing.current = true;
+    const hydrated = mergeInitialServicePricingDrafts(
+      servicePricing as Record<string, SavedServicePricing>,
+      pricingByServiceRef.current,
+    );
+    pricingByServiceRef.current = hydrated.pricingByService;
+    setPricingByService(hydrated.pricingByService);
+    setPricingBaseline(hydrated.pricingBaseline);
   }, [servicePricing]);
 
   const declinedTiers = useMemo(
@@ -124,7 +128,11 @@ export default function ServicesEditor() {
   }
 
   function setServicePricing(serviceId: string, pricing: ServicePricingDraft) {
-    setPricingByService((prev) => ({ ...prev, [serviceId]: pricing }));
+    setPricingByService((prev) => {
+      const next = { ...prev, [serviceId]: pricing };
+      pricingByServiceRef.current = next;
+      return next;
+    });
   }
 
   function dirtyServiceIds(): string[] {
@@ -174,6 +182,7 @@ export default function ServicesEditor() {
           pricingByService[write.serviceId] ?? emptyServicePricingDraft(),
         );
       }
+      pricingByServiceRef.current = savedPricing;
       setPricingByService(savedPricing);
       setPricingBaseline(savedPricing);
     }
@@ -182,6 +191,7 @@ export default function ServicesEditor() {
 
   const reset = useCallback(() => {
     if (initialSelected) setSelected(new Set(initialSelected));
+    pricingByServiceRef.current = pricingBaseline;
     setPricingByService(pricingBaseline);
   }, [initialSelected, pricingBaseline]);
 

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clearInactivePricingDraft,
   emptyServicePricingDraft,
+  mergeInitialServicePricingDrafts,
   pricingRecordToDraft,
   servicePricingDraftToCents,
 } from "../components/shop/service-price-tier-strip";
@@ -56,5 +57,30 @@ describe("service pricing editor helpers", () => {
     expect(saved.fixedPrices).toEqual({});
     expect(saved.rangePrices.T1).toEqual({ minimum: "70", maximum: "110" });
     expect(draft.fixedPrices.T1).toBe("89");
+  });
+
+  it("keeps a price-range draft entered before the server snapshot arrives", () => {
+    const local = emptyServicePricingDraft();
+    local.mode = "range";
+    local.rangePrices.T1 = { minimum: "120", maximum: "150" };
+
+    const hydrated = mergeInitialServicePricingDrafts(
+      {
+        oilChange: {
+          mode: "range",
+          prices: { T1: { low_cents: 900, high_cents: 11_000 } },
+        },
+      },
+      { oilChange: local },
+    );
+
+    expect(hydrated.pricingByService.oilChange.rangePrices.T1).toEqual({
+      minimum: "120",
+      maximum: "150",
+    });
+    expect(hydrated.pricingBaseline.oilChange.rangePrices.T1).toEqual({
+      minimum: "9.00",
+      maximum: "110.00",
+    });
   });
 });

@@ -63,6 +63,32 @@ export function pricingRecordToDraft(
   return draft;
 }
 
+/**
+ * Seed the editor once without discarding anything entered while its query was
+ * still loading. Subsequent query updates are ignored by the editor so an
+ * older subscription snapshot cannot replace a just-saved draft.
+ */
+export function mergeInitialServicePricingDrafts(
+  saved: Record<string, SavedServicePricing>,
+  current: Record<string, ServicePricingDraft>,
+): {
+  pricingByService: Record<string, ServicePricingDraft>;
+  pricingBaseline: Record<string, ServicePricingDraft>;
+} {
+  const pricingBaseline: Record<string, ServicePricingDraft> = {};
+  for (const [serviceId, pricing] of Object.entries(saved)) {
+    pricingBaseline[serviceId] = pricingRecordToDraft(pricing);
+  }
+
+  const pricingByService = { ...pricingBaseline };
+  const empty = JSON.stringify(emptyServicePricingDraft());
+  for (const [serviceId, draft] of Object.entries(current)) {
+    if (JSON.stringify(draft) !== empty) pricingByService[serviceId] = draft;
+  }
+
+  return { pricingByService, pricingBaseline };
+}
+
 function parseDollars(raw: string, label: string): number {
   const value = Number(raw.trim());
   if (!Number.isFinite(value) || value < 1 || value > 100_000) {

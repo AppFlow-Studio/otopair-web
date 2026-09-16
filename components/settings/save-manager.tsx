@@ -32,6 +32,17 @@ type Saveable = {
   reset: () => void;
 };
 
+type SaveHandlers = Pick<Saveable, "save" | "reset">;
+
+export function createLatestSaveHandlers(latest: {
+  current: SaveHandlers;
+}): SaveHandlers {
+  return {
+    save: () => latest.current.save(),
+    reset: () => latest.current.reset(),
+  };
+}
+
 type Manager = {
   report: (id: string, entry: Saveable) => void;
   remove: (id: string) => void;
@@ -80,9 +91,15 @@ export function useRegisterSaveable(
   reset: () => void,
 ) {
   const m = useContext(Ctx);
+  const latestHandlers = useRef<SaveHandlers>({ save, reset });
+  latestHandlers.current = { save, reset };
   // Re-report every render so save/reset closures stay current.
   useEffect(() => {
-    m?.report(id, { label, dirty, save, reset });
+    m?.report(id, {
+      label,
+      dirty,
+      ...createLatestSaveHandlers(latestHandlers),
+    });
   });
   // Drop the registration when the section unmounts for good.
   useEffect(() => {

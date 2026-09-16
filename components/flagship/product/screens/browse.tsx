@@ -66,7 +66,7 @@ export type TabKey = "routine_upkeep" | "tires_brakes" | "major_service" | "insp
 export const TABS: { key: TabKey; label: string; subtitle: string; icon: LucideIcon; category: string }[] = [
   { key: "routine_upkeep", label: "Routine", subtitle: "Fluids, filters, battery", icon: Wrench, category: "Routine" },
   { key: "tires_brakes", label: "Tires & Brakes", subtitle: "Tires, rotation, brakes", icon: CircleDot, category: "Tires & Brakes" },
-  { key: "major_service", label: "Scheduled service", subtitle: "Spark plugs, timing, fluids", icon: Calendar, category: "Scheduled Service" },
+  { key: "major_service", label: "Scheduled service", subtitle: "Spark plugs, drive belt, fluids", icon: Calendar, category: "Scheduled Service" },
   { key: "inspections", label: "Inspections", subtitle: "State, emissions, diagnostics", icon: ClipboardCheck, category: "Inspections" },
 ];
 
@@ -87,7 +87,7 @@ export const TAXONOMY: Record<string, Entry> = {
   rotor_replacement: { label: "Brake rotor replacement", tab: "tires_brakes", time: "About 3 hr", icon: Disc, showsFor: "All vehicles" },
   brake_fluid_flush: { label: "Brake fluid flush", tab: "tires_brakes", time: "About 51 min", icon: Droplet, showsFor: "All vehicles" },
   spark_plugs: { label: "Spark plug replacement", tab: "major_service", time: "About 1 hr 30 min", icon: Sparkles, showsFor: "Gas engines" },
-  timing_belt: { label: "Timing belt replacement", tab: "major_service", time: "About 5 hr", icon: Wrench, showsFor: "Belt-driven engines" },
+  timing_belt: { label: "Drive belt replacement", tab: "major_service", time: "About 5 hr", icon: Wrench, showsFor: "Belt-driven engines" },
   coolant_flush: { label: "Coolant flush", tab: "major_service", time: "About 1 hr 15 min", icon: Droplet, showsFor: "All vehicles" },
   transmission_service: { label: "Transmission fluid change", tab: "major_service", time: "About 1 hr 30 min", icon: Droplet, showsFor: "All vehicles" },
   power_steering_flush: { label: "Power steering flush", tab: "major_service", time: "About 45 min", icon: Droplet, showsFor: "Hydraulic steering" },

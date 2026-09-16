@@ -306,14 +306,14 @@ export const SERVICE_PARTS_REFERENCE: Record<string, ServicePartsSpec> = {
     roles: [
       {
         roleKey: "timing_belt",
-        label: "Timing belt",
+        label: "Drive belt",
         serviceRole: "core",
         primary: true,
         quantity: { kind: "fixed", n: 1 },
       },
       {
         roleKey: "timing_kit",
-        label: "Timing kit — tensioner, idler pulley(s), cam/crank seals",
+        label: "Drive belt kit — tensioner, idler pulley(s), cam/crank seals",
         serviceRole: "kit",
         includeByDefault: true,
         quantity: { kind: "fixed", n: 1 },

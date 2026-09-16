@@ -111,17 +111,20 @@ export async function POST(request: NextRequest) {
         // and the navbar form sent two emails and stored nothing.
         const contact = { email: cleanEmail, ...splitName(cleanName) };
         let saved = false;
+        let claimToken: string | null = null;
         try {
-            await fetchMutation(api.preSignups.createStub, { ...contact, ...parseVehicle(body.vehicle) });
+            const stubRes = await fetchMutation(api.preSignups.createStub, { ...contact, ...parseVehicle(body.vehicle) });
             saved = true;
+            if (stubRes?.claimToken) claimToken = stubRes.claimToken;
         } catch (error) {
             console.error('Failed to save the sign-up to Convex:', error);
             // A bad vehicle payload must not cost us the person: retry with
             // their contact details alone.
             if (body.vehicle) {
                 try {
-                    await fetchMutation(api.preSignups.createStub, contact);
+                    const stubRes = await fetchMutation(api.preSignups.createStub, contact);
                     saved = true;
+                    if (stubRes?.claimToken) claimToken = stubRes.claimToken;
                 } catch (retryError) {
                     console.error('Failed to save the sign-up to Convex (contact only):', retryError);
                 }
@@ -164,6 +167,7 @@ export async function POST(request: NextRequest) {
                 success: true,
                 message: 'Successfully joined waitlist!',
                 saved,
+                claimToken,
                 confirmationSent: confirmationResult.success,
                 notificationSent: notificationResult.success,
             },

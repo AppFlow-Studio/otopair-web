@@ -18,6 +18,7 @@ import {
 import type { PostJobSurveyPayload } from "@/lib/vehicle-passport";
 import { formatPartIdentity } from "@/lib/vehicle-passport";
 import { formatHoursValue } from "@/lib/labor-units";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   buildPartRows,
   getDefaultLaborMinutes,
@@ -230,7 +231,7 @@ function ReportView({ report }: { report: PostJobSurveyPayload }) {
               <li key={i} className="flex items-start gap-2">
                 <span className="mt-1.5 inline-block h-1 w-1 shrink-0 rounded-full bg-muted-foreground" />
                 <span>
-                  {rec.freeform_service_name ?? "Service"}
+                  {formatServiceDisplayName(rec.freeform_service_name) || "Service"}
                   <span className="ml-1 text-xs text-muted-foreground">
                     ({URGENCY_LABEL[rec.urgency] ?? rec.urgency})
                   </span>

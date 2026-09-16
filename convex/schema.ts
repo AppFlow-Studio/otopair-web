@@ -2243,6 +2243,9 @@ export default defineSchema({
     // Set when a Clerk user.created webhook claimed a pre-existing
     // "shop-created-*" walk-in stub user by matching email or phone.
     walkInClaimedAt: v.optional(v.number()),
+    // Where the customer actually lives after a walk-in merge (claimByToken).
+    // Future walk-ins follow this pointer so they land on the real account.
+    merged_into_user_id: v.optional(v.id("users")),
     // URL-safe token embedded in the post-job claim deep link sent to
     // mechanic-created walk-in clients. Resolved by /claim/[token].
     claim_token: v.optional(v.string()),
@@ -3228,6 +3231,10 @@ export default defineSchema({
         }),
       ),
     ),
+    // Tracker deep link for THIS job — `otopair://claim/<token>`, handed to
+    // the customer by the shop.
+    tracker_token: v.optional(v.string()),
+    tracker_token_expires_at: v.optional(v.number()),
     // Pending 2-hour deferred inspection-health job for this booking (see
     // convex/inspectionHealthDeferred.ts). Stored so a booking that
     // re-enters a terminal state (completed → reopened → completed again,
@@ -3243,6 +3250,8 @@ export default defineSchema({
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
     .index("by_created_at", ["created_at"])
+    // Tracker deep link, per JOB.
+    .index("by_tracker_token", ["tracker_token"])
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
     .index("by_vin", ["vin"])

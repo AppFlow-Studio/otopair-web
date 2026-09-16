@@ -28,6 +28,7 @@ import type { JobActualPartPayload } from "@/lib/vehicle-passport";
 import type { BookingWorkflowBooking } from "@/lib/booking-workflow-state";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function formatWhen(date?: string | null, time?: string | null) {
   if (!date) return "";
@@ -164,7 +165,7 @@ export default function MidJobScopeDialog({
       bookingLabel={j.vehicle ?? "Vehicle"}
       bookingSubLabel={[
         j.customerName,
-        (j.serviceNames ?? []).join(", "),
+        (j.serviceNames ?? []).map(formatServiceDisplayName).join(", "),
         formatWhen(j.scheduledDate, j.scheduledTime),
       ]
         .filter(Boolean)

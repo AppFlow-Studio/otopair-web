@@ -38,6 +38,7 @@ import { makeFunctionReference } from "convex/server";
 import { useApprovalWorkflow, type ApprovalWorkflow } from "@/lib/use-approval-workflow";
 import { computeBookingTax } from "@/lib/tax";
 import { computePlatformFeeDollars } from "@/lib/platformFee";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   formatHoursValue,
   hoursToMinutes,
@@ -5893,8 +5894,7 @@ function RecommendationsStep({
                   >
                     <span className="truncate">
                       {hasService
-                        ? rec.service_label ||
-                          rec.freeform_service_name ||
+                        ? formatServiceDisplayName(rec.service_label || rec.freeform_service_name) ||
                           "Pick a service"
                         : "Pick a service…"}
                     </span>
@@ -6180,7 +6180,7 @@ function RecommendationsStep({
             if (picked.kind === "service") {
               updateRec(idx, {
                 recommended_service_id: picked.id,
-                service_label: picked.name,
+                service_label: formatServiceDisplayName(picked.name),
                 service_slug: picked.slug,
                 service_has_options: picked.has_options,
                 freeform_service_name: "",
@@ -6885,7 +6885,7 @@ function SummaryStep({
   const rows: { label: string; value: string }[] = [
     {
       label: "Vehicle",
-      value: `${bookingLabel}${serviceLabel ? ` · ${serviceLabel}` : ""}`,
+      value: `${bookingLabel}${serviceLabel ? ` · ${formatServiceDisplayName(serviceLabel)}` : ""}`,
     },
     {
       label: "Mileage",
@@ -7486,7 +7486,7 @@ function LaborStep({
     const rows: Array<{ key: string; label: string; def: number }> = [
       {
         key: "base",
-        label: baseLabel?.trim() || "Original service",
+        label: formatServiceDisplayName(baseLabel?.trim()) || "Original service",
         def:
           typeof estimatedLaborMinutes === "number" && estimatedLaborMinutes > 0
             ? estimatedLaborMinutes
@@ -7497,7 +7497,7 @@ function LaborStep({
       const override = customLaborOverrides[String(job._id)];
       rows.push({
         key: String(job._id),
-        label: job.name,
+        label: formatServiceDisplayName(job.name),
         def:
           typeof override === "number" && override > 0
             ? override

@@ -9,6 +9,7 @@ import {
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -272,7 +273,7 @@ export default function WeekSingleMechanicLanes({
 
       const svcP = document.createElement("p");
       Object.assign(svcP.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: "0.8" });
-      svcP.textContent = ev.serviceNames?.join(", ") ?? "";
+      svcP.textContent = ev.serviceNames?.map(formatServiceDisplayName).join(", ") ?? "";
       floating.appendChild(svcP);
 
       if (isPendingCustomer) {
@@ -720,7 +721,7 @@ export default function WeekSingleMechanicLanes({
                         }}
                       >
                         <p className="font-medium truncate">{ev.customerName}</p>
-                        <p className="truncate opacity-80">{ev.serviceNames?.join(", ")}</p>
+                        <p className="truncate opacity-80">{ev.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
                       </div>
                     );
                   }
@@ -750,7 +751,7 @@ export default function WeekSingleMechanicLanes({
                         {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
                       </span>
                       <p className="font-medium truncate">{ev.customerName}</p>
-                      <p className="truncate opacity-80">{ev.serviceNames?.join(", ")}</p>
+                      <p className="truncate opacity-80">{ev.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
                       {isPendingCustomer && (
                         <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
                       )}

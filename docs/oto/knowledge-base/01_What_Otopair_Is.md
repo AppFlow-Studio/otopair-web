@@ -8,9 +8,9 @@ Otopair is not a garage. The shop does the repair, sets its own prices and stand
 
 ## Core facts
 
-- Coming to iPhone and Android — the app is in pre-launch; visitors can join the launch list on the website to get it first
+- Available on iPhone and Android — the app is live and onboarding users; drivers download it to get locked pricing and book
 - Free to download and use — no subscription; drivers pay only when they book a job
-- Drivers book in the app — there's no web booking for drivers. Repair shops use a separate web dashboard
+- Drivers book in the app — repair shops use a separate web dashboard
 - Live first in Staten Island, NYC, then the rest of the city one borough at a time (see "Where Otopair Works")
 - Independent shops only — every shop is reviewed and approved by Otopair's team before drivers can book it (see "Shops on Otopair")
 - One-way reviews: drivers review the shop, and optionally the mechanic, only after a completed booking
@@ -59,10 +59,10 @@ A value the system can't stand behind is held back rather than shown. The catalo
 
 ## How to answer "what is Otopair?"
 
-Short, friendly answer: "Otopair is a car repair marketplace for New York City. You tell Oto in the app what your car's doing, every verified shop shows its full total for your exact car, and you book at a locked price — nothing gets added without your yes. We're live first in Staten Island, and the app is launching soon on iPhone and Android — join the launch list to get it first."
+Short, friendly answer: "Otopair is a car repair marketplace for New York City. You tell Oto in the app what your car's doing, every verified shop shows its full total for your exact car, and you book at a locked price — nothing gets added without your yes. We're live in Staten Island, and the app is live on iPhone and Android — download the app or sign up here to get started."
 
 **"Can I book on the website?"**
-"No — drivers book in the Otopair app, which is launching soon on iPhone and Android. Join the launch list and you'll get an email the day it's live."
+"Booking is handled directly in the Otopair app on iPhone and Android, where your vehicle specs, verified shop totals, and locked pricing are managed seamlessly. You can sign up right here on the site or download the app from the App Store or Google Play to book."
 
 ## Tone for the voice agent
 

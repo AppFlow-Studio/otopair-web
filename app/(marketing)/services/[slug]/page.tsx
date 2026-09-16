@@ -78,7 +78,7 @@ const WHEN_NEEDED: Record<string, string> = {
   spark_plugs:
     "When your car's service schedule calls for it. Spark plugs are an interval item on gas and hybrid engines, and the replacement uses OEM-spec plugs for your exact engine.",
   timing_belt:
-    "When your car's service schedule calls for it. A timing belt is an interval item, not a symptom item: the kit (belt, tensioner and idler pulleys) is replaced on schedule, and only belt-driven engines have one.",
+    "When your car's service schedule calls for it. A drive belt is an interval item, not a symptom item: the kit (belt, tensioner and idler pulleys) is replaced on schedule, and only belt-driven engines have one.",
   coolant_flush:
     "When the temperature warning comes on, or when your car's schedule calls for a cooling-system service. The full flush and refill uses the OEM coolant specified for your car.",
   transmission_service:

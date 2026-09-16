@@ -43,7 +43,7 @@ const CATEGORY_INTRO: Record<ServiceCategoryName, { tab: TabKey; title: string; 
   "Scheduled Service": {
     tab: "major_service",
     title: "Which scheduled services can I book?",
-    body: "Seven interval services: Spark Plugs, Timing Belt, Coolant Flush, Transmission Service, Power Steering Flush, Differential Service and Fuel System Cleaning. Several apply only to certain cars, a belt-driven engine, hydraulic steering, a separate differential, and Oto shows each one only when it applies to yours.",
+    body: "Seven interval services: Spark Plugs, Drive Belt, Coolant Flush, Transmission Service, Power Steering Flush, Differential Service and Fuel System Cleaning. Several apply only to certain cars, a belt-driven engine, hydraulic steering, a separate differential, and Oto shows each one only when it applies to yours.",
   },
   Inspections: {
     tab: "inspections",
@@ -55,7 +55,7 @@ const CATEGORY_INTRO: Record<ServiceCategoryName, { tab: TabKey; title: string; 
 const FAQ: FaqItem[] = [
   {
     q: "How many services can I book on Otopair?",
-    a: "22, in four categories: Routine, Tires & Brakes, Scheduled Service and Inspections. They run from an Oil Change and a Tire Rotation to a Timing Belt and a Rotor Replacement. Oto, the in-app assistant, shows you only the services that apply to your car, so your own list may be shorter.",
+    a: "22, in four categories: Routine, Tires & Brakes, Scheduled Service and Inspections. They run from an Oil Change and a Tire Rotation to a Drive Belt and a Rotor Replacement. Oto, the in-app assistant, shows you only the services that apply to your car, so your own list may be shorter.",
   },
   {
     q: "Does Otopair publish prices for these services?",
@@ -67,7 +67,7 @@ const FAQ: FaqItem[] = [
   },
   {
     q: "Why doesn't Oto show me every service?",
-    a: "Because some do not apply to your car. Oto hides an Oil Change or an Emissions Test on an electric car, a Timing Belt on a chain-driven engine, a Power Steering Flush where there is no evidence of hydraulic steering, and the OBD-II diagnostics on cars older than 1996. What is left is what your car can actually book.",
+    a: "Because some do not apply to your car. Oto hides an Oil Change or an Emissions Test on an electric car, a Drive Belt on a chain-driven engine, a Power Steering Flush where there is no evidence of hydraulic steering, and the OBD-II diagnostics on cars older than 1996. What is left is what your car can actually book.",
   },
 ];
 
@@ -97,7 +97,7 @@ export default async function ServicesIndexPage() {
   return (
     <PageShell
       title={`${BOOKABLE_SERVICE_COUNT} services, four categories, one locked price.`}
-      lede="From an Oil Change to a Timing Belt. Shops set the price; you see the full total before you confirm."
+      lede="From an Oil Change to a Drive Belt. Shops set the price; you see the full total before you confirm."
       crumbs={[
         { name: "Home", href: "/" },
         { name: "Services", href: "/services" },

@@ -24,9 +24,10 @@ import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import PostJobSurveyDialog, {
-  type JobActualPartPayload,
-} from "@/components/post-job-survey-dialog";
+import type { JobActualPartPayload } from "@/lib/vehicle-passport";
+import type { BookingWorkflowBooking } from "@/lib/booking-workflow-state";
+import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function formatWhen(date?: string | null, time?: string | null) {
@@ -152,7 +153,13 @@ export default function MidJobScopeDialog({
   const j = job as any;
 
   return (
-    <PostJobSurveyDialog
+    <BookingWorkflowGuard
+      open={open}
+      booking={job as BookingWorkflowBooking}
+      allowedStatuses={["in_progress"]}
+      onAcknowledge={onClose}
+    >
+      <PostJobSurveyDialog
       open={open}
       bookingId={String(bookingId)}
       bookingLabel={j.vehicle ?? "Vehicle"}
@@ -185,6 +192,7 @@ export default function MidJobScopeDialog({
       quotedParts={lockedQuoteParts}
       isFixedPrice={j.isFixedPrice}
       fixedBaseCents={j.fixedContractBaseCents ?? null}
-    />
+      />
+    </BookingWorkflowGuard>
   );
 }

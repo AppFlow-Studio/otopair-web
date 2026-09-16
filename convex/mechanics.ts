@@ -170,6 +170,7 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
         lastName: mechanic.last_name as string,
         title: (mechanic.title ?? "") as string,
         email: (mechanic.email ?? latestInvitation?.email ?? "") as string,
+        entityType: (mechanic.entity_type === "bay" ? "bay" : "mechanic") as "bay" | "mechanic",
         isActive: mechanic.is_active !== false,
         rating: mechanic.rating ?? 0,
         reviewCount: mechanic.review_count ?? 0,
@@ -576,12 +577,14 @@ export const createManaged = mutation({
     lastName: v.string(),
     title: v.optional(v.string()),
     email: v.optional(v.string()),
+    entityType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireShopOwner(ctx, args.shopId);
+    const entityType = args.entityType === "bay" ? "bay" : "mechanic";
     const firstName = args.firstName.trim();
     const lastName = args.lastName.trim();
-    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+    if (!firstName) throw new Error(entityType === "bay" ? "Enter a bay name." : "Enter a first name.");
 
     const mechanicId = await ctx.db.insert("mechanics", {
       shop_id: args.shopId,
@@ -592,6 +595,7 @@ export const createManaged = mutation({
       is_active: true,
       rating: 0,
       review_count: 0,
+      entity_type: entityType,
     });
 
     await syncMechanicAvailabilityWindow(ctx, {
@@ -610,18 +614,26 @@ export const updateManaged = mutation({
     lastName: v.string(),
     title: v.optional(v.string()),
     email: v.optional(v.string()),
+    entityType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
+    const entityType =
+      args.entityType === "bay" || args.entityType === "mechanic"
+        ? args.entityType
+        : mechanic.entity_type === "bay"
+          ? "bay"
+          : "mechanic";
     const firstName = args.firstName.trim();
     const lastName = args.lastName.trim();
-    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+    if (!firstName) throw new Error(entityType === "bay" ? "Enter a bay name." : "Enter a first name.");
 
     await ctx.db.patch(args.mechanicId, {
       first_name: firstName,
       last_name: lastName,
       title: args.title?.trim() || undefined,
       email: args.email?.trim().toLowerCase() || undefined,
+      entity_type: entityType,
     });
 
     await syncMechanicAvailabilityWindow(ctx, {
@@ -666,7 +678,8 @@ export const deactivateManaged = mutation({
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
     const blockers = await getBlockingBookings(ctx, args.mechanicId, mechanic.shop_id);
     if (blockers.length > 0) {
-      throw new Error("This mechanic has active bookings or jobs that must be completed or reassigned first.");
+      const label = mechanic.entity_type === "bay" ? "bay" : "mechanic";
+      throw new Error(`This ${label} has active bookings or jobs that must be completed or reassigned first.`);
     }
 
     await ctx.db.patch(args.mechanicId, { is_active: false });

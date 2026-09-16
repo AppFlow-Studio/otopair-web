@@ -14,6 +14,10 @@ describe("fixed-cent currency input", () => {
     expect(formatFixedCentCurrency("0012.345")).toBe("12.35");
   });
 
+  it("keeps an intentionally blank optional price empty", () => {
+    expect(formatFixedCentCurrency("", { emptyWhenBlank: true })).toBe("");
+  });
+
   it("appends typed digits from the cents side", () => {
     let value = "0.00";
 

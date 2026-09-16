@@ -376,7 +376,7 @@ const FASTER_REASON_CHOICES: { value: TimeVarianceReason; label: string }[] = [
 
 type FluidOption = { value: string; label: string; aliases?: string[] };
 
-// Mirrors pre-job-survey-dialog.tsx OIL_VISCOSITY_OPTIONS / OIL_TYPE_OPTIONS / COOLANT_TYPE_OPTIONS / BRAKE_FLUID_OPTIONS / TRANSMISSION_FLUID_OPTIONS exactly.
+// Stable fluid-option slugs used by the post-job report.
 const OIL_VISCOSITY_DROPDOWN: FluidOption[] = [
   { value: "0w_8", label: "0W-8", aliases: ["0w8", "0w-8"] },
   { value: "0w_16", label: "0W-16", aliases: ["0w16", "0w-16"] },
@@ -2372,7 +2372,8 @@ function PostJobSurveyDialogBody({
       }
     }
 
-    await onSubmit({
+    try {
+      await onSubmit({
       completion_mileage: parsedMileage,
       parts_used: normalizedParts,
       vehicle_updates: Object.fromEntries(
@@ -2457,7 +2458,12 @@ function PostJobSurveyDialogBody({
       }),
       // Prior recs the mechanic marked done this visit — server closes them out.
       Object.keys(resolvedPriorRecIds).filter((id) => resolvedPriorRecIds[id]),
-    );
+      );
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : "Could not submit report. Try again.",
+      );
+    }
   }
 
   async function handleFilesSelected(event: ChangeEvent<HTMLInputElement>) {

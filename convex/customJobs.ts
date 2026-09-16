@@ -37,6 +37,7 @@ import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 import { resolveLaborRate, VehicleTier } from "./lib/vehicleTiers";
 import { isBrakeSlug, type AxlePosition } from "./lib/brakeScope";
+import { normalizeShopServicePrice } from "./lib/shopServicePricing";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -871,7 +872,8 @@ async function resolveAddedServicePricing(
     if (rate.rate != null) laborRateCents = Math.round(rate.rate * 100);
   }
 
-  // Flat-price override for (shop, service, tier), if the shop set one.
+  // Shop override for (shop, service, tier). A custom-job draft needs one
+  // provisional number, so an unequal range uses its midpoint.
   let fixedPriceCents: number | null = null;
   if (args.booking?.shop_id) {
     const row: any = await ctx.db
@@ -883,7 +885,10 @@ async function resolveAddedServicePricing(
           .eq("tier", tier),
       )
       .unique();
-    if (row) fixedPriceCents = row.price_cents;
+    const price = normalizeShopServicePrice(row);
+    if (price) {
+      fixedPriceCents = Math.round((price.lowCents + price.highCents) / 2);
+    }
   }
 
   return { laborMinutes, laborRateCents, fixedPriceCents, tier };

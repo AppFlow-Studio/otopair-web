@@ -11,64 +11,69 @@
 
 import { useState } from "react";
 import { DEMO_FEATURES } from "./oto-flow";
+import { SERVICE_EXPLAINERS, SYMPTOMS } from "./oto-knowledge";
 import type { OtoAgent } from "./use-oto-agent";
 
 // A real 17-char VIN (2003 Honda Accord) — exercises the live NHTSA decode.
 const TEST_VIN = "1HGCM82633A004352";
 
 // Example agent payloads — exactly what the ElevenLabs tool call would carry.
+// Their words follow the knowledge base (docs/oto/knowledge-base), so a card
+// summoned from here never shows a claim Oto isn't allowed to make. The
+// earlier samples promised warranty coverage, "vetted" shops, price ranges and
+// a shop count.
 const INFO_SAMPLES: Record<string, unknown> = {
   list: {
-    title: "Is there a warranty?",
-    summary: "Every repair booked through Otopair is covered.",
+    title: "Who stands behind the repair",
+    summary: "The shop does the work and stands behind it.",
     layout: "list",
     items: [
-      "12-month / 12,000-mile parts & labor coverage",
-      "Backed by the shop, enforced by Otopair",
-      "Claims handled in-app — no phone calls",
-      "Covered at any Otopair shop, not just the original",
+      "Any parts or labor warranty is the shop's own",
+      "Its terms vary by shop and by job",
+      "Ask the shop in the app, so the answer is on the record",
+      "Otopair keeps the approved price, messages and receipt",
     ],
-    footnote: "Coverage details appear on every quote before you book.",
+    footnote: "Disputes are opened from the booking in the app.",
   },
   steps: {
     title: "Getting a tire quote",
-    summary: "Tires work on live quotes instead of fixed prices.",
+    summary: "Tires work on quotes instead of fixed prices.",
     layout: "steps",
     items: [
-      "Tell Oto your car or plug in your VIN",
-      "Pick a tier — budget, mid, or premium",
-      "Nearby shops send live installed prices",
-      "Choose one and book your slot",
+      "Post a tire request for your exact car",
+      "Shops send quotes naming the tire brand and model",
+      "Compare the price per tire, labor and the total",
+      "Accept one, or cancel the request for free",
     ],
   },
   rows: {
     title: "What's in your total",
-    summary: "Every charge is its own line — nothing folded in.",
+    summary: "One total for your exact car, before you confirm.",
     layout: "rows",
     rows: [
-      { label: "Parts", value: "Exact part, exact price" },
-      { label: "Labor", value: "Shop's posted rate" },
-      { label: "Locked total", value: "shown before you confirm" },
-      { label: "Taxes", value: "Itemized at checkout" },
+      { label: "Parts", value: "Chosen for your exact car" },
+      { label: "Labor", value: "The shop's own rate" },
+      { label: "Tax and service fee", value: "Inside the total" },
+      { label: "Locked total", value: "Can't go up without your yes" },
     ],
   },
   stats: {
-    title: "Otopair at launch",
+    title: "Otopair in numbers",
     layout: "stats",
     stats: [
-      { value: "4", label: "NYC boroughs" },
-      { value: "120+", label: "Vetted shops" },
-      { value: "90s", label: "To book" },
+      { value: "22", label: "Bookable services" },
+      { value: "4", label: "Service categories" },
       { value: "$20", label: "Hold at booking" },
+      { value: "24 h", label: "To answer a request" },
     ],
-    footnote: "Staten Island and more cities are next.",
+    footnote: "Live first on Staten Island.",
   },
   compare: {
-    title: "Diagnostics with Oto",
-    summary: "What the AI diagnosis does — and what it never does.",
+    title: "What Oto does",
+    summary: "Possibilities, never a diagnosis.",
     layout: "compare",
-    pros: ["Narrows likely causes from symptoms", "Estimates a fair price range", "Preps the shop before you arrive"],
-    cons: ["Never replaces the mechanic's inspection", "Never auto-approves extra work", "Never guesses on safety items"],
+    pros: ["Turns what the car is doing into a job a shop can price", "Explains what a mechanic will check", "Shows the full total before you book"],
+    cons: ["Never replaces the mechanic's inspection", "Never approves extra work for you", "Never guesses on safety items"],
   },
 };
 
@@ -120,6 +125,22 @@ export default function DebugTriggers({ oto }: { oto: OtoAgent }) {
           {DEMO_FEATURES.map((f) => (
             <button key={f} type="button" className={BTN} onClick={() => oto.showDemo(f)}>
               {f.replace(/_/g, " ")}
+            </button>
+          ))}
+        </Group>
+
+        <Group label="Services">
+          {SERVICE_EXPLAINERS.map((s) => (
+            <button key={s.service} type="button" className={BTN} onClick={() => oto.showService(s.service)}>
+              {s.service.toLowerCase()}
+            </button>
+          ))}
+        </Group>
+
+        <Group label="Symptoms">
+          {SYMPTOMS.map((s) => (
+            <button key={s.id} type="button" className={BTN} onClick={() => oto.showSymptom(s.id)}>
+              {s.symptom.toLowerCase()}
             </button>
           ))}
         </Group>

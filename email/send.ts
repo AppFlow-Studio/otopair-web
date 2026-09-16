@@ -1022,11 +1022,14 @@ export interface ContactSupportEmailData {
   customerName?: string;
   /** How many screenshots/videos the user attached (not uploaded here). */
   attachmentCount?: number;
+  /** Where the request came from, shown under the heading. Defaults to the app's contact sheet. */
+  sentFrom?: string;
 }
 
 export async function sendContactSupportEmail(data: ContactSupportEmailData) {
   const supportInbox = process.env.SUPPORT_EMAIL || "support@otopair.com";
   const { topic, subject, description, customerEmail, customerName, attachmentCount } = data;
+  const sentFrom = data.sentFrom ?? "Sent from Settings → Contact Us.";
   const esc = (s: string) => (s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   const lineCss = "margin:0 0 6px;color:#1f2937;font-size:14px;line-height:1.5;";
@@ -1042,7 +1045,7 @@ export async function sendContactSupportEmail(data: ContactSupportEmailData) {
           <table role="presentation" style="max-width:560px;width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.08);">
             <tr><td style="padding:24px 28px 8px;border-bottom:1px solid #e5e7eb;">
               <h1 style="margin:0;color:#0f172a;font-size:20px;font-weight:700;">New contact request</h1>
-              <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Sent from Settings → Contact Us.</p>
+              <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">${esc(sentFrom)}</p>
             </td></tr>
             <tr><td style="padding:20px 28px 4px;">
               <p style="${lineCss}"><span style="${labelCss}">Topic:</span> ${esc(topic)}</p>

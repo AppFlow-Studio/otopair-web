@@ -3,7 +3,11 @@
 import { useState } from "react";
 import { Calendar, Car, Check, MapPin, Sparkles, Star } from "lucide-react";
 import { motion } from "motion/react";
+import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive } from "./download-app";
+import { OtoCard } from "./oto-card";
+import { useWaitlist } from "./waitlist-modal";
 import {
+  SAMPLE_JOB,
   SCHEDULING_PREVIEW,
   WEEK_DAYS,
   type Booking,
@@ -14,9 +18,6 @@ import {
 import { CountUp, Step } from "./shared";
 
 const EASE = [0.22, 1, 0.36, 1] as const;
-
-const CARD =
-  "w-full rounded-[20px] border border-white/40 bg-white/55 p-6 backdrop-blur-2xl shadow-[0_22px_60px_rgba(0,0,0,0.10)]";
 
 const usd = (n: number) =>
   n % 1 === 0 ? `$${n}` : `$${n.toFixed(2)}`;
@@ -159,18 +160,14 @@ export function VehicleCard({
         );
 
   return (
-    // The lg+ cap mirrors the hero canvas panel's fixed height
-    // (flagship-hero.tsx, lg:h-[530px]) so the specs list fills the frame
-    // instead of stopping 70px short of it — keep the two in step.
-    <div className={`${CARD} flex max-h-[70vh] flex-col lg:max-h-[530px]`}>
-      <Step delay={0.05} className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <Car className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Your Vehicle
-          </h3>
-        </div>
-        {vehicle.configLinked && (
+    // Height, scrolling and the fade at the cut come from OtoCard. This card
+    // was the only one of 24 that fit the panel properly; the shell now does
+    // that for all of them.
+    <OtoCard
+      icon={Car}
+      title="Your Vehicle"
+      aside={
+        vehicle.configLinked ? (
           <motion.span
             initial={{ opacity: 0, scale: 0.7 }}
             animate={{ opacity: 1, scale: 1 }}
@@ -179,8 +176,10 @@ export function VehicleCard({
           >
             Specs on file
           </motion.span>
-        )}
-      </Step>
+        ) : null
+      }
+      footer={<PrimaryButton onClick={onContinue}>Find shops nearby</PrimaryButton>}
+    >
 
       <Step delay={0.14}>
         <p
@@ -196,8 +195,7 @@ export function VehicleCard({
         )}
       </Step>
 
-      {/* Scrollable spec area — capped so the card always fits the screen. */}
-      <div className="my-3 min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 [scrollbar-width:thin]">
+      <div className="my-3 space-y-4">
         {isRich ? (
           <>
             {groups.map((g, gi) => (
@@ -274,27 +272,16 @@ export function VehicleCard({
           </div>
         )}
       </div>
-
-      <PrimaryButton onClick={onContinue}>Find shops nearby</PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* 1. Instant Scheduling                                               */
+/* 1. Scheduling (sample)                                              */
 /* ------------------------------------------------------------------ */
 export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Instant Scheduling
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
-      </Step>
+    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample · how scheduling looks in the app">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -318,7 +305,7 @@ export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
       </Step>
 
       <PrimaryButton onClick={onConfirm} delay={0.58}>Confirm Appointment</PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
@@ -340,16 +327,11 @@ export function ChooseShopCard({
   const firstName = active?.name.split(" ")[0] ?? "Shop";
 
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <MapPin className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Choose a Shop
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">3 found nearby · Best price first</p>
-      </Step>
+    <OtoCard
+      icon={MapPin}
+      title="Choose a Shop"
+      subtitle="Sample shops · how picking a shop looks in the app"
+    >
 
       <div className="mt-4 space-y-2">
         {shops.map((shop, i) => {
@@ -370,11 +352,6 @@ export function ChooseShopCard({
                   : "bg-[#1a1a1a]/[0.03] hover:bg-[#1a1a1a]/[0.05]"
               }`}
             >
-              {shop.bestValue && (
-                <span className="absolute -top-2 left-3 rounded-full bg-[#1a1a1a] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-white">
-                  Best value
-                </span>
-              )}
               <div className="flex items-center justify-between">
                 <div>
                   <p className="text-[14px] font-medium text-[#1a1a1a]">{shop.name}</p>
@@ -401,15 +378,22 @@ export function ChooseShopCard({
         })}
       </div>
 
+      {/* The sample prices only mean anything next to the job they price. */}
+      <Step delay={0.16 + shops.length * 0.1}>
+        <p className="mt-3 text-[11px] leading-relaxed text-[#1a1a1a]/45">
+          Sample prices for a {SAMPLE_JOB}. In the app, every verified shop shows its own total for your exact car.
+        </p>
+      </Step>
+
       <PrimaryButton onClick={() => active && onContinue(active)} delay={0.16 + shops.length * 0.1 + 0.08}>
         Continue with {firstName}
       </PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/* 3. Date & Time                                                      */
+/* 3. Date & Time (sample)                                             */
 /* ------------------------------------------------------------------ */
 export function DateTimeCard({
   slots,
@@ -423,16 +407,7 @@ export function DateTimeCard({
   onConfirm: () => void;
 }) {
   return (
-    <div className={CARD}>
-      <Step delay={0.05}>
-        <div className="flex items-center gap-2">
-          <Calendar className="h-[18px] w-[18px] text-[#1a1a1a]" strokeWidth={1.6} />
-          <h3 className="text-[19px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Instant Scheduling
-          </h3>
-        </div>
-        <p className="mt-1 text-[12px] text-[#1a1a1a]/45">Secured with fixed pricing</p>
-      </Step>
+    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample times · how the app shows open slots">
 
       <div className="my-5">
         <WeekStrip base={0.18} />
@@ -469,22 +444,45 @@ export function DateTimeCard({
       <PrimaryButton onClick={onConfirm} delay={0.42 + slots.length * 0.07 + 0.08}>
         Confirm Appointment
       </PrimaryButton>
-    </div>
+    </OtoCard>
   );
 }
 
 /* ------------------------------------------------------------------ */
 /* 4. Booking Confirmed                                                */
 /* ------------------------------------------------------------------ */
+const STORE_BUTTON_CLASS =
+  "flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white";
+const STORE_BUTTON_MOTION = {
+  whileHover: { y: -2, scale: 1.03 },
+  whileTap: { scale: 0.97 },
+  transition: { type: "spring", stiffness: 400, damping: 20 },
+} as const;
+
 function StoreButton({ store }: { store: "apple" | "google" }) {
+  const { open } = useWaitlist();
+  const url = store === "apple" ? APP_STORE_URL : PLAY_STORE_URL;
+  const label = <StoreButtonLabel store={store} />;
+  // Same launch flag as every other store control on the site: a real store
+  // link once the listing exists, and until then a button that opens the
+  // launch-list modal — never a dead "#" link (site audit 2026-08-31).
+  if (storeIsLive(url)) {
+    return (
+      <motion.a href={url} target="_blank" rel="noopener noreferrer" className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
+        {label}
+      </motion.a>
+    );
+  }
   return (
-    <motion.a
-      href="#get-oto"
-      whileHover={{ y: -2, scale: 1.03 }}
-      whileTap={{ scale: 0.97 }}
-      transition={{ type: "spring", stiffness: 400, damping: 20 }}
-      className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] px-3 py-2.5 text-white"
-    >
+    <motion.button type="button" onClick={() => open()} className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
+      {label}
+    </motion.button>
+  );
+}
+
+function StoreButtonLabel({ store }: { store: "apple" | "google" }) {
+  return (
+    <>
       {store === "apple" ? (
         <svg viewBox="0 0 24 24" className="h-5 w-5" fill="currentColor" aria-hidden>
           <path d="M16.365 1.43c0 1.14-.42 2.21-1.18 3.02-.81.86-2.13 1.52-3.21 1.43-.13-1.1.42-2.27 1.13-3.01.79-.84 2.18-1.46 3.26-1.44zM20.5 17.2c-.55 1.27-.82 1.83-1.53 2.95-.99 1.57-2.39 3.53-4.12 3.54-1.54.02-1.93-.99-4.02-.98-2.09.01-2.52.99-4.06.98-1.73-.02-3.05-1.78-4.04-3.35C-.07 16.1-.34 11.36 1.4 8.95c1.06-1.46 2.74-2.32 4.32-2.32 1.6 0 2.61 1 3.93 1 1.28 0 2.06-1 3.91-1 1.4 0 2.89.76 3.94 2.08-3.46 1.9-2.9 6.85.99 8.49z" />
@@ -502,7 +500,7 @@ function StoreButton({ store }: { store: "apple" | "google" }) {
           {store === "apple" ? "App Store" : "Google Play"}
         </span>
       </span>
-    </motion.a>
+    </>
   );
 }
 
@@ -518,8 +516,13 @@ export function BookingConfirmedCard({
   const [email, setEmail] = useState("");
 
   return (
-    <div className={CARD}>
-      <div className="flex flex-col items-center">
+    // The one card with a deliberately different header: a centered check mark
+    // and a larger title, because it is the terminal celebration rather than
+    // another explainer. OtoCard's `header` slot exists for exactly this, so
+    // the exception stays visible in the code instead of being drift.
+    <OtoCard
+      header={
+        <div className="flex flex-col items-center">
         <motion.div
           initial={{ scale: 0, rotate: -25 }}
           animate={{ scale: 1, rotate: 0 }}
@@ -535,12 +538,23 @@ export function BookingConfirmedCard({
             transition={{ duration: 0.9, ease: "easeOut", delay: 0.18 }}
           />
         </motion.div>
-        <Step delay={0.3}>
-          <h3 className="mt-3 text-[22px] text-[#1a1a1a]" style={{ fontFamily: "var(--font-Petrona)" }}>
-            Booking confirmed
-          </h3>
-        </Step>
-      </div>
+          <Step delay={0.3}>
+            <h3
+              className="mt-3 text-center text-[22px] text-[#1a1a1a]"
+              style={{ fontFamily: "var(--font-Petrona)" }}
+            >
+              Sample booking
+            </h3>
+            {/* Oto is the site's marketing agent: this receipt demonstrates the
+                app's booking flow and must never read as a real appointment —
+                so the title itself says "sample", not "confirmed". */}
+            <p className="mt-1 text-center text-[11px] text-[#1a1a1a]/45">
+              How a confirmed booking looks in the Otopair app · nothing was booked
+            </p>
+          </Step>
+        </div>
+      }
+    >
 
       <Step delay={0.4} className="mt-5 border-t border-[#1a1a1a]/10 pt-4">
         <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">
@@ -578,7 +592,7 @@ export function BookingConfirmedCard({
         (saved ? (
           <Step delay={0.7} className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3 text-[13px] text-[#1a1a1a]">
             <Check className="h-4 w-4" strokeWidth={2.5} />
-            Saved — your car will be waiting when you download the app.
+            You&rsquo;re on the launch list — your car will be waiting in the app.
           </Step>
         ) : (
           <Step delay={0.7} className="mt-5">
@@ -589,7 +603,7 @@ export function BookingConfirmedCard({
             }}
           >
             <p className="mb-2 text-[12px] text-[#1a1a1a]/55">
-              Email it to yourself & save your car for the app:
+              Get the launch email & save your car for the app:
             </p>
             <div className="flex gap-2">
               <input
@@ -621,9 +635,9 @@ export function BookingConfirmedCard({
 
       <Step delay={0.9}>
         <p className="mt-3 text-center text-[10px] text-[#1a1a1a]/40">
-          Secure transaction via Otopair Pay
+          Sample receipt · no payment is taken on this website
         </p>
       </Step>
-    </div>
+    </OtoCard>
   );
 }

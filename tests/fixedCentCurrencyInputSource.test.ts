@@ -10,7 +10,7 @@ describe("FixedCentCurrencyInput shared component", () => {
     expect(componentSource).toContain("appendFixedCentDigit");
     expect(componentSource).toContain("backspaceFixedCentCurrency");
     expect(componentSource).toContain("syncFixedCentCurrencyInput");
-    expect(componentSource).toContain("formatFixedCentCurrency(value)");
+    expect(componentSource).toContain("formatFixedCentCurrency(value, { emptyWhenBlank: allowEmpty })");
 
     const postJobSource = readFileSync("components/post-job-survey-dialog.tsx", "utf8");
     expect(postJobSource).toContain("FixedCentCurrencyInput");
@@ -22,5 +22,12 @@ describe("FixedCentCurrencyInput shared component", () => {
     );
     expect(createBookingSource).toContain("FixedCentCurrencyInput");
     expect(createBookingSource).not.toContain("handleCatalogUnitPriceKeyDown");
+
+    const servicePricingSource = readFileSync(
+      "components/shop/service-price-tier-strip.tsx",
+      "utf8",
+    );
+    expect(servicePricingSource).toContain("FixedCentCurrencyInput");
+    expect(servicePricingSource).toContain("allowEmpty");
   });
 });

@@ -149,7 +149,19 @@ function SettingsSaveBar() {
   }
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[80] flex justify-center px-4">
+    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-[80] flex flex-col items-center gap-3 px-4">
+      {toast ? (
+        <div
+          className={`pointer-events-auto flex items-center gap-2 rounded-full border px-4 py-2 text-sm shadow-lg ${
+            toast.tone === "ok"
+              ? "border-success/20 bg-success/10 text-success"
+              : "border-destructive/20 bg-destructive/10 text-destructive"
+          }`}
+        >
+          {toast.tone === "ok" ? <Check className="h-4 w-4" /> : null}
+          {toast.text}
+        </div>
+      ) : null}
       {count > 0 ? (
         <div className="pointer-events-auto flex items-center gap-3 rounded-full border border-border bg-card px-3 py-2 pl-5 shadow-[0_10px_40px_rgba(15,23,42,0.16)]">
           <span className="text-sm text-foreground">
@@ -180,17 +192,6 @@ function SettingsSaveBar() {
             )}
             Save changes
           </button>
-        </div>
-      ) : toast ? (
-        <div
-          className={`pointer-events-auto flex items-center gap-2 rounded-full border px-4 py-2 text-sm shadow-lg ${
-            toast.tone === "ok"
-              ? "border-success/20 bg-success/10 text-success"
-              : "border-destructive/20 bg-destructive/10 text-destructive"
-          }`}
-        >
-          {toast.tone === "ok" ? <Check className="h-4 w-4" /> : null}
-          {toast.text}
         </div>
       ) : null}
     </div>

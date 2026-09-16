@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 
 import {
   clearInactivePricingDraft,
@@ -82,5 +84,28 @@ describe("service pricing editor helpers", () => {
       minimum: "9.00",
       maximum: "110.00",
     });
+  });
+});
+
+describe("service pricing editor presentation", () => {
+  it("shows compact Min and Max labels above range inputs", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "components/shop/service-price-tier-strip.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain('visibleLabel="Min"');
+    expect(source).toContain('visibleLabel="Max"');
+  });
+
+  it("uses em dashes for empty range values", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "components/shop/service-price-tier-strip.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain('placeholder="—"');
+    expect(source).not.toContain('placeholder="Minimum"');
+    expect(source).not.toContain('placeholder="Maximum"');
   });
 });

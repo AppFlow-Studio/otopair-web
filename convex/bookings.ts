@@ -2416,6 +2416,9 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       // render a "Fixed price" badge. Safe to surface — carries no
       // anchoring info (no dollar amount).
       is_fixed_price: disclosedRange.is_fixed_price ? true : undefined,
+      has_shop_price_range: disclosedRange.has_shop_price_range
+        ? true
+        : undefined,
       priced_parts_snapshot:
         pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
       part_selection_trace:

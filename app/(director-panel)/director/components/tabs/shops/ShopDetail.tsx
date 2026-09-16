@@ -813,13 +813,19 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                     </ol>}
                 </Card>
                 <Card>
-                  <div style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>Fixed-price overrides</div>
-                  {insights.fixedPrices.length === 0 ? <p style={{ margin:'8px 0 0', fontSize:13, color:'var(--slate-400)' }}>No per-service flat prices set.</p>
+                  <div style={{ fontSize:13, fontWeight:600, color:'var(--slate-900)' }}>Service price overrides</div>
+                  {insights.fixedPrices.length === 0 ? <p style={{ margin:'8px 0 0', fontSize:13, color:'var(--slate-400)' }}>No per-service prices set.</p>
                     : <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:4 }}>
                       {insights.fixedPrices.map((f, i) => (
                         <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12 }}>
                           <span style={{ color:'var(--slate-700)' }}>{f.service} <span style={{ color:'var(--slate-400)' }}>· {f.tier}</span></span>
-                          <span style={{ fontWeight:600, color:'var(--slate-800)' }}>{money(f.price, { cents: true })}</span>
+                          <span style={{ fontWeight:600, color:'var(--slate-800)' }}>
+                            {f.priceLow == null || f.priceHigh == null
+                              ? "Invalid"
+                              : f.priceLow === f.priceHigh
+                                ? money(f.priceLow, { cents: true })
+                                : `${money(f.priceLow, { cents: true })} – ${money(f.priceHigh, { cents: true })}`}
+                          </span>
                         </div>
                       ))}
                     </div>}

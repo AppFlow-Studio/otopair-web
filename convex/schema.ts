@@ -2451,15 +2451,16 @@ export default defineSchema({
     .index("by_service_id", ["service_id"])
     .index("by_shop_and_service", ["shop_id", "service_id"]),
 
-  // Per-(shop, service, tier) flat-price overrides. Row exists ⇒ that tier
-  // is sold at `price_cents` flat (labor + parts merged); tax + platform fee
-  // still added on top by the booking flow. Missing row ⇒ engine range
-  // applies. Server rejects writes for any tier in shops.declined_tiers.
+  // Legacy table name: despite `shop_service_fixed_prices`, these rows now
+  // store either a fixed `price_cents` OR a low/high price range. Keeping the
+  // name avoids a destructive migration. Tax and platform fees remain extra.
   shop_service_fixed_prices: defineTable({
     shop_id: v.id("shops"),
     service_id: v.id("services"),
     tier: tierValidator,
-    price_cents: v.number(),
+    price_cents: v.optional(v.number()),
+    price_low_cents: v.optional(v.number()),
+    price_high_cents: v.optional(v.number()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("users")),
   })
@@ -3025,6 +3026,7 @@ export default defineSchema({
     // amount, no deviation." Safe to surface to mechanics; intentionally
     // NOT in MECHANIC_FORBIDDEN_FIELDS.
     is_fixed_price: v.optional(v.boolean()),
+    has_shop_price_range: v.optional(v.boolean()),
     // Itemized parts snapshot taken at booking-create time. Same per-unit
     // prices and quantities the customer saw on the Review & Pay screen.
     // The mechanic's post-job dialog hydrates from this first so the

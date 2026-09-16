@@ -23,6 +23,7 @@ import { quoteUnitPrice, isPriceDataStale } from "./part_prices";
 import type { TraceEntry } from "./partSelector";
 import { detectTier, resolveQuoteSeries } from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
+import { normalizeShopServicePrice } from "./lib/shopServicePricing";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
  *  row for a service. ±8% around the client-supplied per-service parts
@@ -82,7 +83,8 @@ export type DisclosedRangeBreakdown = {
  *  "Parts $8.10" for an oil change the customer agreed to at $60 flat. */
 export type FixedPriceLine = {
   service_id: Id<"services">;
-  price_cents: number;
+  price_low_cents: number;
+  price_high_cents: number;
 };
 
 /** Per-service projection of the quote-engine result for the booking.
@@ -115,6 +117,8 @@ export type ComputeDisclosedRangeResult = {
    *  `is_fixed_price` so the mechanic-facing UI can render a "Fixed price"
    *  badge without exposing the customer's disclosed ceiling. */
   is_fixed_price: boolean;
+  /** True when at least one shop override has unequal endpoints. */
+  has_shop_price_range: boolean;
   /** Per-service flat-price hits. Empty when no service resolved to a
    *  shop_service_fixed_prices row. Threaded into `computeQuotedSetPrice`. */
   fixed_price_lines: FixedPriceLine[];
@@ -155,6 +159,7 @@ export async function computeDisclosedRange(
   let parts_high_dollars = 0;
   let labor_reduction_dollars = 0;
   let is_fixed_price = false;
+  let has_shop_price_range = false;
   const fixed_price_lines: FixedPriceLine[] = [];
 
   // Resolve the vehicle's tier once for the whole booking — used to look up
@@ -182,15 +187,17 @@ export async function computeDisclosedRange(
             .eq("tier", tier!),
         )
         .unique();
-      if (fixed) {
-        const price = fixed.price_cents / 100;
-        parts_low_dollars += price;
-        parts_high_dollars += price;
+      const shopPrice = normalizeShopServicePrice(fixed);
+      if (shopPrice) {
+        parts_low_dollars += shopPrice.lowCents / 100;
+        parts_high_dollars += shopPrice.highCents / 100;
         labor_reduction_dollars += svc.labor_cost ?? 0;
-        is_fixed_price = true;
+        is_fixed_price ||= shopPrice.isFixed;
+        has_shop_price_range ||= !shopPrice.isFixed;
         fixed_price_lines.push({
           service_id: svc.service_id,
-          price_cents: fixed.price_cents,
+          price_low_cents: shopPrice.lowCents,
+          price_high_cents: shopPrice.highCents,
         });
         continue;
       }
@@ -313,6 +320,7 @@ export async function computeDisclosedRange(
     high_cents,
     breakdown,
     is_fixed_price,
+    has_shop_price_range,
     fixed_price_lines,
     quote_flags: Array.from(quote_flags_set),
     quote_fallback_low_dollars,
@@ -486,7 +494,8 @@ export function computeQuotedSetPrice(args: {
     0,
   );
   const fixedPartsCents = (fixedPriceLines ?? []).reduce(
-    (sum, l) => sum + l.price_cents,
+    (sum, l) =>
+      sum + Math.round((l.price_low_cents + l.price_high_cents) / 2),
     0,
   );
   const parts_cents = variablePartsCents + fixedPartsCents;

@@ -5,14 +5,15 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { ChevronDown, Loader2, Search, Sliders, Wrench } from "lucide-react";
-import FixedPriceTierStrip, {
-  FIXED_PRICE_TIERS,
-  centsMapToInputs,
-  countPricedGroups,
-  priceMapToCents,
-  type FixedPriceMap,
-  type FixedPriceTier,
-} from "@/components/shop/fixed-price-tier-strip";
+import ServicePriceTierStrip, {
+  clearInactivePricingDraft,
+  countPricedServiceGroups,
+  emptyServicePricingDraft,
+  pricingRecordToDraft,
+  servicePricingDraftToCents,
+  type SavedServicePricing,
+  type ServicePricingDraft,
+} from "@/components/shop/service-price-tier-strip";
 import Tooltip from "@/components/ui/tooltip";
 import { useRegisterSaveable } from "@/components/settings/save-manager";
 import ShopShortcutsManager from "@/components/settings/shop-shortcuts-manager";
@@ -20,24 +21,24 @@ import ShopShortcutsManager from "@/components/settings/shop-shortcuts-manager";
 export default function ServicesEditor() {
   const data = useQuery(api.shops.getMyOnboardingData);
   const shopId = data?.shop?._id as Id<"shops"> | undefined;
-  const fixedPrices = useQuery(
-    api.shopServiceFixedPrices.listForShop,
+  const servicePricing = useQuery(
+    api.shopServiceFixedPrices.listPricingForShop,
     shopId ? { shop_id: shopId } : "skip",
   );
   const updateServices = useMutation(api.shops.updateShopOfferedServices);
-  const setFixedPrices = useMutation(
-    api.shopServiceFixedPrices.setFixedPricesForService,
+  const replacePricing = useMutation(
+    api.shopServiceFixedPrices.replacePricingForService,
   );
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [pricingOpen, setPricingOpen] = useState<Set<string>>(new Set());
-  const [pricesByService, setPricesByService] = useState<
-    Record<string, FixedPriceMap>
+  const [pricingByService, setPricingByService] = useState<
+    Record<string, ServicePricingDraft>
   >({});
-  const [pricesBaseline, setPricesBaseline] = useState<
-    Record<string, FixedPriceMap>
+  const [pricingBaseline, setPricingBaseline] = useState<
+    Record<string, ServicePricingDraft>
   >({});
 
   const initialSelected = useMemo(() => {
@@ -56,14 +57,14 @@ export default function ServicesEditor() {
   }, [initialSelected]);
 
   useEffect(() => {
-    if (!fixedPrices) return;
-    const next: Record<string, FixedPriceMap> = {};
-    for (const [serviceId, centsMap] of Object.entries(fixedPrices)) {
-      next[serviceId] = centsMapToInputs(centsMap);
+    if (!servicePricing) return;
+    const next: Record<string, ServicePricingDraft> = {};
+    for (const [serviceId, saved] of Object.entries(servicePricing)) {
+      next[serviceId] = pricingRecordToDraft(saved as SavedServicePricing);
     }
-    setPricesByService(next);
-    setPricesBaseline(next);
-  }, [fixedPrices]);
+    setPricingByService(next);
+    setPricingBaseline(next);
+  }, [servicePricing]);
 
   const declinedTiers = useMemo(
     () => new Set<string>(data?.shop?.declinedTiers ?? []),
@@ -122,23 +123,20 @@ export default function ServicesEditor() {
     });
   }
 
-  function setServicePrices(serviceId: string, prices: FixedPriceMap) {
-    setPricesByService((prev) => ({ ...prev, [serviceId]: prices }));
+  function setServicePricing(serviceId: string, pricing: ServicePricingDraft) {
+    setPricingByService((prev) => ({ ...prev, [serviceId]: pricing }));
   }
 
   function dirtyServiceIds(): string[] {
     const ids: string[] = [];
-    for (const serviceId of Object.keys(pricesByService)) {
-      const current = pricesByService[serviceId] ?? {};
-      const baseline = pricesBaseline[serviceId] ?? {};
-      let changed = false;
-      for (const tier of FIXED_PRICE_TIERS) {
-        if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
-          changed = true;
-          break;
-        }
-      }
-      if (changed) ids.push(serviceId);
+    const serviceIds = new Set([
+      ...Object.keys(pricingByService),
+      ...Object.keys(pricingBaseline),
+    ]);
+    for (const serviceId of serviceIds) {
+      const current = pricingByService[serviceId] ?? emptyServicePricingDraft();
+      const baseline = pricingBaseline[serviceId] ?? emptyServicePricingDraft();
+      if (JSON.stringify(current) !== JSON.stringify(baseline)) ids.push(serviceId);
     }
     return ids;
   }
@@ -150,37 +148,42 @@ export default function ServicesEditor() {
   const dirty = selectionDirty || dirtyServiceIds().length > 0;
 
   const save = useCallback(async () => {
+    const pricingWrites = dirtyServiceIds().map((serviceId) => ({
+      serviceId,
+      ...servicePricingDraftToCents(
+        pricingByService[serviceId] ?? emptyServicePricingDraft(),
+      ),
+    }));
+
     await updateServices({
       serviceIds: Array.from(selected) as Id<"services">[],
     });
 
     if (shopId) {
-      for (const serviceId of dirtyServiceIds()) {
-        const patch = priceMapToCents(pricesByService[serviceId] ?? {});
-        const baseline = pricesBaseline[serviceId] ?? {};
-        const current = pricesByService[serviceId] ?? {};
-        const changedTiers: Partial<Record<FixedPriceTier, number | null>> = {};
-        for (const tier of FIXED_PRICE_TIERS) {
-          if ((current[tier] ?? "") !== (baseline[tier] ?? "")) {
-            changedTiers[tier] = tier in patch ? patch[tier]! : null;
-          }
-        }
-        if (Object.keys(changedTiers).length === 0) continue;
-        await setFixedPrices({
+      for (const write of pricingWrites) {
+        await replacePricing({
           shop_id: shopId,
-          service_id: serviceId as Id<"services">,
-          prices: changedTiers,
+          service_id: write.serviceId as Id<"services">,
+          mode: write.mode,
+          prices: write.prices,
         });
       }
-      setPricesBaseline(pricesByService);
+      const savedPricing = { ...pricingByService };
+      for (const write of pricingWrites) {
+        savedPricing[write.serviceId] = clearInactivePricingDraft(
+          pricingByService[write.serviceId] ?? emptyServicePricingDraft(),
+        );
+      }
+      setPricingByService(savedPricing);
+      setPricingBaseline(savedPricing);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [updateServices, selected, shopId, pricesByService, pricesBaseline, setFixedPrices]);
+  }, [updateServices, selected, shopId, pricingByService, pricingBaseline, replacePricing]);
 
   const reset = useCallback(() => {
     if (initialSelected) setSelected(new Set(initialSelected));
-    setPricesByService(pricesBaseline);
-  }, [initialSelected, pricesBaseline]);
+    setPricingByService(pricingBaseline);
+  }, [initialSelected, pricingBaseline]);
 
   useRegisterSaveable("services", "Services", dirty, save, reset);
 
@@ -274,8 +277,9 @@ export default function ServicesEditor() {
                   <div className="divide-y divide-gray-100">
                     {cat.services.map((s) => {
                       const isSelected = selected.has(s._id);
-                      const pricesForService = pricesByService[s._id] ?? {};
-                      const pricedCount = countPricedGroups(pricesForService);
+                      const pricingForService =
+                        pricingByService[s._id] ?? emptyServicePricingDraft();
+                      const pricedCount = countPricedServiceGroups(pricingForService);
                       const isPricingOpen = pricingOpen.has(s._id) && isSelected;
                       return (
                         <div key={s._id} className="px-3 py-2.5 hover:bg-muted">
@@ -298,7 +302,10 @@ export default function ServicesEditor() {
                                   </span>
                                   {pricedCount > 0 ? (
                                     <span className="rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                                      {pricedCount} fixed
+                                      {pricedCount}{" "}
+                                      {pricingForService.mode === "range"
+                                        ? "range"
+                                        : "fixed"}
                                     </span>
                                   ) : null}
                                 </div>
@@ -312,7 +319,7 @@ export default function ServicesEditor() {
                             {isSelected ? (
                               <Tooltip
                                 className="mt-0.5 shrink-0"
-                                content="Set a fixed price for this service by vehicle group — e.g. charge more on an exotic than an everyday car. Leave a group blank to use your standard quote range."
+                                content="Choose a fixed price or price range for this service by vehicle group. Leave a group blank to use the standard estimate."
                               >
                                 <button
                                   type="button"
@@ -325,17 +332,18 @@ export default function ServicesEditor() {
                                   aria-expanded={isPricingOpen}
                                 >
                                   <Sliders className="h-3 w-3" />
-                                  Fixed prices
+                                  Pricing
                                 </button>
                               </Tooltip>
                             ) : null}
                           </div>
                           {isPricingOpen ? (
                             <div className="mt-2 rounded-md border border-border bg-gray-50/60">
-                              <FixedPriceTierStrip
-                                prices={pricesForService}
+                              <ServicePriceTierStrip
+                                serviceId={s._id}
+                                draft={pricingForService}
                                 declinedTiers={declinedTiers}
-                                onChange={(next) => setServicePrices(s._id, next)}
+                                onChange={(next) => setServicePricing(s._id, next)}
                               />
                             </div>
                           ) : null}

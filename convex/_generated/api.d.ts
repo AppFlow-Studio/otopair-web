@@ -246,6 +246,7 @@ import type * as lib_serviceSymptoms from "../lib/serviceSymptoms.js";
 import type * as lib_serviceUnits from "../lib/serviceUnits.js";
 import type * as lib_serviceWindow from "../lib/serviceWindow.js";
 import type * as lib_shopAuth from "../lib/shopAuth.js";
+import type * as lib_shopServicePricing from "../lib/shopServicePricing.js";
 import type * as lib_shopTicketConstants from "../lib/shopTicketConstants.js";
 import type * as lib_shopTicketSync from "../lib/shopTicketSync.js";
 import type * as lib_simpleTireScraper from "../lib/simpleTireScraper.js";
@@ -887,6 +888,7 @@ declare const fullApi: ApiFromModules<{
   "lib/serviceUnits": typeof lib_serviceUnits;
   "lib/serviceWindow": typeof lib_serviceWindow;
   "lib/shopAuth": typeof lib_shopAuth;
+  "lib/shopServicePricing": typeof lib_shopServicePricing;
   "lib/shopTicketConstants": typeof lib_shopTicketConstants;
   "lib/shopTicketSync": typeof lib_shopTicketSync;
   "lib/simpleTireScraper": typeof lib_simpleTireScraper;

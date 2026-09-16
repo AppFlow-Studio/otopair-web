@@ -545,11 +545,13 @@ export function BookingConfirmedCard({
   vehicle,
   onSavePreSignup,
   saved = false,
+  claimToken = null,
 }: {
   booking: Booking;
   vehicle?: Vehicle | null;
   onSavePreSignup?: (email: string) => void;
   saved?: boolean;
+  claimToken?: string | null;
 }) {
   const [email, setEmail] = useState("");
   const [vehicleImg, setVehicleImg] = useState<string | null>(vehicle?.imageUrl ?? null);
@@ -672,9 +674,19 @@ export function BookingConfirmedCard({
       {/* Pre-signup capture — save the car so signup is seamless */}
       {onSavePreSignup &&
         (saved ? (
-          <Step delay={0.65} className="mt-2.5 flex items-center justify-center gap-2 rounded-xl bg-[#10b981]/10 p-2.5 text-[12px] font-medium text-[#059669]">
-            <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
-            Vehicle saved! Download the app below to view live pricing.
+          <Step delay={0.65} className="mt-2.5 flex flex-col items-center justify-center gap-1.5 rounded-xl bg-[#10b981]/10 p-2.5 text-center">
+            <div className="flex items-center justify-center gap-1.5 text-[12px] font-medium text-[#059669]">
+              <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+              Vehicle saved to your account!
+            </div>
+            {claimToken ? (
+              <a
+                href={`/claim/${claimToken}`}
+                className="inline-flex items-center justify-center rounded-lg bg-[#10b981] px-3 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#059669]"
+              >
+                Claim in App or Web &rarr;
+              </a>
+            ) : null}
           </Step>
         ) : (
           <Step delay={0.65} className="mt-2.5">

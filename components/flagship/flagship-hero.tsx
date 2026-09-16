@@ -206,6 +206,7 @@ function HeroInner() {
           vehicle={oto.vehicle}
           onSavePreSignup={oto.savePreSignup}
           saved={oto.presignupSaved}
+          claimToken={oto.claimToken}
         />
       );
     if (oto.step === "scheduling")

@@ -372,6 +372,7 @@ export function useOtoAgent() {
   const [thinking, setThinking] = useState(false);
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
   const [presignupSaved, setPresignupSaved] = useState(false);
+  const [claimToken, setClaimToken] = useState<string | null>(null);
   const [demoFeature, setDemoFeature] = useState<DemoFeature | null>(null);
   // Outlier fallback: a generic, agent-composed info card for knowledge-base
   // topics with no dedicated demo card (validated/clamped before it lands here).
@@ -611,8 +612,14 @@ export function useOtoAgent() {
               : {}),
           }),
         });
-        if (res.ok) result = await res.json().catch(() => ({}));
-        else console.warn("[oto] launch-list signup failed:", res.status);
+        if (res.ok) {
+          result = await res.json().catch(() => ({}));
+          if (result?.claimToken) {
+            setClaimToken(result.claimToken);
+          }
+        } else {
+          console.warn("[oto] launch-list signup failed:", res.status);
+        }
       } catch (err) {
         console.warn("[oto] launch-list signup failed:", err);
       }
@@ -1662,6 +1669,7 @@ export function useOtoAgent() {
     setThinking(false);
     setVehicle(null);
     setPresignupSaved(false);
+    setClaimToken(null);
     setDemoFeature(null);
     setDynamicCard(null);
     setServiceCard(null);
@@ -1681,6 +1689,7 @@ export function useOtoAgent() {
     thinking,
     vehicle,
     presignupSaved,
+    claimToken,
     demoFeature,
     dynamicCard,
     serviceCard,

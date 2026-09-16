@@ -32,7 +32,7 @@
  */
 
 import { action, mutation, query } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 function hasEssentialOnboardingFields(

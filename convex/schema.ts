@@ -2645,6 +2645,9 @@ export default defineSchema({
     rating: v.optional(v.number()),
     review_count: v.optional(v.number()),
     is_active: v.optional(v.boolean()),
+    // "bay" | "mechanic" (absent = "mechanic"). A bay is a mechanics row with
+    // no last name — same schedule/availability machinery, different label.
+    entity_type: v.optional(v.string()),
   })
     .index("by_shop_id", ["shop_id"])
     .index("by_is_active", ["is_active"]),

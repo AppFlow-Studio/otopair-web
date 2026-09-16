@@ -39,6 +39,7 @@ import {
   User,
   UserPlus,
   Users,
+  Warehouse,
   X,
 } from "lucide-react";
 
@@ -48,6 +49,7 @@ type MechanicRow = {
   lastName: string;
   title: string;
   email: string;
+  entityType: "mechanic" | "bay";
   rating: number;
   reviewCount: number;
   photoUrl?: string | null;
@@ -93,6 +95,7 @@ type InvitationRow = {
 type MemberForm = {
   role: "shop_mechanic" | "shop_owner" | "front_desk";
   mechanicId: string | null;
+  entityType: "mechanic" | "bay";
   firstName: string;
   lastName: string;
   title: string;
@@ -125,6 +128,11 @@ const ROLE_OPTIONS = [
   { value: "shop_owner", label: "Shop Owner" },
   { value: "front_desk", label: "Front Desk" },
 ] as const;
+
+/** First + last, trim-safe for entries with no last name (bays, or a mechanic saved without one). */
+function formatMechanicName(firstName: string, lastName: string): string {
+  return [firstName, lastName].filter((part) => part.trim()).join(" ");
+}
 
 function getRoleLabel(role?: string | null): string {
   if (role === "owner" || role === "shop_owner") return "Shop Owner";
@@ -167,15 +175,17 @@ function getPortalStatusMeta(status: MechanicRow["portalStatus"]) {
 function PersonAvatar({
   imageUrl,
   name,
+  isBay = false,
 }: {
   imageUrl?: string | null;
   name: string;
+  isBay?: boolean;
 }) {
   return (
     <Avatar className="h-11 w-11 shrink-0 border border-border bg-card">
       {imageUrl ? <AvatarImage src={imageUrl} alt={name} className="object-cover" /> : null}
       <AvatarFallback className="bg-muted text-muted-foreground">
-        <User className="h-5 w-5" />
+        {isBay ? <Warehouse className="h-5 w-5" /> : <User className="h-5 w-5" />}
       </AvatarFallback>
     </Avatar>
   );
@@ -207,8 +217,10 @@ function getFormSubmitLabel(
   }
 
   if (form.role === "shop_mechanic") {
-    if (form.mechanicId) return willInviteEditedMechanic ? "Save and invite mechanic" : "Save mechanic";
-    return form.email.trim() ? "Save and invite mechanic" : "Save mechanic";
+    const entityLabel = form.entityType === "bay" ? "bay" : "mechanic";
+    if (form.mechanicId)
+      return willInviteEditedMechanic ? `Save and invite ${entityLabel}` : `Save ${entityLabel}`;
+    return form.email.trim() ? `Save and invite ${entityLabel}` : `Save ${entityLabel}`;
   }
 
   return `Invite ${getRoleLabel(form.role).toLowerCase()}`;
@@ -251,6 +263,7 @@ export default function TeamPage() {
   const [memberForm, setMemberForm] = useState<MemberForm>({
     role: "shop_mechanic",
     mechanicId: null,
+    entityType: "mechanic",
     firstName: "",
     lastName: "",
     title: "",
@@ -302,6 +315,7 @@ export default function TeamPage() {
     lastName: string;
     title?: string;
     email?: string;
+    entityType?: "mechanic" | "bay";
   }) => Promise<Id<"mechanics">>;
   const updateMechanic = useMutation(updateManagedMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
@@ -309,6 +323,7 @@ export default function TeamPage() {
     lastName: string;
     title?: string;
     email?: string;
+    entityType?: "mechanic" | "bay";
   }) => Promise<Id<"mechanics">>;
   const updateMechanicPhoto = useMutation(updateManagedMechanicPhotoMutation) as (args: {
     mechanicId: Id<"mechanics">;
@@ -378,6 +393,7 @@ export default function TeamPage() {
     setMemberForm((prev) => ({
       role,
       mechanicId: role === "shop_mechanic" ? prev.mechanicId : null,
+      entityType: prev.entityType,
       firstName: prev.firstName,
       lastName: prev.lastName,
       title: prev.title,
@@ -385,10 +401,24 @@ export default function TeamPage() {
     }));
   }
 
+  function handleEntityTypeChange(entityType: MemberForm["entityType"]) {
+    clearFormMessages();
+    setMemberForm({
+      role: "shop_mechanic",
+      mechanicId: null,
+      entityType,
+      firstName: "",
+      lastName: "",
+      title: "",
+      email: "",
+    });
+  }
+
   function resetForm(role: MemberForm["role"] = "shop_mechanic") {
     setMemberForm({
       role,
       mechanicId: null,
+      entityType: "mechanic",
       firstName: "",
       lastName: "",
       title: "",
@@ -411,6 +441,7 @@ export default function TeamPage() {
     setMemberForm({
       role: "shop_mechanic",
       mechanicId: mechanic._id,
+      entityType: mechanic.entityType,
       firstName: mechanic.firstName,
       lastName: mechanic.lastName,
       title: mechanic.title,
@@ -427,8 +458,11 @@ export default function TeamPage() {
 
     try {
       if (memberForm.role === "shop_mechanic") {
-        if (!memberForm.firstName.trim() || !memberForm.lastName.trim()) {
-          setFormError("Enter both a first and last name for the mechanic.");
+        const isBay = memberForm.entityType === "bay";
+        const entityLabel = isBay ? "Bay" : "Mechanic";
+
+        if (!memberForm.firstName.trim()) {
+          setFormError(isBay ? "Enter a bay name." : "Enter a first name for the mechanic.");
           return;
         }
 
@@ -441,6 +475,7 @@ export default function TeamPage() {
             lastName: memberForm.lastName.trim(),
             title: memberForm.title.trim() || undefined,
             email: memberForm.email.trim() || undefined,
+            entityType: memberForm.entityType,
           });
 
           if (memberForm.email.trim() && mechanicToInvite?.portalStatus !== "active") {
@@ -461,13 +496,13 @@ export default function TeamPage() {
             });
 
             if (!result.ok) {
-              setFormError(`Mechanic profile updated, but the invitation failed: ${result.error}`);
+              setFormError(`${entityLabel} profile updated, but the invitation failed: ${result.error}`);
               return;
             }
 
-            setFormSuccess("Mechanic profile updated and invited.");
+            setFormSuccess(`${entityLabel} profile updated and invited.`);
           } else {
-            setFormSuccess("Mechanic profile updated.");
+            setFormSuccess(`${entityLabel} profile updated.`);
           }
 
           resetForm();
@@ -480,6 +515,7 @@ export default function TeamPage() {
           lastName: memberForm.lastName.trim(),
           title: memberForm.title.trim() || undefined,
           email: memberForm.email.trim() || undefined,
+          entityType: memberForm.entityType,
         });
 
         if (memberForm.email.trim()) {
@@ -491,12 +527,12 @@ export default function TeamPage() {
             origin: window.location.origin,
           });
           if (!result.ok) {
-            setFormError(`Mechanic profile saved, but the invitation failed: ${result.error}`);
+            setFormError(`${entityLabel} saved, but the invitation failed: ${result.error}`);
             return;
           }
-          setFormSuccess("Mechanic saved and invited.");
+          setFormSuccess(`${entityLabel} saved and invited.`);
         } else {
-          setFormSuccess("Mechanic profile saved.");
+          setFormSuccess(`${entityLabel} profile saved.`);
         }
 
         resetForm();
@@ -582,9 +618,8 @@ export default function TeamPage() {
       await acceptOnBehalf({
         invitationId: mechanic.pendingInvitationId as Id<"shop_invitations">,
       });
-      setDirectorySuccess(
-        `Accepted on behalf of ${mechanic.firstName} ${mechanic.lastName}. They now appear on the schedule.`
-      );
+      const name = formatMechanicName(mechanic.firstName, mechanic.lastName);
+      setDirectorySuccess(`Accepted on behalf of ${name}. They now appear on the schedule.`);
     } catch (error) {
       setDirectoryError(
         error instanceof Error ? error.message : "Failed to accept invitation."
@@ -757,7 +792,7 @@ export default function TeamPage() {
       <div>
         <h1 className="mb-2 text-2xl font-bold text-foreground">Team</h1>
         <p className="text-muted-foreground">
-          Manage mechanic profiles, portal access, and shop staff from one place.
+          Manage mechanic profiles, bays, portal access, and shop staff from one place.
         </p>
       </div>
 
@@ -765,93 +800,173 @@ export default function TeamPage() {
         <div className="mb-5 flex items-center gap-2">
           <UserPlus className="h-5 w-5 text-primary" />
           <h2 className="text-base font-semibold text-foreground">
-            {memberForm.mechanicId ? "Edit Mechanic Profile" : "Add or Invite Team Member"}
+            {memberForm.mechanicId
+              ? memberForm.entityType === "bay"
+                ? "Edit Bay"
+                : "Edit Mechanic Profile"
+              : "Add to Your Team"}
           </h2>
         </div>
 
+        {!memberForm.mechanicId && (
+          <div
+            role="tablist"
+            aria-label="What are you adding?"
+            className="mb-5 inline-flex w-full max-w-sm gap-1 rounded-xl bg-muted p-1 sm:w-auto"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={memberForm.entityType === "mechanic"}
+              onClick={() => handleEntityTypeChange("mechanic")}
+              className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                memberForm.entityType === "mechanic"
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <UserPlus className="h-4 w-4" />
+              Add Mechanic
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={memberForm.entityType === "bay"}
+              onClick={() => handleEntityTypeChange("bay")}
+              className={`flex flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                memberForm.entityType === "bay"
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Warehouse className="h-4 w-4" />
+              Add Bay
+            </button>
+          </div>
+        )}
+
         <form onSubmit={handleFormSubmit} className="space-y-4">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className={labelClass}>Role</label>
-              <RoleSelect
-                selectedRole={memberForm.role}
-                onSelectionChange={(role) =>
-                  handleFormRoleChange(role as MemberForm["role"])
-                }
-                disabled={memberForm.mechanicId !== null}
-                triggerClassName={inputClass}
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Title</label>
-              <input
-                value={memberForm.title}
-                onChange={(event) =>
-                  setMemberForm((prev) => ({ ...prev, title: event.target.value }))
-                }
-                className={inputClass}
-                placeholder={
-                  memberForm.role === "shop_mechanic"
-                    ? "Master Mechanic"
-                    : memberForm.role === "front_desk"
-                    ? "Service Advisor"
-                    : "Partner"
-                }
-              />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div>
-              <label className={labelClass}>First Name</label>
-              <input
-                value={memberForm.firstName}
-                onChange={(event) =>
-                  setMemberForm((prev) => ({ ...prev, firstName: event.target.value }))
-                }
-                className={inputClass}
-                placeholder="Jane"
-              />
-            </div>
-            <div>
-              <label className={labelClass}>Last Name</label>
-              <input
-                value={memberForm.lastName}
-                onChange={(event) =>
-                  setMemberForm((prev) => ({ ...prev, lastName: event.target.value }))
-                }
-                className={inputClass}
-                placeholder="Smith"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className={labelClass}>Email</label>
-            <input
-              ref={memberEmailInputRef}
-              type="email"
-              value={memberForm.email}
-              onChange={(event) =>
-                setMemberForm((prev) => ({ ...prev, email: event.target.value }))
-              }
-              className={inputClass}
-              placeholder="name@example.com"
-            />
-            <div className="mt-2 min-h-5">
-              {memberForm.role === "shop_mechanic" && (
-                <p className="text-xs text-muted-foreground">
-                  Email is optional. Leave it blank to save the mechanic profile without portal access.
+          {memberForm.entityType === "bay" ? (
+            <>
+              <div>
+                <label className={labelClass}>Bay Name</label>
+                <input
+                  value={memberForm.firstName}
+                  onChange={(event) =>
+                    setMemberForm((prev) => ({ ...prev, firstName: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="Bay 1"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Name it however your shop refers to it — Bay 1, Outside Bay, Heavy Lifting Bay.
                 </p>
-              )}
-            </div>
-            {memberForm.mechanicId && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Mechanic profile edits stay under the mechanic role. Use the member actions below if
-                you need to change portal access after the profile is linked.
-              </p>
-            )}
-          </div>
+              </div>
+
+              <div>
+                <label className={labelClass}>Email</label>
+                <input
+                  ref={memberEmailInputRef}
+                  type="email"
+                  value={memberForm.email}
+                  onChange={(event) =>
+                    setMemberForm((prev) => ({ ...prev, email: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="name@example.com"
+                />
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Email is optional. Leave it blank to save the bay without portal access — staff can
+                  sign in with the shop login to manage it instead.
+                </p>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass}>Role</label>
+                  <RoleSelect
+                    selectedRole={memberForm.role}
+                    onSelectionChange={(role) =>
+                      handleFormRoleChange(role as MemberForm["role"])
+                    }
+                    disabled={memberForm.mechanicId !== null}
+                    triggerClassName={inputClass}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Title</label>
+                  <input
+                    value={memberForm.title}
+                    onChange={(event) =>
+                      setMemberForm((prev) => ({ ...prev, title: event.target.value }))
+                    }
+                    className={inputClass}
+                    placeholder={
+                      memberForm.role === "shop_mechanic"
+                        ? "Master Mechanic"
+                        : memberForm.role === "front_desk"
+                        ? "Service Advisor"
+                        : "Partner"
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label className={labelClass}>First Name</label>
+                  <input
+                    value={memberForm.firstName}
+                    onChange={(event) =>
+                      setMemberForm((prev) => ({ ...prev, firstName: event.target.value }))
+                    }
+                    className={inputClass}
+                    placeholder="Jane"
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Last Name (optional)</label>
+                  <input
+                    value={memberForm.lastName}
+                    onChange={(event) =>
+                      setMemberForm((prev) => ({ ...prev, lastName: event.target.value }))
+                    }
+                    className={inputClass}
+                    placeholder="Smith"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelClass}>Email</label>
+                <input
+                  ref={memberEmailInputRef}
+                  type="email"
+                  value={memberForm.email}
+                  onChange={(event) =>
+                    setMemberForm((prev) => ({ ...prev, email: event.target.value }))
+                  }
+                  className={inputClass}
+                  placeholder="name@example.com"
+                />
+                <div className="mt-2 min-h-5">
+                  {memberForm.role === "shop_mechanic" && (
+                    <p className="text-xs text-muted-foreground">
+                      Email is optional. Leave it blank to save the mechanic profile without portal access.
+                    </p>
+                  )}
+                </div>
+                {memberForm.mechanicId && (
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    Mechanic profile edits stay under the mechanic role. Use the member actions below if
+                    you need to change portal access after the profile is linked.
+                  </p>
+                )}
+              </div>
+            </>
+          )}
 
           {formError && (
             <div className="rounded-lg border border-destructive/15 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -924,9 +1039,11 @@ export default function TeamPage() {
         ) : (
           <div className="space-y-2">
             {mechanics.map((mechanic) => {
+              const isBay = mechanic.entityType === "bay";
+              const fullName = formatMechanicName(mechanic.firstName, mechanic.lastName);
               const linkedMember = membersByMechanicId.get(mechanic._id) ?? null;
               const linkedRole = linkedMember?.role || "shop_mechanic";
-              const linkedName = linkedMember ? getRowName(linkedMember) : `${mechanic.firstName} ${mechanic.lastName}`;
+              const linkedName = linkedMember ? getRowName(linkedMember) : fullName;
               const linkedEmail = linkedMember?.user.email || mechanic.email || "No email";
               const isCurrentUser = linkedMember?.user.clerkUserId === clerkUser?.id;
               const roleChange = changingRoleFor;
@@ -946,32 +1063,29 @@ export default function TeamPage() {
                   key={mechanic._id}
                   className="flex items-start gap-3 rounded-xl border border-border bg-muted/40 p-4"
                 >
-                  <PersonAvatar
-                    imageUrl={avatarUrl}
-                    name={`${mechanic.firstName} ${mechanic.lastName}`}
-                  />
+                  <PersonAvatar imageUrl={avatarUrl} name={fullName} isBay={isBay} />
 
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <p className={directoryNameClass}>
-                        {mechanic.firstName} {mechanic.lastName}
-                      </p>
+                      <p className={directoryNameClass}>{fullName}</p>
                       {mechanic.portalStatus === "not_invited" && (
                         <span className={`${badgeClass} ${status.className}`}>{status.label}</span>
                       )}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-2">
                       <span className="text-xs font-medium text-muted-foreground">
-                        {getRoleLabel(linkedRole)}
+                        {isBay ? "Bay" : getRoleLabel(linkedRole)}
                       </span>
                     </div>
                     <p className="mt-1 truncate text-sm text-muted-foreground">{subtitle}</p>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {mechanic.reviewCount > 0
-                        ? `${mechanic.rating.toFixed(1)} rating - ${mechanic.reviewCount} reviews`
-                        : "No reviews yet"}
-                    </p>
-                    {linkedMember && linkedName !== `${mechanic.firstName} ${mechanic.lastName}` && (
+                    {!isBay && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        {mechanic.reviewCount > 0
+                          ? `${mechanic.rating.toFixed(1)} rating - ${mechanic.reviewCount} reviews`
+                          : "No reviews yet"}
+                      </p>
+                    )}
+                    {linkedMember && linkedName !== fullName && (
                       <p className="mt-1 text-xs text-muted-foreground">
                         Portal member: {linkedName}
                       </p>
@@ -1100,7 +1214,7 @@ export default function TeamPage() {
                             onSelect={() => requestRemoveMechanic(mechanic)}
                           >
                             <Trash2 className="mr-2 h-4 w-4" />
-                            Remove mechanic
+                            {isBay ? "Remove bay" : "Remove mechanic"}
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
@@ -1259,13 +1373,13 @@ export default function TeamPage() {
 
       <RemoveConfirmationDialog
         open={removeMechanicConfirm !== null}
-        title="Remove mechanic?"
+        title={removeMechanicConfirm?.entityType === "bay" ? "Remove bay?" : "Remove mechanic?"}
         subjectName={
           removeMechanicConfirm
-            ? `${removeMechanicConfirm.firstName} ${removeMechanicConfirm.lastName}`
+            ? formatMechanicName(removeMechanicConfirm.firstName, removeMechanicConfirm.lastName)
             : undefined
         }
-        confirmLabel="Remove mechanic"
+        confirmLabel={removeMechanicConfirm?.entityType === "bay" ? "Remove bay" : "Remove mechanic"}
         isSubmitting={mechanicActionId === removeMechanicConfirm?._id}
         submittingLabel="Removing..."
         onClose={() => setRemoveMechanicConfirm(null)}
@@ -1277,10 +1391,10 @@ export default function TeamPage() {
 
       <ConfirmationDialog
         open={blockedMechanic !== null}
-        title="Mechanic has active work"
+        title={blockedMechanic?.entityType === "bay" ? "Bay has active work" : "Mechanic has active work"}
         description={
           blockedMechanic
-            ? `${blockedMechanic.firstName} ${blockedMechanic.lastName} has ${blockedMechanic.blockingBookingCount} active booking or job. Complete or reassign the work before removing this mechanic.`
+            ? `${formatMechanicName(blockedMechanic.firstName, blockedMechanic.lastName)} has ${blockedMechanic.blockingBookingCount} active booking or job. Complete or reassign the work before removing this ${blockedMechanic.entityType === "bay" ? "bay" : "mechanic"}.`
             : undefined
         }
         onClose={() => setBlockedMechanic(null)}

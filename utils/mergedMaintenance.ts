@@ -20,7 +20,9 @@ import type { MaintenanceItem } from "@/components/cars/MaintenanceTracker";
 import {
   ALL_MAINTENANCE_TYPES,
   MAINTENANCE_LABELS,
+  type IntervalClassContext,
   type MaintenanceType,
+  type OemServiceIntervalsInput,
 } from "@/utils/maintenanceStatus";
 import { enrichUrgentItem } from "@/utils/maintenanceEnrichment";
 import { buildWarningLightItem } from "@/lib/warningLightItems";
@@ -131,6 +133,15 @@ export interface BuildMergedMaintenanceInput {
   scopeId?: string;
   /** Injectable clock for the confirmed-healthy TTL; defaults to Date.now(). */
   now?: number;
+  /**
+   * Compatibility-only inputs accepted from Oto's newer mobile caller.
+   * This older web merge intentionally does not use them; syncing the mobile
+   * catalog-coverage behavior is a separate, explicitly reviewed change.
+   */
+  currentOdometer?: number | null;
+  oemIntervals?: OemServiceIntervalsInput;
+  classCtx?: IntervalClassContext;
+  serviceSlugById?: (serviceId: string) => string | undefined;
 }
 
 /**

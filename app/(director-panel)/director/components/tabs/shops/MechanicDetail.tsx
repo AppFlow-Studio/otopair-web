@@ -10,6 +10,7 @@ import { money, fmtNumber } from '../../Charts'
 import { BookingDetailModal } from '../../BookingDetailModal'
 import { Stars } from './shopsUi'
 import type { MechanicDetail as MechanicDetailShape } from './types'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const fmtDate = (ms: number) => new Date(ms).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
@@ -148,7 +149,7 @@ export const MechanicDetail = ({ mechanicId, onBack, onOpenShop }:
                     {(r.vehicle.ymm || r.service_names.length > 0) && (
                       <div style={{ marginTop:2, display:'flex', flexWrap:'wrap', alignItems:'center', gap:6, fontSize:12, color:'var(--slate-500)' }}>
                         {r.vehicle.ymm && <span>{r.vehicle.ymm}</span>}
-                        {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.join(', ')}</span>}
+                        {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.map(formatServiceDisplayName).join(', ')}</span>}
                         <BookingChip id={r.booking_id} onOpen={() => setDrillBooking(r.booking_id as Id<'bookings'>)} />
                       </div>
                     )}

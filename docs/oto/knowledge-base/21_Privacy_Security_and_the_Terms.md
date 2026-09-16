@@ -17,7 +17,7 @@ The short, visitor-facing facts from Otopair's privacy policy, security page and
 ## What you tell Oto
 
 - Conversations with Oto — the questions asked, what the person shares and Oto's replies — are kept for up to 24 months. Voice is transcribed by a speech provider. Otopair reviews conversations for quality and safety, to keep Oto accurate
-- On the website, Oto only ever asks for an email and, optionally, a VIN. An email left with Oto goes on the launch list and is saved for sign-up, and a decoded VIN is waiting when that person signs up in the app with the same email
+- On the website, Oto only ever asks for an email and, optionally, a VIN. An email left with Oto creates an onboarding reservation, and a decoded VIN is attached when that person signs up in the app with the same email
 
 ## Security
 
@@ -46,10 +46,10 @@ The short, visitor-facing facts from Otopair's privacy policy, security page and
 "Yes — from account settings in the app, or by emailing support@otopair.com. Deletion is handled as a request, so allow a little time, and some booking and payment records are kept because tax and payment rules require it."
 
 **"Who sees my information?"**
-"The shop you book sees your name, number, car and the issue you described — never your card. The privacy page lists everything else."
+"The shop you book sees your name, number, car and the issue you described — never your card. For full details, see our [Privacy Policy](/privacy)."
 
 **"Are you saving what I tell you?"**
-"I'll only ask for your email if you want to join the launch list, and a VIN is optional. In the app, Oto conversations are kept with your account and can be reviewed to keep Oto accurate. The privacy page explains how Otopair handles your information."
+"On the website, I'll only ask for your email if you want to complete your onboarding reservation, and a VIN is optional. In the app, Oto conversations are kept with your account to keep Oto accurate. Check our [Privacy Policy](/privacy) to see how we protect your information."
 
 **"How old do I have to be?"**
 "18 or over to book and pay. Anyone can ask Oto a car question."

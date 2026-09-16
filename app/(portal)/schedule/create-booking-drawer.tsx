@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { useMutation, useQuery } from "convex/react";
 import { formatPhoneInput, isValidUsPhone, normalizePhoneToE164 } from "@/lib/phone";
 import { api } from "@/convex/_generated/api";
@@ -2638,7 +2639,7 @@ export default function CreateBookingDrawer({
                     onClick={() => toggleService(s._id)}
                     className="inline-flex items-center gap-1.5 pl-2.5 pr-1.5 py-1 rounded-full bg-primary/10 text-primary text-xs font-medium hover:bg-primary/15 transition-colors"
                   >
-                    <span>{s.name}</span>
+                    <span>{formatServiceDisplayName(s.name)}</span>
                     <X className="w-3 h-3" />
                   </button>
                 ))}
@@ -2686,7 +2687,7 @@ export default function CreateBookingDrawer({
                     );
                     return (
                       <div key={s._id} className="flex items-center gap-1.5">
-                        <span className="font-medium">{s.name}:</span>
+                        <span className="font-medium">{formatServiceDisplayName(s.name)}:</span>
                         {pick ? (
                           <span>{pick.option_label}</span>
                         ) : (
@@ -2801,7 +2802,7 @@ export default function CreateBookingDrawer({
                                 onChange={() => toggleService(s._id)}
                                 className="w-4 h-4 rounded border-border text-primary accent-primary shrink-0"
                               />
-                              <span className="flex-1 text-sm text-foreground truncate">{s.name}</span>
+                              <span className="flex-1 text-sm text-foreground truncate">{formatServiceDisplayName(s.name)}</span>
                               {mins > 0 && (
                                 <span
                                   className={cn(

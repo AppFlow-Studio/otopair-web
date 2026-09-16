@@ -48,7 +48,7 @@ The total you approve when you book is a ceiling. If the shop finds more, it sen
 ## How to answer common questions
 
 **"How do I book?"**
-"In the app: tell Oto what the car's doing, see each verified shop's total for your exact car, pick a shop and a time, and book with a $20 hold. The shop inspects the car and confirms the price, and you're charged when the job's done. The app's launching soon, so join the launch list to hear first."
+"In the app: tell Oto what the car's doing, see each verified shop's locked total for your exact car, pick a shop and a time, and book with a $20 hold. The shop inspects the car and confirms the price, and you're charged when the job's done. Download the Otopair app on iPhone or Android or sign up here to get started."
 
 **"Is my appointment confirmed right away?"**
 "Your booking goes to the shop to accept, with the $20 hold on your card. If the shop doesn't accept in time, the request expires, the hold is released and nothing is charged."

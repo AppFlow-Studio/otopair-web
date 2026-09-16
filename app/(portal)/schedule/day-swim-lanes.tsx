@@ -8,6 +8,7 @@ import {
   getPendingApprovalLabel,
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 interface Mechanic {
   _id: string;
@@ -449,7 +450,7 @@ export default function DaySwimLanes({
         whiteSpace: "nowrap",
         opacity: "0.8",
       });
-      svcP.textContent = ev.serviceNames?.join(", ") ?? "";
+      svcP.textContent = ev.serviceNames?.map(formatServiceDisplayName).join(", ") ?? "";
       floating.appendChild(svcP);
 
       if (isPendingCustomer) {
@@ -1147,7 +1148,7 @@ export default function DaySwimLanes({
                           </span>
                         </div>
                         <p className="truncate opacity-80">
-                          {ev.serviceNames?.join(", ")}
+                          {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
                         </p>
                       </div>
                     );
@@ -1232,7 +1233,7 @@ export default function DaySwimLanes({
                             </span>
                           </div>
                           <p className="truncate opacity-80">
-                            {ev.serviceNames?.join(", ")}
+                            {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
                           </p>
                         </>
                       ) : (
@@ -1253,7 +1254,7 @@ export default function DaySwimLanes({
                             </span>
                           </div>
                           <p className="truncate opacity-80">
-                            {ev.serviceNames?.join(", ")}
+                            {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
                           </p>
                           {(ev.vehicleDisplay || ev.licensePlate) && (
                             <p className="mt-0.5 flex items-center gap-1 truncate opacity-75 text-[10px]">

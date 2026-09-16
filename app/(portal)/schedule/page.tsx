@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -1266,7 +1267,7 @@ export default function SchedulePage() {
         return {
           id: b._id,
           invoiceNumber: (b as any).invoiceNumber ?? null,
-          title: `${b.customerName} — ${b.serviceNames.join(", ")}`,
+          title: `${b.customerName} — ${b.serviceNames.map(formatServiceDisplayName).join(", ")}`,
           start,
           end,
           resourceId: b.mechanicId ?? undefined,
@@ -1593,7 +1594,7 @@ export default function SchedulePage() {
         }}
       >
         <p className="font-medium truncate">{customerDisplay}</p>
-        <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
+        <p className="truncate opacity-80">{event.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
         {isPendingCustomer && (
           <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
         )}

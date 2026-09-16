@@ -21,6 +21,7 @@ import type {
   ShopComplianceResult,
 } from './types'
 import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } from '@/lib/license-catalog'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
 
@@ -444,8 +445,8 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                           {servicesResult.services.filter(s => s.category === cat).map(s => (
                             <tr key={s.id} style={{ borderBottom:'1px solid var(--slate-50)', verticalAlign:'top' }}>
                               <td style={{ padding:'8px 12px 8px 0' }}>
-                                <div style={{ fontWeight:500, color:'var(--slate-800)' }}>{s.name}</div>
-                                {s.description && <div style={{ marginTop:2, maxWidth:420, fontSize:12, color:'var(--slate-400)' }}>{s.description}</div>}
+                                <div style={{ fontWeight:500, color:'var(--slate-800)' }}>{formatServiceDisplayName(s.name)}</div>
+                                {s.description && <div style={{ marginTop:2, maxWidth:420, fontSize:12, color:'var(--slate-400)' }}>{formatServiceDisplayName(s.description)}</div>}
                                 <div style={{ marginTop:4, display:'flex', flexWrap:'wrap', gap:4 }}>
                                   {s.isLaborOnly && <Badge tone="slate">labor-only</Badge>}
                                   {s.requiresParts && <Badge tone="blue">needs parts</Badge>}
@@ -687,7 +688,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                           <td style={{ ...tableStyles.td, color:'var(--slate-800)' }}><a onClick={() => gotoEntity('users', b.user_id)} style={{ cursor:'pointer' }}>{b.user}</a></td>
                           <td style={{ ...tableStyles.td, fontSize:12, color:'var(--slate-600)' }}>{b.vehicle ?? '—'}</td>
                           <td style={{ ...tableStyles.td, color:'var(--slate-600)' }}>
-                            <div>{b.services.join(', ') || '—'}</div>
+                            <div>{b.services.map(formatServiceDisplayName).join(', ') || '—'}</div>
                             {b.customerNotes && <div title={b.customerNotes} style={{ marginTop:2, maxWidth:256, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', fontSize:11, fontStyle:'italic', color:'var(--slate-400)' }}>“{b.customerNotes}”</div>}
                             {b.recommendationState && b.recommendationState !== 'none' && <Badge tone="purple" style={{ marginTop:2 }}>upsell: {b.recommendationState}</Badge>}
                           </td>
@@ -789,7 +790,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                         {(r.vehicle.ymm || r.service_names.length > 0) && (
                           <div style={{ marginTop:2, display:'flex', flexWrap:'wrap', alignItems:'center', gap:6, fontSize:11, color:'var(--slate-500)' }}>
                             {r.vehicle.ymm && <span>{r.vehicle.ymm}</span>}
-                            {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.join(', ')}</span>}
+                            {r.service_names.length > 0 && <span style={{ color:'var(--slate-400)' }}>· {r.service_names.map(formatServiceDisplayName).join(', ')}</span>}
                             <span onClick={() => setDrillBooking(r.booking_id as Id<'bookings'>)} style={{ color:'var(--blue-600)', cursor:'pointer' }}>booking →</span>
                           </div>
                         )}
@@ -818,7 +819,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
                     : <div style={{ marginTop:12, display:'flex', flexDirection:'column', gap:4 }}>
                       {insights.fixedPrices.map((f, i) => (
                         <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', fontSize:12 }}>
-                          <span style={{ color:'var(--slate-700)' }}>{f.service} <span style={{ color:'var(--slate-400)' }}>· {f.tier}</span></span>
+                          <span style={{ color:'var(--slate-700)' }}>{formatServiceDisplayName(f.service)} <span style={{ color:'var(--slate-400)' }}>· {f.tier}</span></span>
                           <span style={{ fontWeight:600, color:'var(--slate-800)' }}>{money(f.price, { cents: true })}</span>
                         </div>
                       ))}

@@ -3,6 +3,7 @@
 import { StatusPill } from "@/components/status-pill";
 import { CalendarDays, User as UserIcon, Car, Wrench } from "lucide-react";
 import { formatAbsoluteDate, formatCurrencyCents } from "./shared";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export interface JobHistoryItem {
   bookingId: string;
@@ -59,7 +60,7 @@ export function JobHistoryList({
                 <Wrench className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
                 <span className="leading-snug">
                   {job.serviceNames.length > 0
-                    ? job.serviceNames.join(", ")
+                    ? job.serviceNames.map(formatServiceDisplayName).join(", ")
                     : "No services listed"}
                 </span>
               </div>

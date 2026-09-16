@@ -15,6 +15,7 @@ import { Badge, Card, tableStyles } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity } from '../directorNav'
 import { money } from '../Charts'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const fmtDate = (ms: number) =>
   new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
@@ -143,7 +144,7 @@ export const TabSettlement = () => {
                       <span style={{ color: 'var(--slate-800)' }}>{r.vehicleYmm ?? '—'}</span>
                       {r.services.length > 0 && (
                         <span style={{ display: 'block', fontSize: 11, color: 'var(--slate-400)' }}>
-                          {r.services.join(' · ')}
+                          {r.services.map(formatServiceDisplayName).join(' · ')}
                         </span>
                       )}
                     </td>

@@ -22,6 +22,7 @@ import type {
   CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   GreetingHeader,
   MetricRow,
@@ -423,7 +424,7 @@ export default function MechanicDashboard() {
         kind: "active",
         dot: "success",
         primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.join(", ") || undefined,
+        secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
         meta: "in progress",
         action: {
           label: isDiag ? "Diagnostic" : "Complete",
@@ -445,7 +446,7 @@ export default function MechanicDashboard() {
         kind: "ready",
         dot: "primary",
         primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.join(", ") || undefined,
+        secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
         meta: `${formatTime(job.scheduledTime)}${enroute ? " · en route" : ""}`,
         action: passportIncomplete
           ? {
@@ -474,7 +475,7 @@ export default function MechanicDashboard() {
         dot: "warning",
         primary: `${job.customerName} · ${job.vehicle}`,
         secondary:
-          `${job.serviceNames.join(", ")}${
+          `${job.serviceNames.map(formatServiceDisplayName).join(", ")}${
             job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""
           }` || undefined,
         meta: job.followupState === "awaiting_info" ? "awaiting info" : "pending",
@@ -658,7 +659,7 @@ export default function MechanicDashboard() {
                   dot={statusDot(job.status)}
                   code={formatTime(job.scheduledTime)}
                   primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                  secondary={job.serviceNames.join(", ") || undefined}
+                  secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                   meta={statusText(job.status)}
                   onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                 />
@@ -686,7 +687,7 @@ export default function MechanicDashboard() {
                         dot="muted"
                         code={formatTime(job.scheduledTime)}
                         primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                        secondary={job.serviceNames.join(", ") || undefined}
+                        secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                         onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                       />
                     );
@@ -725,12 +726,12 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
         }
-        bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
+        bookingServices={selectedWorkflowBooking?.serviceNames?.map(formatServiceDisplayName) ?? []}
         phase={workflowInspectionPhase}
         tireReplacementPositions={
           selectedWorkflowBooking?.tireSpecs?.positions ?? []
@@ -763,7 +764,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -802,7 +803,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -862,7 +863,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""

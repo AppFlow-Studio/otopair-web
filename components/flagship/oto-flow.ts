@@ -88,6 +88,7 @@ export interface Vehicle {
   displacementL?: number;
   cylinders?: number;
   fuelType?: string;
+  imageUrl?: string;
   // Set when a matching vehicle_config already exists (richer specs on file).
   configLinked?: boolean;
   drivetrain?: string;
@@ -237,7 +238,11 @@ export type DemoFeature =
   | "checkin"
   | "bookings"
   | "notifications"
-  | "trust";
+  | "trust"
+  | "warranty"
+  | "privacy"
+  | "terms"
+  | "cancellation";
 
 export const DEMO_FEATURES: DemoFeature[] = [
   "service_catalog",
@@ -254,6 +259,10 @@ export const DEMO_FEATURES: DemoFeature[] = [
   "bookings",
   "notifications",
   "trust",
+  "warranty",
+  "privacy",
+  "terms",
+  "cancellation",
 ];
 
 // Service catalog — the four categories locked Jul 13 (7→4 consolidation;
@@ -281,7 +290,7 @@ export const SERVICE_CATALOG: { category: string; services: string[] }[] = [
     category: "Scheduled Service",
     services: [
       "Spark Plugs",
-      "Timing Belt",
+      "Drive Belt",
       "Coolant Flush",
       "Transmission Service",
       "Power Steering Flush",
@@ -379,7 +388,7 @@ export const OVERVIEW_DEMO = {
     "Independent shops only, each reviewed and approved before going live",
     "Each shop's full total for your car before you book — it can't go up without your yes",
     "Reviews only from drivers who completed a booking",
-    "Live in Staten Island · app coming soon to iPhone & Android",
+    "Live in Staten Island · app live on iPhone & Android",
   ],
 };
 
@@ -485,15 +494,14 @@ export const DEMO_USER_OPENER =
 
 // One Oto line per step we transition INTO (partial — some steps push their
 // own bespoke message, e.g. the VIN decode). These run whenever the live agent
-// can't be reached, so they follow the same rules the agent does: the
-// walkthrough is a sample, nothing is booked, no "certified" mechanics, no
-// "instant booking", and no diagnosis.
+// can't be reached, so they follow the same rules the agent does:
+// verified shops, locked pricing before booking, and direct onboarding into the live app.
 export const OTO_LINES: Partial<Record<Exclude<OtoStep, "intro">, string>> = {
   scheduling:
-    "Here's a sample of how scheduling looks in the Otopair app — the price is locked before you book.",
+    "Here's how scheduling works in the Otopair app — your price is locked before you book.",
   shops:
-    "Here's how picking a shop looks in the app: each verified shop shows its own total for your car. These are sample shops — the real ones are listed at otopair.com/shops.",
-  datetime: "Next you'd pick an open time at that shop. These are sample times.",
+    "Here's how picking a shop looks in the app: each verified shop shows its own complete total for your car.",
+  datetime: "Next, you pick an open time slot that works best for your schedule.",
   confirmed:
-    "That's the whole flow, as a sample — nothing was booked. In the app, the booking goes to the shop to accept, with a $20 hold on your card. Want the launch email so you can try it for real?",
+    "Your appointment reservation is locked in! Enter your email to link your car and download the Otopair app on iOS or Android.",
 };

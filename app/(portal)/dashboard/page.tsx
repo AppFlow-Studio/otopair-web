@@ -21,6 +21,7 @@ import LateStartReviewDialog, {
 import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "@/components/mechanic/now-working-overlay";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   GreetingHeader,
   MetricRow,
@@ -484,7 +485,7 @@ function OwnerDashboardPage({
         kind: "enroute",
         dot: "success",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: alert.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
         meta: `en route · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -504,7 +505,7 @@ function OwnerDashboardPage({
         kind: "notified",
         dot: "warning",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: alert.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
         meta: `notified · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -522,7 +523,7 @@ function OwnerDashboardPage({
         kind: "accept",
         dot: "primary",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: job.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
         meta: `${formatScheduledDateLabel(job.scheduledDate)} · ${job.scheduledTimeLabel}`,
         action: {
           label: "Accept",
@@ -562,7 +563,7 @@ function OwnerDashboardPage({
         kind: "actuals",
         dot: "muted",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: job.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
         meta: "needs details",
         action: {
           label: "Finalize",
@@ -703,7 +704,7 @@ function OwnerDashboardPage({
     bookingId: row.booking._id as Id<"bookings">,
     mechanicName: row.mechanicName ?? "",
     vehicle: row.booking.vehicle ?? row.booking.vehicleShort ?? "Vehicle",
-    serviceSummary: (row.booking.serviceNames ?? []).join(" · "),
+    serviceSummary: (row.booking.serviceNames ?? []).map(formatServiceDisplayName).join(" · "),
     startedAt: row.booking.startedAt ?? null,
     scheduledDate: row.booking.scheduledDate ?? null,
     blockedMinutes: row.blockedMinutes ?? 0,
@@ -875,7 +876,7 @@ function OwnerDashboardPage({
                     dot={statusDot(booking.status)}
                     code={booking.scheduledTimeLabel || undefined}
                     primary={`${booking.customerDisplayName} · ${booking.vehicle}`}
-                    secondary={booking.serviceSummary || undefined}
+                    secondary={formatServiceDisplayName(booking.serviceSummary) || undefined}
                     meta={`${mechanicName} · ${getScheduleStatusLabel(booking.status)}`}
                     onOpen={() => setSelectedJobId(booking._id)}
                   />

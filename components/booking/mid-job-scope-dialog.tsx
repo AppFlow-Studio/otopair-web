@@ -24,8 +24,10 @@ import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { JobActualPartPayload } from "@/lib/vehicle-passport";
-import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import PostJobSurveyDialog, {
+  type JobActualPartPayload,
+} from "@/components/post-job-survey-dialog";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function formatWhen(date?: string | null, time?: string | null) {
   if (!date) return "";
@@ -156,7 +158,7 @@ export default function MidJobScopeDialog({
       bookingLabel={j.vehicle ?? "Vehicle"}
       bookingSubLabel={[
         j.customerName,
-        (j.serviceNames ?? []).join(", "),
+        (j.serviceNames ?? []).map(formatServiceDisplayName).join(", "),
         formatWhen(j.scheduledDate, j.scheduledTime),
       ]
         .filter(Boolean)

@@ -5,6 +5,7 @@ import { ConversationProvider } from "@elevenlabs/react";
 import {
   AnimatePresence,
   motion,
+  type MotionProps,
   useAnimationFrame,
   useInView,
   useMotionValue,
@@ -35,10 +36,11 @@ import { useOtoAgent, type OtoAgent } from "./use-oto-agent";
 // Discoverability chips under the intro bar — each routes to a real demo card
 // (in live + scripted-demo mode alike).
 const QUICK_CHIPS = [
-  "What can you do?",
-  "How does pricing work?",
-  "How do rewards work?",
-  "Where are you available?",
+  "How much is an oil change?",
+  "How much for brakes on my car?",
+  "My check engine light just came on",
+  "Is $850 fair for a wheel bearing?",
+  "Find me an oil change near Staten Island",
 ];
 
 /** Small live-status indicator that sits under the orb when active (desktop)
@@ -201,8 +203,10 @@ function HeroInner() {
       return (
         <BookingConfirmedCard
           booking={oto.booking}
+          vehicle={oto.vehicle}
           onSavePreSignup={oto.savePreSignup}
           saved={oto.presignupSaved}
+          claimToken={oto.claimToken}
         />
       );
     if (oto.step === "scheduling")
@@ -226,7 +230,7 @@ function HeroInner() {
   const mobileConversation = active && (oto.messages.length > 0 || oto.thinking || hasCard);
 
   // Reduced-motion-aware slide choreography for the side panels.
-  const slide = (dir: -1 | 1, delay: number) =>
+  const slide = (dir: -1 | 1, delay: number): MotionProps =>
     reduce
       ? {
           initial: { opacity: 0 },
@@ -436,7 +440,7 @@ function HeroInner() {
                   onMic={oto.startVoice}
                   canvas={hasCard ? renderRightCard() : null}
                   conversationTitle={
-                    oto.step === "confirmed" ? "Oto booked your appointment" : "Talk to Oto"
+                    oto.step === "confirmed" ? "Oto matched your vehicle" : "Talk to Oto"
                   }
                   status={
                     <StatusPill
@@ -499,7 +503,7 @@ function HeroInner() {
               <motion.div
                 key="canvas"
                 {...slide(1, 0.12)}
-                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-tab:hidden lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
+                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-tab:hidden tab:h-[500px] tab:max-w-[420px] lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
               >
                 {/* Audio-reactive ring — pulses with Oto's voice while it narrates. */}
                 <motion.div

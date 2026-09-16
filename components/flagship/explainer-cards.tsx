@@ -15,7 +15,8 @@
 /* new set of decisions about padding.                                  */
 /* ------------------------------------------------------------------ */
 
-import { AlertTriangle, Gauge, ShieldAlert, Wrench } from "lucide-react";
+import Link from "next/link";
+import { AlertTriangle, ArrowUpRight, Gauge, ShieldAlert, Wrench } from "lucide-react";
 import { Step } from "./shared";
 import { OtoCard } from "./oto-card";
 import {
@@ -29,9 +30,9 @@ import {
  *  "get it inspected", never a reassurance. */
 function SafetyNote({ delay, children }: { delay: number; children: React.ReactNode }) {
   return (
-    <Step delay={delay} className="mt-4 flex items-start gap-2.5 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3">
-      <ShieldAlert className="mt-[1px] h-4 w-4 shrink-0 text-[#1a1a1a]" strokeWidth={1.8} />
-      <p className="text-[12.5px] leading-snug text-[#1a1a1a]">{children}</p>
+    <Step delay={delay} className="mt-4 flex items-start gap-2.5 rounded-2xl bg-amber-500/[0.08] p-3.5 ring-1 ring-amber-500/20">
+      <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" strokeWidth={2} />
+      <p className="text-[12.5px] leading-snug text-amber-900 font-medium">{children}</p>
     </Step>
   );
 }
@@ -41,7 +42,22 @@ function SafetyNote({ delay, children }: { delay: number; children: React.ReactN
 /* ------------------------------------------------------------------ */
 export function ServiceCard({ service }: { service: ServiceExplainer }) {
   return (
-    <OtoCard icon={Wrench} title={service.service} subtitle={service.category}>
+    <OtoCard
+      icon={Wrench}
+      title={service.service}
+      subtitle={service.category}
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/services"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>See all 22 catalog services</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
+      }
+    >
       <Step delay={0.14}>
         <p className="mt-4 text-[13.5px] leading-relaxed text-[#1a1a1a]">{service.what}</p>
       </Step>
@@ -105,10 +121,10 @@ export function SymptomCard({ symptom }: { symptom: SymptomExplainer }) {
   const u = URGENCY_COPY[symptom.urgency];
   const tone =
     symptom.urgency === "now"
-      ? "bg-[#1a1a1a] text-white"
+      ? "bg-red-500/15 text-red-700 ring-1 ring-red-500/30 font-semibold"
       : symptom.urgency === "soon"
-        ? "bg-[#1a1a1a]/[0.08] text-[#1a1a1a]"
-        : "bg-[#1a1a1a]/[0.05] text-[#1a1a1a]/70";
+        ? "bg-amber-500/15 text-amber-800 ring-1 ring-amber-500/30 font-semibold"
+        : "bg-blue-500/10 text-blue-700 ring-1 ring-blue-500/20 font-semibold";
 
   return (
     <OtoCard
@@ -117,10 +133,21 @@ export function SymptomCard({ symptom }: { symptom: SymptomExplainer }) {
       subtitle="What it could be — not a diagnosis"
       aside={
         <Step delay={0.1}>
-          <span className={`rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide ${tone}`}>
+          <span className={`rounded-full px-2.5 py-1 text-[10px] uppercase tracking-wide ${tone}`}>
             {u.label}
           </span>
         </Step>
+      }
+      footer={
+        <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+          <Link
+            href="/shops"
+            className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+          >
+            <span>Find verified diagnostic shops</span>
+            <ArrowUpRight className="h-4 w-4" />
+          </Link>
+        </div>
       }
     >
       {/* Danger first, diagnosis second: a hazard's safe first step leads the

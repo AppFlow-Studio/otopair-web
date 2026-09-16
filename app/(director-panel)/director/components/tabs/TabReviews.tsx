@@ -16,6 +16,7 @@ import { Badge, Button, Card, Modal, MicroH, Skeleton } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { gotoEntity, stashGoto } from '../directorNav'
 import { StatCard, DailyBars, fmtNumber } from '../Charts'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // ---------------------------------------------------------------------------
 // Local helpers (no director equivalent)
@@ -418,7 +419,7 @@ export const TabReviews = () => {
                   <div style={{ marginTop:6, fontSize:12, color:'var(--slate-500)' }}>
                     {[
                       r.vehicleYmm,
-                      r.services.filter(s => s && s !== '—').join(', ') || null,
+                      r.services.filter(s => s && s !== '—').map(formatServiceDisplayName).join(', ') || null,
                     ].filter(Boolean).join(' · ')}
                   </div>
                 )}

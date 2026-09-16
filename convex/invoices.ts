@@ -719,6 +719,46 @@ export const getReceiptForBooking = query({
  * generation pass; safe to call multiple times (idempotent via storage-id
  * check inside the action).
  */
+/**
+ * Signed URL for a booking's stored invoice PDF, or null when none exists yet.
+ *
+ * The render pipeline (`invoices_node.generateAndEmail`) has always produced a
+ * real PDF and stashed it in Convex storage, but nothing in the app could
+ * reach it — so the receipt sheet's SHARE sent a bare reference string and the
+ * PDF only ever left the system by email (Ahmad, 2026-09-14).
+ *
+ * Returns null rather than throwing when the PDF is absent: on most bookings
+ * it genuinely has not been rendered yet, and the caller's job is to schedule
+ * generation and wait, not to treat it as an error.
+ */
+export const getInvoicePdfUrl = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, { bookingId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const me = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!me) return null;
+
+    const booking = await ctx.db.get(bookingId);
+    // Scoped to the customer on the booking. An invoice carries the shop, the
+    // vehicle and what was paid, so it is not something to hand to any caller
+    // holding an id.
+    if (!booking || booking.user_id !== me._id) return null;
+
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+      .unique();
+    const storageId = (payment as any)?.invoice_storage_id;
+    if (!storageId) return null;
+
+    return await ctx.storage.getUrl(storageId);
+  },
+});
+
 export const requestInvoiceGeneration = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, { bookingId }) => {

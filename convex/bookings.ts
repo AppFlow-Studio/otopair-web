@@ -12795,6 +12795,46 @@ export const createByShop = mutation({
         phoneMatches.find((u: any) => u.phone && u.phone === normalizedPhone) ?? null;
     }
 
+    // Follow a retired stub to the account that absorbed it.
+    //
+    // `walkin_claims.claimByToken` merges a shop-built stub into the
+    // customer's real account and keeps the stub row — deleting it would
+    // dangle any id the merge did not know about. But the row keeps its email
+    // and phone, so the lookups above match it, and the customer's NEXT
+    // walk-in attached to a dead row: the job and the car were invisible from
+    // their real account, and the claim link refused to help because the stub
+    // was already claimed (Ahmad, 2026-09-10).
+    //
+    // The loop guards against a chain (A merged into B, B later merged into C)
+    // and against a cycle, which should be impossible but is cheap to survive.
+    let hops = 0;
+    while (customer && (customer as any).merged_into_user_id && hops < 5) {
+      const next = await ctx.db.get((customer as any).merged_into_user_id);
+      if (!next || next._id === customer._id) break;
+      customer = next as any;
+      hops++;
+    }
+
+    // A retired stub with no forwarding pointer is unusable as a customer.
+    //
+    // Rows retired before the pointer existed have `isPendingDeletion` and
+    // nothing to follow, so the loop above cannot rescue them. Attaching a job
+    // to one strands it: the customer's real account cannot see it, and the
+    // claim link refuses to move it because the stub is already claimed.
+    // Dropping the match creates a FRESH stub instead, which merges cleanly on
+    // the customer's next tap.
+    //
+    // Deliberately narrow — only a shop-built row is discarded this way. A
+    // real account marked for deletion is a different situation and not one to
+    // silently route around.
+    if (
+      customer &&
+      (customer as any).isPendingDeletion &&
+      String((customer as any).clerkUserId ?? "").startsWith("shop-created-")
+    ) {
+      customer = null;
+    }
+
     if (!customer) {
       const randomSuffix = Math.random().toString(36).slice(2, 8);
       const customerId = await ctx.db.insert("users", {

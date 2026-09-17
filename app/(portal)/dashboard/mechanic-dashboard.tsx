@@ -880,6 +880,10 @@ export default function MechanicDashboard() {
         lockedQuote={workflowLockedQuote.lockedQuote}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
           fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+          hasShopPriceRange={(selectedWorkflowBooking as any)?.hasShopPriceRange ?? false}
+          shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
+          shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
+          shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
         />
       </BookingWorkflowGuard>
 
@@ -923,6 +927,10 @@ export default function MechanicDashboard() {
         shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
           fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+          hasShopPriceRange={(selectedWorkflowBooking as any)?.hasShopPriceRange ?? false}
+          shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
+          shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
+          shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
         />
       </BookingWorkflowGuard>
 

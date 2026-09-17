@@ -107,6 +107,10 @@ export default function PreJobScopeDialog({
       quotedParts={scopedQuotedParts}
       isFixedPrice={j.isFixedPrice}
       fixedBaseCents={j.fixedContractBaseCents ?? null}
+      hasShopPriceRange={(j as any).hasShopPriceRange ?? false}
+      shopSetBandLowCents={(j as any).shopSetBandLowCents ?? null}
+      shopSetBandHighCents={(j as any).shopSetBandHighCents ?? null}
+      shopSetBaseDefaultCents={(j as any).shopSetBaseDefaultCents ?? null}
     />
   );
 }

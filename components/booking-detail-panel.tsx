@@ -2893,6 +2893,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
             fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
           />
         </BookingWorkflowGuard>
 
@@ -2900,7 +2904,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         <BookingWorkflowGuard
           open={showPrejobEstimateDialog}
           booking={job}
-          allowedStatuses={["vehicle_at_shop", "pending_customer_acceptance"]}
+          allowedStatuses={["pending", "pending_shop_acceptance", "vehicle_at_shop", "pending_customer_acceptance"]}
           onAcknowledge={() => setShowPrejobEstimateDialog(false)}
         >
           <PostJobSurveyDialog
@@ -2934,6 +2938,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
             fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
           />
         </BookingWorkflowGuard>
 

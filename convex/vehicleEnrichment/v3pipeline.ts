@@ -37,6 +37,7 @@ import {
   TRIM_SPEC_KEYS,
 } from "./utils/batchSchemas";
 import { mergeBlockedDomains } from "./utils/enrichmentFlags";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
@@ -2212,6 +2213,14 @@ export const enrichVehicleBatchV3 = internalAction({
     // place (and reconciles its config_key) rather than spawning a duplicate.
     // Omitted on the signup path → behavior is byte-identical.
     targetConfigId: v.optional(v.id("vehicle_configs")),
+    // Provenance (additive, both default to the historic behavior when omitted):
+    //   trigger — origin label recorded on the run ("director_reenrich",
+    //             "director_purge", "claim", "mechanic", "marketplace", …).
+    //             Defaults to "new_vehicle" (the signup path) when absent.
+    //   actor   — the human behind the run, threaded from the trigger point.
+    //             Absent for system runs. See lib/enrichmentActor.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
   },
   handler: async (ctx, args): Promise<EnrichVehicleBatchV3Result> => {
     const startTime = Date.now();
@@ -2826,7 +2835,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 5: Create enrichment run (now that vehicle_config_id is known)
     const runId = await ctx.runMutation(
       internal.vehicleEnrichment.v3mutations.createEnrichmentRun,
-      { vehicle_config_id: vehicleConfigId, version: "v8", trigger: "new_vehicle" },
+      {
+        vehicle_config_id: vehicleConfigId,
+        version: "v8",
+        trigger: args.trigger ?? "new_vehicle",
+        actor: args.actor,
+      },
     );
 
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {

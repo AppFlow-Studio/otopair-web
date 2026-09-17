@@ -84,6 +84,7 @@ import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
   computeQuotedSetPrice,
+  resolveShopSetForBooking,
   reconcileDisclosedCeilingWithQuote,
   type PricedPartSnapshotRow,
 } from "./booking_quotes";
@@ -2201,6 +2202,9 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       shop_zip: shop?.zip ?? null,
       shop_id: args.shop_id,
       vehicle_config_id: vehicle.vehicle_config_id ?? null,
+      // Fallback config/tier resolution when the vehicle isn't enriched yet, so
+      // a new booking still captures its shop fixed/range price at create time.
+      vin: normalizedVin,
       service_positions: Object.fromEntries(laborPositionByServiceId),
     });
 
@@ -2419,6 +2423,14 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       has_shop_price_range: disclosedRange.has_shop_price_range
         ? true
         : undefined,
+      // Persist the per-service shop-price lines so the job-time flow can
+      // tell which services are shop-priced (fixed/range) vs dynamic — needed
+      // to separate a range/fixed portion from a dynamic one in a mixed
+      // booking and to render each shop-priced service's FIXED line.
+      fixed_price_lines:
+        disclosedRange.fixed_price_lines.length > 0
+          ? disclosedRange.fixed_price_lines
+          : undefined,
       priced_parts_snapshot:
         pricedPartsSnapshot.length > 0 ? pricedPartsSnapshot : undefined,
       part_selection_trace:
@@ -6082,6 +6094,27 @@ async function buildVehiclePassportForBooking(ctx: any, booking: any) {
     vehicle_label: vehicleLabels.full,
     vehicle_short_label: vehicleLabels.short,
     vehicle_spec_label: vehicleLabels.spec_label,
+    // Compact spec line for the inspection header card: engine · config ·
+    // drivetrain (e.g. "2.4L · I4 · AWD"). engine.configuration ("I4"/"V6")
+    // rather than engine.cylinders (that column is corrupted on some rows —
+    // holds displacement). Body class is omitted (only in the deprecated
+    // generations table). Falls back to spec_label on the client when null.
+    vehicle_spec_line:
+      [
+        typeof engine?.displacement_l === "number"
+          ? `${engine.displacement_l}L`
+          : null,
+        typeof engine?.configuration === "string" &&
+        engine.configuration.trim() !== ""
+          ? engine.configuration.trim()
+          : null,
+        typeof vehicleConfig?.drivetrain === "string" &&
+        vehicleConfig.drivetrain.trim() !== ""
+          ? vehicleConfig.drivetrain.trim()
+          : null,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null,
     chassis_label: vehicleLabels.chassis_label,
     service_name: service?.name ?? (await resolveServiceNames(ctx, booking.service_ids, booking.custom_services)).join(", "),
     service_slug: service?.slug ?? null,
@@ -10875,13 +10908,17 @@ export const getJobDetail = query({
     // when the vehicle has no resolvable tier, so the mechanic UI never goes
     // blank on an unenriched vehicle.
     let mechanicLaborRateDollars: number | null = null;
+    // Hoisted so the shop-set resolver below can reuse the same config/tier
+    // instead of resolving the VIN a second time.
+    let jobCfg: any = null;
+    let jobTier: VehicleTier | null = null;
     if (shopForRate && booking.vin) {
-      const cfg = await resolveVehicleConfigFromVin(ctx, booking.vin);
-      const tier =
-        (cfg?.pricing_tier as VehicleTier | undefined) ??
-        (cfg ? await detectTier(ctx, cfg) : null);
-      if (tier) {
-        const rateRes = resolveLaborRate(shopForRate as any, tier);
+      jobCfg = await resolveVehicleConfigFromVin(ctx, booking.vin);
+      jobTier =
+        (jobCfg?.pricing_tier as VehicleTier | undefined) ??
+        (jobCfg ? await detectTier(ctx, jobCfg) : null);
+      if (jobTier) {
+        const rateRes = resolveLaborRate(shopForRate as any, jobTier);
         if (rateRes.rate != null) {
           mechanicLaborRateDollars = rateRes.rate;
         }
@@ -11113,6 +11150,17 @@ export const getJobDetail = query({
       )
     ).filter((entry) => entry.url !== null);
 
+    // Robust shop-set (fixed/range) resolution: prefer the captured contract,
+    // else re-resolve shop_service_fixed_prices live (so a booking that never
+    // stamped the flags — config/tier unresolved at create, or range configured
+    // after booking — is still recognized as a range job). Shares one
+    // definition with performSubmission so display and billing can never drift.
+    const shopSet = await resolveShopSetForBooking(ctx, booking, {
+      cfg: jobCfg,
+      tier: jobTier,
+    });
+    const shopSetBand = shopSet.band;
+
     return {
       _id: booking._id,
       _creationTime: booking._creationTime,
@@ -11226,7 +11274,7 @@ export const getJobDetail = query({
       // price" pill — does NOT reveal the dollar amount (that lives in
       // quotedSetPriceDollars / totalCost, both of which the mechanic
       // already sees).
-      isFixedPrice: (booking as any).is_fixed_price === true,
+      isFixedPrice: shopSet.isFixedPrice,
       // The customer-agreed flat contract price (cents, ALL-IN incl. tax + fee),
       // for fixed-price bookings only. Same expression the server uses in
       // booking_approvals.performSubmission to pin the base, so the mechanic
@@ -11242,6 +11290,23 @@ export const getJobDetail = query({
              (booking as any).disclosed_range_high_cents ??
              Math.round(((booking as any).total_cost ?? 0) * 100))
           : null,
+      // True when ANY service resolves to a shop RANGE override (low != high) —
+      // captured at create OR re-resolved live at job time. Mechanic UI uses
+      // this to turn on the "set price within the band" flow and render
+      // labor/parts as FIXED. Safe to surface — the band is the shop's own.
+      hasShopPriceRange: shopSet.hasShopPriceRange,
+      // Per-service shop-price lines (fixed/range), stored or re-resolved. Lets
+      // the dialog tell which service blocks are shop-priced (render FIXED) vs
+      // dynamic (editable).
+      fixedPriceLines: shopSet.fixedPriceLines,
+      // The all-in [low, high] the set-price input clamps to for the
+      // shop-priced portion, and its default prefill. Null for a purely
+      // dynamic booking. shopSetBandHighCents == the disclosed ceiling for a
+      // pure range/fixed booking (the customer's contract), so an in-band
+      // choice auto-approves silently.
+      shopSetBandLowCents: shopSetBand?.lowCents ?? null,
+      shopSetBandHighCents: shopSetBand?.highCents ?? null,
+      shopSetBaseDefaultCents: shopSetBand?.defaultCents ?? null,
       paymentApprovalState:
         ((booking as any).payment_approval_state as string | undefined) ?? null,
       settlementState:
@@ -12793,6 +12858,46 @@ export const createByShop = mutation({
       const phoneMatches = await ctx.db.query("users").collect();
       customer =
         phoneMatches.find((u: any) => u.phone && u.phone === normalizedPhone) ?? null;
+    }
+
+    // Follow a retired stub to the account that absorbed it.
+    //
+    // `walkin_claims.claimByToken` merges a shop-built stub into the
+    // customer's real account and keeps the stub row — deleting it would
+    // dangle any id the merge did not know about. But the row keeps its email
+    // and phone, so the lookups above match it, and the customer's NEXT
+    // walk-in attached to a dead row: the job and the car were invisible from
+    // their real account, and the claim link refused to help because the stub
+    // was already claimed (Ahmad, 2026-09-10).
+    //
+    // The loop guards against a chain (A merged into B, B later merged into C)
+    // and against a cycle, which should be impossible but is cheap to survive.
+    let hops = 0;
+    while (customer && (customer as any).merged_into_user_id && hops < 5) {
+      const next = await ctx.db.get((customer as any).merged_into_user_id);
+      if (!next || next._id === customer._id) break;
+      customer = next as any;
+      hops++;
+    }
+
+    // A retired stub with no forwarding pointer is unusable as a customer.
+    //
+    // Rows retired before the pointer existed have `isPendingDeletion` and
+    // nothing to follow, so the loop above cannot rescue them. Attaching a job
+    // to one strands it: the customer's real account cannot see it, and the
+    // claim link refuses to move it because the stub is already claimed.
+    // Dropping the match creates a FRESH stub instead, which merges cleanly on
+    // the customer's next tap.
+    //
+    // Deliberately narrow — only a shop-built row is discarded this way. A
+    // real account marked for deletion is a different situation and not one to
+    // silently route around.
+    if (
+      customer &&
+      (customer as any).isPendingDeletion &&
+      String((customer as any).clerkUserId ?? "").startsWith("shop-created-")
+    ) {
+      customer = null;
     }
 
     if (!customer) {

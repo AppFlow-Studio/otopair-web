@@ -152,6 +152,8 @@ export const getOrCreateMe = mutation({
   args: {
     authProvider: v.optional(v.string()),
     acquisitionSource: v.optional(v.string()),
+    /** Walk-in claim token from `otopair://claim/<token>`, when the signup
+     *  came through one. Lets a phone-only signup adopt its stub. */
     claimToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -208,15 +210,28 @@ export const getOrCreateMe = mutation({
       return existing;
     }
 
-    // Stub claim / adoption — when a stub user was created for this person
-    // before they had a Clerk identity (either a "shop-created-*" walk-in or a
-    // "presignup-*" Oto demo lead), migrate that row onto the real Clerk
-    // identity instead of inserting a fresh row. The app calls getOrCreateMe
-    // immediately after signup and passes the claim token if the user arrived
-    // via an /otopair://claim/<token> or /t/<token> link.
+    // Before inserting, check whether a stub is waiting to be adopted.
+    //
+    // This used to insert unconditionally, and the walk-in flow broke on it.
+    // A shop creates the customer as a "shop-created-*" stub and links the car
+    // to that row; the customer opens the claim link, signs up, and the app
+    // calls this mutation immediately. Matching on `clerkUserId` alone finds
+    // nothing — the stub's is `shop-created-...` — so we minted a SECOND user.
+    // The stub kept the car and the booking; the real account owned nothing,
+    // and the Cars tab was empty (Ahmad, 2026-09-07).
+    //
+    // The adoption logic existed in `upsertFromClerk`, reached by the Clerk
+    // `user.created` webhook — but that is a race the app wins almost every
+    // time (a local mutation against Clerk → Vercel → Convex), and once this
+    // mutation has inserted a row, `upsertFromClerk` finds it by clerkUserId
+    // and returns before ever looking for a stub. So the adoption never ran.
+    //
+    // Email is only trusted when Clerk says it is verified — the webhook path
+    // does not check, and matching an unverified address against a stub would
+    // let anyone who knows a walk-in customer's email adopt their account.
     const adopted = await adoptClaimableStub(ctx, {
       clerkUserId,
-      email: identity.email,
+      email: identity.emailVerified ? identity.email || undefined : undefined,
       phone: (identity as { phoneNumber?: string }).phoneNumber,
       first_name: identity.givenName || undefined,
       last_name: identity.familyName || undefined,
@@ -300,6 +315,65 @@ export const dismissSetupCard = mutation({
     if (user.setupCardDismissed === true) return user._id;
 
     await ctx.db.patch(user._id, { setupCardDismissed: true });
+    return user._id;
+  },
+});
+
+/**
+ * MUTATION: markTutorialSeen
+ *
+ * Stamps the first-run tutorial as done. Called on BOTH completion and skip:
+ * a driver who dismissed the tour has told us their answer, and showing it
+ * again would read as an ad rather than help. Settings keeps a manual re-entry
+ * so skipping is not a one-way door.
+ *
+ * Idempotent — the first stamp wins, so a double-tap or a retry after a flaky
+ * network cannot rewrite when they actually saw it.
+ */
+export const markTutorialSeen = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+    if (typeof user.tutorialSeenAt === "number") return user._id;
+
+    await ctx.db.patch(user._id, { tutorialSeenAt: Date.now() });
+    return user._id;
+  },
+});
+
+/**
+ * MUTATION: resetTutorial
+ *
+ * Clears the seen stamp so the first-run tour plays again. This is what keeps
+ * "skip" from being a one-way door: a driver who dismissed the tour on day one
+ * has no other route back to it, and rebuilding the same six screens somewhere
+ * else in Settings would be two copies to keep in step.
+ *
+ * Clearing the flag rather than opening the overlay from here on purpose —
+ * Home already owns the gate, so there is one place that decides whether the
+ * tour shows.
+ */
+export const resetTutorial = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+    await ctx.db.patch(user._id, { tutorialSeenAt: undefined });
     return user._id;
   },
 });

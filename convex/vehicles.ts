@@ -830,6 +830,48 @@ export const addOwner = mutation({
  * Deletes the row from vehicle_owners and cascades cleanup for
  * vehicle-owner scoped records.
  */
+/**
+ * Statuses where the car is physically committed to a shop.
+ *
+ * Not "has any booking" — a pending or confirmed job is a plan, and a driver
+ * is allowed to change their mind about a plan. These three mean the vehicle
+ * is AT the shop: checked in, on a lift, or stalled mid-job. Removing it then
+ * orphans a booking a mechanic is actively working, which is how a live job
+ * ended up on the Home hero with no car name and no image (Ahmad,
+ * 2026-09-14).
+ */
+const AT_SHOP_STATUSES: ReadonlySet<string> = new Set([
+  "vehicle_at_shop",
+  "in_progress",
+  "delayed",
+]);
+
+/**
+ * Refuses the delete while a shop still has the car.
+ *
+ * Throws rather than returning a flag: both callers delete maintenance records
+ * BEFORE the ownership row, so a soft "false" would have to be checked at
+ * every call site, and one missed check leaves a half-deleted vehicle.
+ */
+async function assertVehicleNotAtShop(
+  ctx: any,
+  vin: string,
+  userId: Id<"users">,
+): Promise<void> {
+  const bookings = await ctx.db
+    .query("bookings")
+    .withIndex("by_vin", (q: any) => q.eq("vin", vin))
+    .collect();
+  const live = bookings.find(
+    (b: any) => b.user_id === userId && AT_SHOP_STATUSES.has(String(b.status)),
+  );
+  if (live) {
+    throw new Error(
+      "This car is at the shop right now. You can remove it once the job is finished.",
+    );
+  }
+}
+
 export const removeOwner = mutation({
   args: {
     vin: v.string(),
@@ -849,6 +891,8 @@ export const removeOwner = mutation({
     if (!ownership) {
       throw new Error("This customer isn't listed as an owner of that vehicle.");
     }
+
+    await assertVehicleNotAtShop(ctx, normalizedVin, args.userId);
     
     // Delete maintenance records for this ownership
     const maintenanceRows = await ctx.db
@@ -878,6 +922,8 @@ export const removeOwnerById = mutation({
     if (!ownership) {
       throw new Error("We couldn't find that vehicle ownership record.");
     }
+
+    await assertVehicleNotAtShop(ctx, ownership.vin, ownership.user_id);
 
     const maintenanceRows = await ctx.db
       .query("maintenance_records")

@@ -93,6 +93,7 @@ import {
   TIRE_SIZE_OPTIONS,
 } from "@/lib/inspection-options";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
+import ShopSetPriceInput from "@/components/booking/shop-set-price-input";
 import { LIGHT_LABELS } from "@/lib/warningLightItems";
 import {
   CustomJobTaxonomyPicker,
@@ -921,6 +922,10 @@ export default function PostJobSurveyDialog({
   lockedQuote,
   isFixedPrice,
   fixedBaseCents,
+  hasShopPriceRange,
+  shopSetBandLowCents,
+  shopSetBandHighCents,
+  shopSetBaseDefaultCents,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -964,6 +969,16 @@ export default function PostJobSurveyDialog({
    *  renders exactly what the customer pays instead of a dynamic parts+labor
    *  recompute. Null (or unset) for non-fixed bookings. */
   fixedBaseCents?: number | null;
+  /** True when ANY service resolved to a shop RANGE override (low != high).
+   *  Turns on the shop-set flow: labor/parts render FIXED and the front desk
+   *  sets one all-in price inside the band. */
+  hasShopPriceRange?: boolean;
+  /** All-in [low, high] band (cents) the set-price input clamps to for the
+   *  shop-priced portion, plus its default prefill. Null on a purely dynamic
+   *  booking. For a pure range/fixed booking high == the disclosed ceiling. */
+  shopSetBandLowCents?: number | null;
+  shopSetBandHighCents?: number | null;
+  shopSetBaseDefaultCents?: number | null;
   /** Shop's labor rate in cents/hour. Drives the running-total bar and the
    *  Labor step for cycle modes. */
   laborRateCents?: number | null;
@@ -1020,6 +1035,10 @@ export default function PostJobSurveyDialog({
       quotedParts={quotedParts ?? null}
       isFixedPrice={isFixedPrice ?? false}
       fixedBaseCents={fixedBaseCents ?? null}
+      hasShopPriceRange={hasShopPriceRange ?? false}
+      shopSetBandLowCents={shopSetBandLowCents ?? null}
+      shopSetBandHighCents={shopSetBandHighCents ?? null}
+      shopSetBaseDefaultCents={shopSetBaseDefaultCents ?? null}
     />
   );
 }
@@ -1049,6 +1068,10 @@ function PostJobSurveyDialogBody({
   lockedQuote,
   isFixedPrice,
   fixedBaseCents,
+  hasShopPriceRange,
+  shopSetBandLowCents,
+  shopSetBandHighCents,
+  shopSetBaseDefaultCents,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -1082,6 +1105,10 @@ function PostJobSurveyDialogBody({
   lockedQuote: LockedQuote | null;
   isFixedPrice: boolean;
   fixedBaseCents: number | null;
+  hasShopPriceRange: boolean;
+  shopSetBandLowCents: number | null;
+  shopSetBandHighCents: number | null;
+  shopSetBaseDefaultCents: number | null;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -1090,6 +1117,25 @@ function PostJobSurveyDialogBody({
   const submitMidJobChange = useMutation(
     (api as any).booking_approvals.submitMidJobChange,
   );
+
+  // Shop-SET pricing (fixed OR range): labor/parts render FIXED and the front
+  // desk sets ONE all-in price inside the disclosed band. `isShopSet` drives the
+  // same machinery the pure fixed path already used; the range case adds the
+  // bounded price input below and lets the chosen base live in state. Seeded to
+  // the frozen fixed base (fixed) or the band midpoint (range). Body remounts
+  // per booking (see the `key` on it), so this re-seeds correctly per booking.
+  const isShopSet = isFixedPrice || hasShopPriceRange;
+  const [shopSetBaseCents, setShopSetBaseCents] = useState<number>(
+    fixedBaseCents ?? shopSetBaseDefaultCents ?? 0,
+  );
+  // A real (non-collapsed) range the front desk sets a number inside. A pure
+  // fixed price (band collapsed to a point) shows no input — the price is the
+  // contract. Null → the set-price control is hidden.
+  const showShopSetInput =
+    hasShopPriceRange &&
+    shopSetBandLowCents != null &&
+    shopSetBandHighCents != null &&
+    shopSetBandHighCents > shopSetBandLowCents;
 
   // Live workflow state for the post-submit status panel. Subscribes only
   // when cycle is set — the legacy post-job actuals path doesn't need it.
@@ -1858,7 +1904,10 @@ function PostJobSurveyDialogBody({
   // total = fixedBaseCents + addedPriced.total_cents. Feeding
   // computeEstimateTotals only the added subset reproduces the server's
   // isolated tax/fee basis exactly, so the number shown here == the customer's.
-  const isFixedEstimate = isEstimateCycle && isFixedPrice;
+  // Shop-set (fixed OR range) estimate: the base is pinned (fixed) or chosen
+  // within the band (range), and only ON-TOP scope bills — same isolation math
+  // either way.
+  const isFixedEstimate = isEstimateCycle && isShopSet;
 
   // ADDED lines the shop flat-prices (a catalog service with a
   // shop_service_fixed_prices row at the vehicle's tier). Their parts/labor are
@@ -1991,10 +2040,11 @@ function PostJobSurveyDialogBody({
     shopZip,
   ]);
 
-  // The number the mechanic sees = the customer's reality: fixed base + added.
+  // The number the mechanic sees = the customer's reality: shop-set base (the
+  // fixed price, or the chosen in-band price for a range) + any added scope.
   const fixedTotals = useMemo(() => {
     if (!isFixedEstimate || !addedTotals) return null;
-    const base = fixedBaseCents ?? 0;
+    const base = shopSetBaseCents;
     return {
       baseCents: base,
       // addedTotals.partsCents includes the synthetic flat row — split it back
@@ -2007,7 +2057,7 @@ function PostJobSurveyDialogBody({
       addedTotalCents: addedTotals.totalCents, // == server addedPriced.total_cents
       totalCents: base + addedTotals.totalCents, // == server total_cents
     };
-  }, [isFixedEstimate, addedTotals, addedFlatCents, fixedBaseCents]);
+  }, [isFixedEstimate, addedTotals, addedFlatCents, shopSetBaseCents]);
 
   // The quoted price as the CLIENT computes it — same formula as liveTotals but
   // over the seeded (quoted) parts + estimated labor, i.e. the untouched state
@@ -2341,6 +2391,9 @@ function PostJobSurveyDialogBody({
             laborAllocations: laborBreakdown,
             notes: technicianNotes.trim() || undefined,
             scopePhotoIds: scopePhotoIdsForSubmit,
+            // The front desk's chosen in-band price (shop-set bookings only).
+            // Clamped server-side; the server ignores it for dynamic bookings.
+            shopSetBaseCents: isShopSet ? shopSetBaseCents : undefined,
           });
         } else if (cycle === "mid_job") {
           result = await submitMidJobChange({
@@ -2352,6 +2405,7 @@ function PostJobSurveyDialogBody({
             laborAllocations: laborBreakdown,
             notes: technicianNotes.trim() || undefined,
             scopePhotoIds: scopePhotoIdsForSubmit,
+            shopSetBaseCents: isShopSet ? shopSetBaseCents : undefined,
           });
         }
         if (result) {
@@ -2722,6 +2776,18 @@ function PostJobSurveyDialogBody({
                 </>
               }
             />
+          ) : showShopSetInput ? (
+            <LockedNote
+              icon={Info}
+              title="Price range service"
+              body="This service's labor and parts are fixed. Set the final price inside the quoted range — the customer already agreed to any amount in it."
+              footnote={
+                <>
+                  Only work you add on top can push the total past the range —
+                  and that asks the customer to confirm.
+                </>
+              }
+            />
           ) : null}
 
           {lockBilling && !cycle ? (
@@ -2864,7 +2930,7 @@ function PostJobSurveyDialogBody({
             laborRateCents={effectiveLaborRateCents}
             liveTotals={liveTotals}
             quotedBaselineTotalCents={quotedBaselineTotalCents}
-            isFixedPrice={isFixedPrice}
+            isFixedPrice={isShopSet}
             fixedTotals={fixedTotals}
             addedParts={addedParts}
             isTireService={tireServiceActive || parts.some((p) => isTirePartRow(p))}
@@ -2879,6 +2945,24 @@ function PostJobSurveyDialogBody({
           ) : null}
         </div>
 
+        {/* Set-price control for a RANGE job — shown on every estimate step
+            (incl. "Confirm parts to use") so the front desk can set the final
+            price wherever they are, not only on the labor step. The band is
+            already the customer-agreed range; a value inside it auto-approves. */}
+        {isEstimateCycle && showShopSetInput && currentStep !== "summary" ? (
+          <div className="border-t border-primary/10 bg-primary/[0.02] px-5 py-3 sm:px-10">
+            <div className="mx-auto w-full max-w-xl">
+              <ShopSetPriceInput
+                lowCents={shopSetBandLowCents as number}
+                highCents={shopSetBandHighCents as number}
+                valueCents={shopSetBaseCents}
+                onChangeCents={setShopSetBaseCents}
+                label="Set the price (within the quoted range)"
+              />
+            </div>
+          </div>
+        ) : null}
+
         {/* Running total bar — only when cycle is set. Hidden on the summary
             step (which renders its own full breakdown). Two modes:
             • Fixed-price booking → show the customer's reality: the flat
@@ -2887,7 +2971,7 @@ function PostJobSurveyDialogBody({
               it isn't the billed number.
             • Normal booking → mirror the server's computeMechanicSetPrice:
               parts + labor + tax + 7% fee. */}
-        {isEstimateCycle && currentStep !== "summary" && isFixedPrice && fixedTotals ? (
+        {isEstimateCycle && currentStep !== "summary" && isShopSet && fixedTotals ? (
           <div className="border-t border-primary/10 bg-primary/[0.025] px-5 py-2.5 sm:px-10 sm:py-3">
             <div className="mx-auto flex w-full max-w-xl flex-wrap items-center justify-between gap-3 text-[12px]">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-muted-foreground">
@@ -2975,7 +3059,7 @@ function PostJobSurveyDialogBody({
                 {cycle
                   ? cycle === "post_job_reapproval"
                     ? "Confirm final"
-                    : isEstimateCycle && isFixedPrice && fixedTotals
+                    : isEstimateCycle && isShopSet && fixedTotals
                       ? `Send for confirmation · $${(fixedTotals.totalCents / 100).toFixed(2)}`
                       : isEstimateCycle && liveTotals
                         ? `Send for confirmation · $${(liveTotals.totalCents / 100).toFixed(2)}`
@@ -4180,6 +4264,13 @@ function PartsStep({
       part_tier: next.part_tier ?? "oem",
       source: "catalog",
       swap_from_oem_number: sameOem ? undefined : swapFromOem,
+      // Keep the row's service attribution across the swap. On a shop-set
+      // (fixed/range) booking this is what keeps a swapped base part excluded
+      // from the billed total — so swapping never moves the set price.
+      // (updatePart shallow-merges, so this is already preserved; set it
+      // explicitly so a future refactor can't silently drop it.)
+      service_id: prev?.service_id ?? null,
+      custom_service_name: prev?.custom_service_name ?? null,
       // Re-enable the row in case it was previously "Not used" — picking a
       // new part means the mechanic is using something here.
       not_used: undefined,
@@ -7477,8 +7568,8 @@ function LaborStep({
   customLaborOverrides: Record<string, number>;
   baseLabel: string | null;
   customJobs: CustomJobRow[] | undefined;
-  /** Fixed-price booking: the base service's labor is part of the flat
-   *  contract and never moves the price — it renders locked, and only ADDED
+  /** Shop-set booking (fixed OR range): the base service's labor is part of the
+   *  set price and never moves it — it renders locked, and only ADDED
    *  (custom-job) lines bill by labor. */
   isFixedPrice: boolean;
 }) {
@@ -7573,7 +7664,7 @@ function LaborStep({
       question="How long will this take?"
       hint={
         isFixedPrice
-          ? "The fixed price covers the original service — set the time only for any work you added on top."
+          ? "The set price covers the original service — set the time only for any work you added on top."
           : multiline
             ? `Your shop's labor rate is $${ratePerHourDollars}/hr — set the time for each and we'll add it up.`
             : `Your shop's labor rate is $${ratePerHourDollars}/hr — we'll calculate from the hours you enter.`
@@ -7601,7 +7692,7 @@ function LaborStep({
                   </p>
                   <p className="mt-0.5 text-[11px] text-muted-foreground">
                     {baseLocked
-                      ? "Included in fixed price"
+                      ? "Included in the set price"
                       : `${line.def > 0 ? `Est. ${formatHoursValue(line.def)} hr · ` : ""}$${lineDollars.toFixed(2)}`}
                   </p>
                 </div>
@@ -7634,15 +7725,23 @@ function LaborStep({
               <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
                 {addedHours > 0 ? "Added labor" : "Labor"}
               </p>
-              <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
-                {addedHours > 0
-                  ? `${Number(addedHours.toFixed(2))} hr · $${ratePerHourDollars}/hr`
-                  : "Included in the fixed price"}
-              </p>
+              {addedHours > 0 ? (
+                <p className="mt-0.5 text-[12px] text-muted-foreground tabular-nums">
+                  {`${Number(addedHours.toFixed(2))} hr · $${ratePerHourDollars}/hr`}
+                </p>
+              ) : null}
             </div>
-            <span className="text-[22px] font-semibold tabular-nums">
-              ${addedLaborDollars.toFixed(2)}
-            </span>
+            {addedHours > 0 ? (
+              <span className="text-[22px] font-semibold tabular-nums">
+                ${addedLaborDollars.toFixed(2)}
+              </span>
+            ) : (
+              // No labor added on top of the set price — show WHY it's $0
+              // instead of a bare "$0.00", which reads like an error.
+              <span className="text-[13px] font-medium text-muted-foreground">
+                Included in the set price
+              </span>
+            )}
           </div>
         ) : (
           <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/20 bg-primary/5 px-4 py-3">

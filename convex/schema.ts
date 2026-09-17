@@ -964,6 +964,14 @@ export default defineSchema({
     vehicle_config_id: v.id("vehicle_configs"),
     version: v.optional(v.string()),
     trigger: v.optional(v.string()),
+    // Who kicked this run off, when a human did — captured at creation from the
+    // trigger point (director panel / walk-in claim / mechanic / signup) and
+    // threaded through the scheduler hops via lib/enrichmentActor. Absent for
+    // system runs (cron/marketplace/CLI) and on all pre-Sep-2026 rows. Feeds the
+    // enrichment error-out Slack alert ("who ran it") and the Deep-Dive header.
+    actor_name: v.optional(v.string()),
+    actor_id: v.optional(v.string()),
+    actor_kind: v.optional(v.string()), // "director" | "mechanic" | "driver" | "system"
     status: v.string(),
     total_tokens_in: v.optional(v.number()),
     total_tokens_out: v.optional(v.number()),
@@ -3063,6 +3071,22 @@ export default defineSchema({
     // NOT in MECHANIC_FORBIDDEN_FIELDS.
     is_fixed_price: v.optional(v.boolean()),
     has_shop_price_range: v.optional(v.boolean()),
+    // Per-service shop-price lines (fixed OR range) snapshotted at create
+    // time — the same value computeDisclosedRange returns. Identifies which
+    // service_ids are shop-priced (vs dynamic) so the job-time flow can (a)
+    // separate a range/fixed portion from a dynamic portion in a mixed
+    // booking and (b) render each shop-priced service's FIXED line. Carries
+    // dollar amounts, but only ones the customer already agreed to (the
+    // disclosed band was derived from them), so no new anchoring risk.
+    fixed_price_lines: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          price_low_cents: v.number(),
+          price_high_cents: v.number(),
+        })
+      )
+    ),
     // Itemized parts snapshot taken at booking-create time. Same per-unit
     // prices and quantities the customer saw on the Review & Pay screen.
     // The mechanic's post-job dialog hydrates from this first so the

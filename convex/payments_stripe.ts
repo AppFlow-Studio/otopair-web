@@ -30,6 +30,7 @@ import { validateTransition, isTerminal } from "./payment_status_history";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { resolveShopSetForBooking } from "./booking_quotes";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -2231,11 +2232,16 @@ export const _computeFinalTotalForBooking = internalQuery({
         ? (latestApproved.labor_cents as number)
         : Math.round((booking.labor_cost ?? 0) * 100);
 
+    // Robust shop-set state so the capture path honors the agreed set price
+    // (no reconcile-down) even for a booking that never stamped the range flags.
+    const shopSet = await resolveShopSetForBooking(ctx, booking);
+
     return {
       booking,
       partsSnapshot: parts,
       partsSubtotalCents: partsCents,
       laborCents,
+      isShopSet: shopSet.isShopSet,
       // Caller will recompute tax + fee.
     };
   },
@@ -2273,6 +2279,7 @@ export const finalizeAndChargeForBooking = internalAction({
       return { status: "skipped", reason: "booking not found" };
     }
     const { booking, partsSnapshot, partsSubtotalCents, laborCents } = computed;
+    const isShopSetBooking = computed.isShopSet === true;
 
     // Decline branch (or explicit flag): capture at the approved ceiling and
     // skip the actuals comparison. Honors min(ceiling, finalCents) so we
@@ -2384,13 +2391,18 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
-    // Fixed price: the customer pays the agreed flat total (base + any approved
-    // added scope), full stop — never a reconciliation against actual parts/
-    // labor. Reconciling would UNDER-charge when actuals land below the flat
-    // rate (its whole point is the shop eats that spread) and needlessly probe a
+    // Shop-set price (fixed OR range): the customer pays the agreed total (the
+    // set price the front desk chose inside the band, plus any approved added
+    // scope), full stop — never a reconciliation against actual parts/labor.
+    // Reconciling would UNDER-charge when actuals land below the set price (its
+    // whole point is the shop eats that spread) and needlessly probe a
     // re-approval when they land above. Capture the agreed amount, exactly like
-    // the over-actuals branch below already does for every booking.
-    if (booking.is_fixed_price === true) {
+    // the over-actuals branch below already does for every booking. (For a
+    // mixed booking the agreed total already folds in the dynamic portion, so
+    // capture-agreed still pays exactly what the customer approved.) Uses the
+    // robustly-resolved flag so a booking that never stamped the range at create
+    // still captures the agreed set price, never a reconcile-down.
+    if (isShopSetBooking) {
       return await captureAtAmount(
         ctx,
         args.bookingId,

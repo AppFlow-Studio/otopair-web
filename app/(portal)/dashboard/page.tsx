@@ -221,20 +221,19 @@ function OwnerDashboardPage({
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
-  const acceptBooking = useMutation(api.bookings.accept);
-
-  const handleAcceptBooking = useCallback(
-    async (bookingId: Id<"bookings">) => {
-      try {
-        await acceptBooking({ bookingId });
-        setSuccessMessage("Booking accepted");
-      } catch (error: unknown) {
-        setSuccessMessage(
-          error instanceof Error ? error.message : "Could not accept booking.",
-        );
-      }
+  // Accepting a booking is a deliberate, review-first commitment, so it lives
+  // only inside the booking drawer. From the dashboard we send the owner to the
+  // schedule with that booking's drawer open — never a one-click accept here.
+  const openBookingOnSchedule = useCallback(
+    (bookingId: Id<"bookings">, date?: string | null) => {
+      const p = new URLSearchParams({
+        action: "open-booking",
+        bookingId: String(bookingId),
+      });
+      if (date) p.set("date", date);
+      router.push(`/schedule?${p.toString()}`);
     },
-    [acceptBooking],
+    [router],
   );
 
   useEffect(() => {
@@ -527,11 +526,11 @@ function OwnerDashboardPage({
         secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
         meta: `${formatScheduledDateLabel(job.scheduledDate)} · ${job.scheduledTimeLabel}`,
         action: {
-          label: "Accept",
+          label: "Open",
           tone: "primary",
-          run: () => void handleAcceptBooking(job._id),
+          run: () => openBookingOnSchedule(job._id, job.scheduledDate),
         },
-        onOpen: () => setSelectedJobId(job._id),
+        onOpen: () => openBookingOnSchedule(job._id, job.scheduledDate),
       });
     }
 
@@ -595,7 +594,7 @@ function OwnerDashboardPage({
     customerLateNotificationSent,
     lateStartReviews,
     markVehicleAtShop,
-    handleAcceptBooking,
+    openBookingOnSchedule,
     router,
   ]);
 
@@ -611,8 +610,6 @@ function OwnerDashboardPage({
     count: needItems.length,
     enabled: listNavEnabled,
     onOpen: (i) => needItems[i]?.onOpen(),
-    onAccept: (i) => needItems[i]?.action?.run(),
-    canAccept: (i) => needItems[i]?.kind === "accept",
   });
 
   if (dashboard === undefined) {
@@ -830,9 +827,6 @@ function OwnerDashboardPage({
                     <span className="px-0.5">·</span>
                     <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">Enter</kbd>
                     <span>open</span>
-                    <span className="px-0.5">·</span>
-                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">A</kbd>
-                    <span>accept</span>
                   </span>
                 }
               >

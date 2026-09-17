@@ -18,6 +18,7 @@ import { scrapeWheelSizeOptions } from "./utils/wheelSizeScraper";
 import { buildEngineKey } from "./types";
 import { coreSignature } from "./determinismGate";
 import { lastActivityMs, LIVE_WINDOW_MS, RUN_IN_PROGRESS_STATUSES } from "./runFence";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 
 const TEST_CLERK_ID = "user_39FwQkrjpFYGOQ0gkPIk1DEf0FW";
 const POLL_MS = 30_000;
@@ -28,6 +29,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 export const go = internalAction({
   args: {
     vin: v.string(),
+    // Provenance forwarded to the run (see lib/enrichmentActor). Omitted by the
+    // CLI (a bare `npx convex run …:go '{"vin":…}'` is a system run); set by the
+    // director purge path via purgeAndRerun.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
   },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
@@ -88,6 +94,8 @@ export const go = internalAction({
         displacement: decoded.displacement,
         drivetrain: (decoded as any).drivetrain ?? undefined,
         nhtsaVinKey: (decoded as any).nhtsaVinKey ?? undefined,
+        trigger: args.trigger,
+        actor: args.actor,
       });
     }
 
@@ -337,7 +345,13 @@ export const b8collect = internalAction({
 /** Insert a minimal user row for the test Clerk ID. */
 /** Purge all enrichment data for a VIN and re-run from scratch. */
 export const purgeAndRerun = internalAction({
-  args: { vin: v.string() },
+  args: {
+    vin: v.string(),
+    // Forwarded to the fresh run so a director "Purge + re-enrich" is
+    // attributed to the person who clicked it. See lib/enrichmentActor.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
+  },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
 
@@ -372,7 +386,7 @@ export const purgeAndRerun = internalAction({
         // BATCH11: nothing to purge is not an error — a VIN that never got a
         // config just needs the fresh enrichment it was asking for.
         console.log(`[purge] No config for ${vin} (key=${configKey}) — running fresh enrichment`);
-        return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
+        return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin, trigger: args.trigger, actor: args.actor });
       }
     }
 
@@ -404,7 +418,7 @@ export const purgeAndRerun = internalAction({
     });
     console.log(`[purge] Wiped config for ${(config as any).config_key}, re-running...`);
 
-    return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin });
+    return await ctx.runAction(internal.vehicleEnrichment.runPublic.go, { vin, trigger: args.trigger, actor: args.actor });
   },
 });
 

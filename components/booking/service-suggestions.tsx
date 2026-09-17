@@ -25,6 +25,7 @@
 
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export type SuggestedService = {
   serviceId: string;
@@ -98,10 +99,10 @@ export default function ServiceSuggestions({
           <li key={c.serviceId}>
             <button
               type="button"
-              onClick={() => onPick(c)}
+              onClick={() => onPick({ ...c, name: formatServiceDisplayName(c.name) })}
               className={rowClass(confident && i === 0)}
             >
-              <span className={nameClass}>{c.name}</span>
+              <span className={nameClass}>{formatServiceDisplayName(c.name)}</span>
               {/* An alias hit means someone already made this call by hand.
                   Worth saying; a bare confidence score isn't. */}
               {c.via === "alias" ? (

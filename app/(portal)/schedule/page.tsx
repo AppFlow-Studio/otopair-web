@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -1179,6 +1180,25 @@ export default function SchedulePage() {
       return;
     }
 
+    // Open a booking's detail drawer for review (e.g. accepting a pending
+    // request). Unlike focus-booking, this doesn't switch into the drag-to-
+    // reschedule flow — a booking that hasn't been accepted yet can't be
+    // rescheduled, so no reschedule toast. The panel loads the booking by id
+    // on its own, so the booking need not be in the current calendar range.
+    if (action === "open-booking") {
+      const bookingId = searchParams.get("bookingId");
+      if (!bookingId) return;
+      const date = searchParams.get("date");
+      if (date) {
+        const [y, mo, d] = date.split("-").map(Number);
+        if (y && mo && d) setCurrentDate(new Date(y, mo - 1, d));
+      }
+      setSelectedBookingId(bookingId as Id<"bookings">);
+      deepLinkHandledRef.current = true;
+      router.replace("/schedule", { scroll: false });
+      return;
+    }
+
     if (action === "focus-booking") {
       const bookingId = searchParams.get("bookingId");
       if (!bookingId) return;
@@ -1266,7 +1286,7 @@ export default function SchedulePage() {
         return {
           id: b._id,
           invoiceNumber: (b as any).invoiceNumber ?? null,
-          title: `${b.customerName} — ${b.serviceNames.join(", ")}`,
+          title: `${b.customerName} — ${b.serviceNames.map(formatServiceDisplayName).join(", ")}`,
           start,
           end,
           resourceId: b.mechanicId ?? undefined,
@@ -1593,7 +1613,7 @@ export default function SchedulePage() {
         }}
       >
         <p className="font-medium truncate">{customerDisplay}</p>
-        <p className="truncate opacity-80">{event.serviceNames?.join(", ")}</p>
+        <p className="truncate opacity-80">{event.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
         {isPendingCustomer && (
           <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
         )}

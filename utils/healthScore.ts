@@ -68,34 +68,41 @@ export const COMPONENT_WEIGHTS = {
   safetyReserve: 0.15,
 } as const;
 
-/** Default upkeep-vs-warning-lights split (percentage points, sums to 100).
- *  The warning-lights reserve is (100 − DEFAULT_UPKEEP_SPLIT). Kept as a
- *  top-level constant so warningLightsReservePct and any UI describing the
- *  reserve share one number with the score itself. */
-export const DEFAULT_UPKEEP_SPLIT = 85;
-
 /** Open-issue penalty cap. Was 25 (recPenalty) + 20 (mileageRecPenalty);
  *  v1 collapses to a single 0–15 deduction, "upcoming" moves to urgency. */
 export const OPEN_ISSUE_PENALTY_MAX = 15;
 
+/** Default Upkeep share; Warning Lights is the remainder. Mirrors
+ *  convex/healthScoreWeights.ts DEFAULT_UPKEEP_WEIGHT. */
+export const DEFAULT_UPKEEP_SPLIT = 85;
+
 // Urgency-engine constants — read by Change 3 (utils/urgency.ts).
 export const URGENCY_WEIGHTS = { severity: 0.50, proximity: 0.35 } as const;
 export const URGENCY_TIEBREAKER_WINDOW = 5;
+/** Three tiers ship (NOW / SOON / HEALTHY) but four cutoffs are kept.
+ *  `now` (75) is the NOW floor and `soonish` (25) is the SOON floor —
+ *  everything below 25 rests. `soon` (55) no longer splits anything; it is
+ *  retained so the 75/55/25 thresholds logged to urgency_tier_events stay
+ *  comparable across the tier change and remain available if the middle
+ *  band is ever re-separated. Key names are shared with the web repo — do
+ *  not rename without porting. */
 export const URGENCY_TIER_CUTOFFS = { now: 75, soon: 55, soonish: 25 } as const;
-
-/** A catalog row's id is `catalog-<taxonomy slug>`. `extractMaintenanceType`
- *  strips the suffix and returns the literal `"catalog"`, which then collapses
- *  to CATEGORY_WEIGHTS.other (10). CATEGORY_WEIGHTS was written to price the
- *  slug (transmission_service: 18, spark_plugs: 15, etc.), so we recover the
- *  slug first and look it up directly. */
-function catalogSlugFromId(id?: string): string | undefined {
-  return id?.startsWith("catalog-") ? id.slice("catalog-".length) : undefined;
-}
 
 /** Resolve a maintenance item's id to the CATEGORY_WEIGHTS bucket. Items
  *  whose type isn't a recognized safety/reliability category fall into
  *  "other" (10% weight). */
+/** A catalog row's id is `catalog-<taxonomy slug>`. `extractMaintenanceType`
+ *  stops at the first dash and returns "catalog", which is not a weight
+ *  bucket — so the slug has to be recovered here. */
+function catalogSlugFromId(id?: string): string | undefined {
+  return id?.startsWith("catalog-") ? id.slice("catalog-".length) : undefined;
+}
+
 function categoryWeightForItem(item: MaintenanceItem): number {
+  // Bigger services carry their own weights in the table above —
+  // transmission 18, spark plugs 15, differential 12 — and those numbers were
+  // written for exactly these rows. Reading them as "catalog" dropped every
+  // one to the generic 10.
   const slug = catalogSlugFromId(item.id);
   if (slug && slug in CATEGORY_WEIGHTS) {
     return CATEGORY_WEIGHTS[slug as keyof typeof CATEGORY_WEIGHTS];
@@ -111,6 +118,83 @@ function categoryWeightForItem(item: MaintenanceItem): number {
 // STATUS → SCORE (graduated, not binary)
 // ============================================================================
 
+/**
+ * The only types that may deduct on interval.
+ *
+ * The five core tiles, plus `warning` for the consolidated active-lights card.
+ * maintenance_records.type is an unconstrained v.string() and
+ * buildMaintenanceItems casts whatever it finds to MaintenanceType, so records
+ * of types outside the union (`fluids`, `diagnostics`, `transmission_service`,
+ * `filters`, `wipers`, `engine_parts`) were becoming scored items and losing
+ * the driver points purely because time or mileage had passed. Those are
+ * exactly the rows the model says must never score without a mechanic behind
+ * them.
+ */
+const SCORING_TYPES: ReadonlySet<string> = new Set([
+  "oil",
+  "brakes",
+  "tires",
+  "battery",
+  "inspection",
+  "warning",
+]);
+
+/**
+ * How full the Warning Lights reserve still is, 0–100, for ring display.
+ * The reserve starts full and drains by warningLightPenalty; `reserveWeight`
+ * is the director-set Warning Lights budget (default 15) so the ring tracks
+ * the same number the score uses.
+ */
+export function warningLightsReservePct(
+  knownIssues?: string[],
+  reserveWeight: number = 100 - DEFAULT_UPKEEP_SPLIT,
+): number {
+  if (reserveWeight <= 0) return 100;
+  const remaining = Math.max(0, reserveWeight - warningLightPenalty(knownIssues));
+  return Math.round((remaining / reserveWeight) * 100);
+}
+
+/**
+ * Does this item contribute to the Upkeep term?
+ *
+ * Two kinds of row are shown to the driver but must never move the score:
+ *  - recommendation cards (`sourceRecommendationId`) — the matching core or
+ *    minor tile already scores that finding, and the Open-recs penalty covers
+ *    it a second time; counting the card would be a third.
+ *  - catalog-inference rows (`excludeFromScore`) — derived from an OEM
+ *    interval and an odometer alone, with no record and no mechanic behind
+ *    them. Only the five core tiles score by default.
+ *
+ * Exported so any UI that *describes* the score (the x/y maintenance counter)
+ * filters on exactly the same rule the score itself uses, instead of keeping a
+ * second definition that drifts.
+ */
+export function isScorableMaintenanceItem(item: {
+  id?: string;
+  sourceRecommendationId?: string;
+  excludeFromScore?: boolean;
+}): boolean {
+  if (item.sourceRecommendationId || item.excludeFromScore) return false;
+  if (!item.id) return true;
+  const type = extractMaintenanceType(item.id);
+  // Mechanic-graded minor items (Consolidated model) keep their weight-10
+  // deduction — that is the whole point of the model, and the `minor_` prefix
+  // only exists on records a mechanic graded yellow or red.
+  if (type.startsWith("minor_")) return true;
+  // A catalog row the DRIVER answered scores, at the weight of the service
+  // itself. Yassin, 2026-09-02: "when a user answers a question for any of the
+  // bigger services, we affect the score the same way a mechanic's feedback
+  // would — but only if the user actually has an answer for it."
+  //
+  // The "only if" is carried by `excludeFromScore`, which is checked above:
+  // `utils/mergedMaintenance.ts` clears it solely for a definite answer, so an
+  // unanswered or "not sure" row still leaves the average entirely rather than
+  // being scored as though the passage of time were a finding. That last part
+  // is what this gate originally existed to prevent, and it still does.
+  if (type === "catalog") return true;
+  return SCORING_TYPES.has(type);
+}
+
 const STATUS_SCORE: Record<MaintenanceStatus, number> = {
   on_time: 1.0,
   due_soon: 0.7,
@@ -118,6 +202,12 @@ const STATUS_SCORE: Record<MaintenanceStatus, number> = {
   overdue: 0.1,
   unknown: -1, // sentinel — excluded from average
 };
+
+// ============================================================================
+// UNKNOWN-ITEM SCORE BY MILEAGE
+// ============================================================================
+
+
 
 // ============================================================================
 // WARNING-LIGHT PENALTY
@@ -148,93 +238,15 @@ const LIGHT_PENALTY: Record<string, number> = {
  * light never dented the score. Penalty is summed per canonical light, capped
  * at 25 (the reserve floors at 0 regardless).
  */
+/** Points drained from the Warning Lights reserve by the currently-lit
+ *  dashboard lights. Exported so UI that displays the reserve uses the same
+ *  arithmetic the score does rather than a second, drifting copy. */
 export function warningLightPenalty(knownIssues?: string[]): number {
   let penalty = 0;
   for (const light of canonicalWarningLights(knownIssues)) {
     penalty += LIGHT_PENALTY[light] ?? 6;
   }
   return Math.min(penalty, 25);
-}
-
-/**
- * How full the Warning Lights reserve still is, 0–100, for ring display.
- * The reserve starts full and drains by warningLightPenalty; `reserveWeight`
- * is the director-set Warning Lights budget (default 15) so the ring tracks
- * the same number the score uses.
- */
-export function warningLightsReservePct(
-  knownIssues?: string[],
-  reserveWeight: number = 100 - DEFAULT_UPKEEP_SPLIT,
-): number {
-  if (reserveWeight <= 0) return 100;
-  const remaining = Math.max(0, reserveWeight - warningLightPenalty(knownIssues));
-  return Math.round((remaining / reserveWeight) * 100);
-}
-
-/**
- * Maintenance types that participate in the Upkeep sum. `maintenance_records.type`
- * is an unconstrained `v.string()`, so any writer can land an arbitrary type on
- * the row (`fluids`, `diagnostics`, `transmission_service`, …). Without a
- * whitelist the item flows through `buildMaintenanceItems`, its type gets cast
- * to MaintenanceType, and it deducts points on interval alone with no mechanic
- * involved — the exact "services marked Overdue when they shouldn't be" bug
- * Daniel reported (2026-08-26). The core five plus `warning` (for the
- * consolidated active-lights card, `warning-active-<scopeId>`) are the only
- * ids that legitimately score by default.
- */
-const SCORING_TYPES: ReadonlySet<string> = new Set([
-  "oil",
-  "brakes",
-  "tires",
-  "battery",
-  "inspection",
-  "warning",
-]);
-
-/**
- * Does this maintenance row contribute to the Upkeep term?
- *
- * Three kinds of row are shown to the driver but must never move the score:
- *  - recommendation cards (`sourceRecommendationId`) — the matching core or
- *    minor tile already scores that finding, and the Open-recs penalty covers
- *    it a second time.
- *  - catalog-inference rows (`excludeFromScore`) — derived from an OEM
- *    interval and an odometer alone, with no record and no mechanic behind
- *    them. Only the five core tiles score by default.
- *  - non-scoring types (`fluids`, `diagnostics`, `transmission_service`, …)
- *    — items derived from records whose `type` isn't one of the five core
- *    tiles (plus `warning` for the consolidated active-lights card). These
- *    were silently scoring at the CATEGORY_WEIGHTS["other"] weight = 10 on
- *    interval alone. The `minor_` prefix stays exempt: those are the
- *    mechanic-graded minor items in the Consolidated model, arriving as
- *    `user-minor_bf_condition`-style ids only when the mechanic actually
- *    graded them yellow/red — the whole point of that model.
- *
- * Exported so any UI that *describes* the score (the x/y maintenance counter)
- * filters on exactly the same rule the score itself uses, instead of keeping
- * a second definition that drifts. Aligned with mobile (see §04–§07 of the
- * Vehicle Health handoff + Daniel's non-core-type report, 2026-08-26).
- */
-export function isScorableMaintenanceItem(item: {
-  id?: string;
-  sourceRecommendationId?: string;
-  excludeFromScore?: boolean;
-}): boolean {
-  if (item.sourceRecommendationId || item.excludeFromScore) return false;
-  if (!item.id) return true;
-  const type = extractMaintenanceType(item.id);
-  // Mechanic-graded minor items (Consolidated model) keep their weight-10
-  // deduction — that is the whole point of the model, and the `minor_` prefix
-  // only exists on records a mechanic graded yellow or red.
-  if (type.startsWith("minor_")) return true;
-  // Catalog rows admitted (Yassin, 2026-09-02): a driver's answer on a bigger
-  // service — spark plugs, transmission, coolant, differential — moves the
-  // score the way a mechanic's grade does. Full weight, no group cap. The
-  // answered-vs-unanswered question is already settled by excludeFromScore
-  // (checked above); this just stops being a second, blunter guard on the
-  // same thing.
-  if (type === "catalog") return true;
-  return SCORING_TYPES.has(type);
 }
 
 // ============================================================================
@@ -260,9 +272,11 @@ export interface HealthScoreInput {
   pipelineHealthScore?: number | null;
   /** Whether the pipeline score is an estimate (quarterly check-in overdue) */
   pipelineIsEstimated?: boolean;
-  /** Health Points buffer (0–3). Rewards are paused for now (see Rewards
-   *  removal) — this field is kept for compatibility with existing callers
-   *  and a future rewards relaunch, but is no longer applied to the score. */
+  /** Health Points buffer (0–3). Rewards are paused for now — this field is
+   *  kept for compatibility with existing callers and a future rewards
+   *  relaunch, but is no longer applied to the score (matches the shared
+   *  backend's convex/oto/vehicleHealth.ts, which stopped passing it too —
+   *  see the "must agree" contract this file has with Oto's score). */
   hpBuffer?: number;
   /** Additive penalty (0–25) from open mechanic recommendations.
    *  Read from vehicle_owners.health_score_rec_penalty; subtracted before clamp. */
@@ -285,15 +299,12 @@ export interface HealthScoreInput {
  *      oil 20, battery 13, inspection 12, other 10) — unchanged. Categories
  *      with no item present effectively redistribute their weight because
  *      they drop out of the denominator. Items with `status: "unknown"`
- *      drop out entirely — no numerator, no denominator — per §08:
- *      mileage alone must never deduct points. The absence of a record is
- *      shown as "Estimated" in the UI with a prompt for service history,
- *      so the number stays honest without a fake deduction here.
+ *      keep their weight but score with the mileage-aware inference curve.
  *   2. The mileage/usage component is removed entirely (not just zeroed) —
  *      Otopair only scores what a driver can act on; raw mileage never
  *      mapped to a fixable item. The freed 20 points went to maintenance
  *      (65 → 85), not a proportional split.
- *   3. Rewards (`hpBuffer`) are paused — see Rewards removal.
+ *   3. Rewards (`hpBuffer`) are paused — see the HealthScoreInput comment.
  *   4. `upkeepWeight`/`openIssuePenaltyMax` are director-adjustable
  *      (defaulting to 85/15), replacing the previously-hardcoded constants
  *      for these two specifically.
@@ -313,14 +324,12 @@ export function computeVehicleHealthScore(
 
   // ── Maintenance component (category-weighted) ─────────────────
   // For each present item, score it and weight it by its category's
-  // share. Unknown items are excluded from BOTH the numerator and the
-  // denominator: mileage alone must never deduct points (§08). If we
-  // don't have a record for something, that's the "Estimated" state and
-  // the UI already prompts the driver to add history — the number itself
-  // stays honest. Categories with no item drop out of the denominator —
-  // their weight redistributes naturally across the remaining ones. An
-  // item with a precomputed `rawScore` (brakes' per-corner blend today)
-  // uses that float directly instead of the 4-value STATUS_SCORE lookup.
+  // share. Items we hold no record for ("unknown") are skipped outright —
+  // §08: mileage alone never deducts. Categories with no item drop out of
+  // the denominator as well — their weight
+  // redistributes naturally across the remaining ones. An item with a
+  // precomputed `rawScore` (brakes' per-corner blend today) uses that float
+  // directly instead of the 4-value STATUS_SCORE lookup.
   let weightedSum = 0;
   let weightTotal = 0;
   for (const item of maintenanceItems) {
@@ -333,12 +342,20 @@ export function computeVehicleHealthScore(
     // double-counting the same physical problem the matching core/minor
     // tile already scores, on top of a third time via the Open-recs cap.
     if (!isScorableMaintenanceItem(item)) continue;
+    // A type we hold no record for scores nothing and weighs nothing: it
+    // leaves the average entirely rather than being guessed at from the
+    // odometer. Mileage on its own must never cost points — it matters only
+    // through the intervals it makes due on services we DO have records for.
+    // The old behaviour ran every unknown through a mileage curve, so a
+    // high-mileage car was docked for the absence of data alone.
     if (item.status === "unknown") continue;
     const w = categoryWeightForItem(item);
     const score = item.rawScore ?? STATUS_SCORE[item.status];
     weightedSum += w * score;
     weightTotal += w;
   }
+  // No records at all → nothing is known against the driver. The UI already
+  // labels this state "Estimated" and asks for service history.
   const maintenanceAvg = weightTotal > 0 ? weightedSum / weightTotal : 1;
   const maintenancePct = maintenanceAvg * 100;
 
@@ -431,10 +448,11 @@ export function computeHealthScoreFactors(
   // they never create a weighted Upkeep item, only the core/minor tile
   // that already covers the same finding does).
   const scorableItems = maintenanceItems.filter(isScorableMaintenanceItem);
-  // §08: unknowns don't take a share of the denominator either, or every
-  // other item's contribution is understated and the breakdown stops
-  // reconciling with the headline score.
+  const knownCount = scorableItems.filter((i) => i.status !== "unknown").length;
   let weightTotal = 0;
+  // Same set the score weights: unknowns are excluded there, so counting them
+  // here would give every other item a smaller share than it really has and
+  // the breakdown would stop reconciling with the headline number.
   for (const item of scorableItems) {
     if (item.status === "unknown") continue;
     weightTotal += categoryWeightForItem(item);
@@ -456,11 +474,6 @@ export function computeHealthScoreFactors(
     // is swallowed by the `pts <= 0` guard — but only by accident, which is
     // how it would silently regress. This function's contract is that the
     // breakdown reconciles with the headline; honour it deliberately.
-    //
-    // DO NOT reach for excludeFromScore here: weightTotal only accumulates
-    // for included items, so excluding a held item removes its weight from
-    // the denominator and redistributes it across every other item, changing
-    // their shares. A held item must stay in the denominator at factor 1.00.
     if (item.factorApplied === 1 && item.status !== "on_time") continue;
     if (item.status === "on_time") {
       // Headroom above baseline 0.5 — what the on-time status "earns" you.
@@ -484,10 +497,9 @@ export function computeHealthScoreFactors(
     }
   }
 
-  // §08: no "Service history pending" negative any more. Mileage alone
-  // must never deduct points — that state is already labelled "Estimated"
-  // in the UI with a prompt for service history, so the number stays honest
-  // without a fake deduction here.
+  // Unknowns are deliberately absent from both buckets now. They cost
+  // nothing, so listing them under "what's hurting" would report a deduction
+  // the score does not apply.
 
   // ── Warning lights (warningLightsWeight reserve, minus penalty) ──
   // Same canonical, format-agnostic read as warningLightPenalty so the

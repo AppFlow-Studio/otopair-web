@@ -1,20 +1,85 @@
 "use client";
 
-import { SignUp } from "@clerk/nextjs";
+import { useEffect, useState } from "react";
+import { SignUp, useUser } from "@clerk/nextjs";
+import { useMutation } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import { useRouter } from "next/navigation";
+import { CheckCircle2, Loader2 } from "lucide-react";
 
 export function ClaimSignUp({
+  token,
   email,
   firstName,
   shopName,
   vehicleSummary,
   vehicleNeedsVin = false,
 }: {
+  token: string;
   email: string;
   firstName: string;
   shopName: string;
   vehicleSummary: string;
   vehicleNeedsVin?: boolean;
 }) {
+  const { isSignedIn, isLoaded } = useUser();
+  const claimByToken = useMutation(api.walkin_claims.claimByToken);
+  const router = useRouter();
+  const [claiming, setClaiming] = useState(false);
+  const [claimed, setClaimed] = useState(false);
+
+  useEffect(() => {
+    if (isLoaded && isSignedIn && !claiming && !claimed) {
+      setClaiming(true);
+      claimByToken({ token })
+        .then(() => {
+          setClaimed(true);
+          setClaiming(false);
+          setTimeout(() => {
+            router.push(`/t/${token}`);
+          }, 1500);
+        })
+        .catch((err) => {
+          console.error("Claim error:", err);
+          setClaiming(false);
+        });
+    }
+  }, [isLoaded, isSignedIn, token, claiming, claimed, claimByToken, router]);
+
+  if (isLoaded && isSignedIn) {
+    return (
+      <div className="max-w-md w-full bg-white rounded-xl shadow p-8 text-center">
+        {claiming ? (
+          <>
+            <Loader2 className="h-8 w-8 animate-spin mx-auto text-blue-600 mb-4" />
+            <h1 className="text-xl font-semibold text-gray-900">Connecting your vehicle...</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Merging your service history into your account.
+            </p>
+          </>
+        ) : claimed ? (
+          <>
+            <CheckCircle2 className="h-10 w-10 text-emerald-500 mx-auto mb-4" />
+            <h1 className="text-xl font-semibold text-gray-900">Vehicle Added!</h1>
+            <p className="mt-2 text-sm text-gray-600">
+              Your service history has been connected. Taking you to your tracker...
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-gray-600">Taking you to your tracker...</p>
+            <a
+              href={`/t/${token}`}
+              className="mt-4 inline-block px-6 py-2.5 rounded-lg bg-blue-600 text-white font-medium"
+            >
+              Go to Tracker
+            </a>
+          </>
+        )}
+      </div>
+    );
+  }
+
   const greeting = firstName ? `Welcome, ${firstName}` : "Welcome to Otopair";
   const subline = shopName
     ? `Your account from ${shopName} is ready.`
@@ -41,12 +106,13 @@ export function ClaimSignUp({
           </p>
         ) : null}
         <p className="mt-3 text-xs text-gray-500">
-          Sign up below and we'll connect your service history automatically.
+          Sign up below and we&apos;ll connect your service history automatically.
         </p>
       </div>
 
       <SignUp
         initialValues={email ? { emailAddress: email } : undefined}
+        fallbackRedirectUrl={`/claim/${token}`}
       />
     </div>
   );

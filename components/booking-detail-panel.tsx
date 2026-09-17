@@ -23,6 +23,7 @@ import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
 import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { BookingMessagesDrawer } from "@/components/messages/booking-messages-drawer";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import {
@@ -42,6 +43,7 @@ import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
 import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -529,7 +531,7 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
         ) : null}
       </div>
       <div className="text-sm font-semibold">
-        {job.recommendedServiceName ?? "Recommended service"}
+        {formatServiceDisplayName(job.recommendedServiceName) || "Recommended service"}
       </div>
       {job.recommendedServiceNote ? (
         <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
@@ -688,6 +690,12 @@ export interface JobDetailData {
     new_status: string;
     reason?: string;
   }>;
+  latestLifecycleEvent?: {
+    status: string;
+    reason: string | null;
+    actor: "customer" | "shop_member" | "unknown";
+    actorName: string | null;
+  } | null;
   // Reschedule fields
   previousScheduledDate?: string | null;
   previousScheduledTime?: string | null;
@@ -1832,7 +1840,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     /* ---- Render ---- */
 
     const title = job
-      ? `${job.serviceNames.join(", ")} — ${job.customerName}`
+      ? `${job.serviceNames.map(formatServiceDisplayName).join(", ")} — ${job.customerName}`
       : "Booking Detail";
 
     // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
@@ -2203,7 +2211,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   >
                     <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                        {job.serviceNames.join(", ")}
+                        {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                         {job.customerName ? ` · ${job.customerName}` : ""}
                       </p>
                       {/* Renders only when this booking's car is on a placeholder
@@ -2731,19 +2739,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
         />
 
-        <MultiPointInspectionDialog
+        <BookingWorkflowGuard
+          open={showPrejobDialog}
+          booking={job}
+          allowedStatuses={[inspectionPhase === "mpi" ? "in_progress" : "vehicle_at_shop"]}
+          onAcknowledge={() => setShowPrejobDialog(false)}
+        >
+          <MultiPointInspectionDialog
           open={showPrejobDialog}
           bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
               : ""
           }
-          bookingServices={job?.serviceNames ?? []}
+          bookingServices={job?.serviceNames?.map(formatServiceDisplayName) ?? []}
           phase={inspectionPhase}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
@@ -2751,16 +2765,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}
-          onSaveDraft={handleSaveInspectionDraft}
-        />
+            onSaveDraft={handleSaveInspectionDraft}
+          />
+        </BookingWorkflowGuard>
 
-        <DiagnosticChecklistDialog
+        <BookingWorkflowGuard
           open={showDiagnosticDialog}
+          booking={job}
+          allowedStatuses={["in_progress"]}
+          onAcknowledge={() => setShowDiagnosticDialog(false)}
+        >
+          <DiagnosticChecklistDialog
+            open={showDiagnosticDialog}
           bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2804,6 +2825,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             });
           }}
         />
+        </BookingWorkflowGuard>
 
         <RecommendServiceDrawer
           open={recommendDrawerCtx !== null}
@@ -2816,13 +2838,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onError={(msg) => setActionError(msg)}
         />
 
-        <PostJobSurveyDialog
+        <BookingWorkflowGuard
           open={showPostjobDialog}
+          booking={job}
+          allowedStatuses={["in_progress"]}
+          onAcknowledge={() => setShowPostjobDialog(false)}
+        >
+          <PostJobSurveyDialog
+            open={showPostjobDialog}
           bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2864,17 +2892,28 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           quotedParts={lockedQuoteParts}
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
-          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
-        />
+            fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+          />
+        </BookingWorkflowGuard>
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
-        <PostJobSurveyDialog
+        <BookingWorkflowGuard
           open={showPrejobEstimateDialog}
+          booking={job}
+          allowedStatuses={["pending", "pending_shop_acceptance", "vehicle_at_shop", "pending_customer_acceptance"]}
+          onAcknowledge={() => setShowPrejobEstimateDialog(false)}
+        >
+          <PostJobSurveyDialog
+            open={showPrejobEstimateDialog}
           bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2898,8 +2937,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           shopZip={(job as any)?.shopZip ?? null}
           quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
-          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
-        />
+            fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+          />
+        </BookingWorkflowGuard>
 
         {/* Mid-Job Approval — "Add unforeseen scope" while in_progress.
             The seeding logic (approved quote over catalog prefill, preserving

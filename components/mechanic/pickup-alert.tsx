@@ -19,6 +19,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Car, CheckCircle2, Loader2 } from "lucide-react";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 type PickupRequest = {
   bookingId: Id<"bookings">;
@@ -109,7 +110,7 @@ export default function MechanicPickupAlert() {
             </h2>
             <p className="mt-1 text-sm text-red-100/80">
               {takeover.customerName ?? "A customer"} is asking for it back
-              {takeover.serviceSummary ? ` · ${takeover.serviceSummary}` : ""}
+              {takeover.serviceSummary ? ` · ${formatServiceDisplayName(takeover.serviceSummary)}` : ""}
             </p>
             {takeover.reason ? (
               <p className="mt-3 rounded-xl border border-red-400/30 bg-red-500/10 px-4 py-2 text-sm text-red-100">

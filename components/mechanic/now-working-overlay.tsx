@@ -34,6 +34,7 @@ import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
 import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import type { AxlePosition } from "@/convex/lib/brakeScope";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 /** Brake-pad / rotor replacement needs an axle scope before it's added mid-job
  *  — the same services deriveTierInspectionScope requires an axle for. Matched
@@ -680,7 +681,7 @@ export function NowWorkingPane({
               >
                 <div className="min-w-0">
                   <p className="text-[13px] font-medium text-slate-100">
-                    {f.serviceName ?? f.label}
+                    {formatServiceDisplayName(f.serviceName) ?? f.label}
                   </p>
                   <p className="mt-0.5 text-[11px] text-slate-400">
                     {f.reasons.join(" · ")}
@@ -756,7 +757,7 @@ export function NowWorkingPane({
                 {job.vehicle}
               </p>
               <p className="text-sm text-slate-400">
-                {job.serviceNames.join(" · ")}
+                {job.serviceNames.map(formatServiceDisplayName).join(" · ")}
               </p>
             </div>
 
@@ -882,7 +883,7 @@ export function NowWorkingPane({
                                 : ""
                           }
                         >
-                          {svc.name}
+                          {formatServiceDisplayName(svc.name)}
                         </span>
                         {svc.status === "pending" ? (
                           <span className="ml-1 rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.06em] text-amber-200">
@@ -1240,7 +1241,7 @@ function ActiveJobsList({
                     {[job.mechanicName, job.vehicle].filter(Boolean).join(" · ")}
                   </p>
                   <p className="mt-0.5 truncate text-sm text-slate-400">
-                    {job.serviceSummary || "No services listed"}
+                    {formatServiceDisplayName(job.serviceSummary) || "No services listed"}
                   </p>
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">

@@ -124,7 +124,7 @@ export const HELP_ARTICLES: readonly HelpArticle[] = [
           never more than $20, and nothing beyond it is charged. An inspection estimate you leave
           unanswered for 24 hours is treated as declined, and the $20 is kept to pay the shop for
           the inspection it already did. If the shop cancels, or never accepts your request, the
-          hold is released in full. The <Link href="/cancellation-policy">cancellation policy</Link> has
+          hold is released in full. The <Link href="/cancellation">cancellation policy</Link> has
           every case in one table.
         </p>
       </>
@@ -258,7 +258,7 @@ export const HELP_ARTICLES: readonly HelpArticle[] = [
         </p>
         <p>
           Otopair does not warrant repairs; any parts or labor warranty is the shop&rsquo;s own. The{" "}
-          <Link href="/warranty">warranty page</Link> explains who stands behind the work after the
+          <Link href="/warranties">warranty page</Link> explains who stands behind the work after the
           dispute window closes.
         </p>
       </>
@@ -303,7 +303,7 @@ export const HELP_ARTICLES: readonly HelpArticle[] = [
           The hold is released in full. A request the shop never accepts expires on its own and the
           app invites you to rebook. One more case to know: an inspection estimate you leave
           unanswered for 24 hours is treated as declined and the deposit is kept. The{" "}
-          <Link href="/cancellation-policy">cancellation policy</Link> lists every situation in one table.
+          <Link href="/cancellation">cancellation policy</Link> lists every situation in one table.
         </p>
       </>
     ),

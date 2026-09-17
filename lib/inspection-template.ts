@@ -1549,6 +1549,68 @@ export function requiredZonesForBooking(
   ).map((zone) => zone.id);
 }
 
+/** Development-only UI helper: completes just this phase's service-required rows. */
+export function completeInspectionPhaseForDevelopment(
+  state: InspectionState,
+  context: ZoneCompletionContext,
+): InspectionState {
+  let next = state;
+  for (const zoneId of requiredZonesForBooking({ ...context, inspectionState: next })) {
+    const zone = INSPECTION_ZONES_BY_ID[zoneId];
+    const current = next.zones[zoneId] ?? defaultZoneState(zone);
+    let filled: ZoneState = {
+      ...current,
+      statuses: { ...current.statuses },
+      tri: { ...current.tri },
+      descriptors: { ...current.descriptors },
+      lights: { ...current.lights },
+    };
+
+    for (const field of zone.fields) {
+      const fieldContext = {
+        ...context,
+        inspectionState: {
+          ...next,
+          zones: { ...next.zones, [zoneId]: filled },
+        },
+      };
+      if (
+        field.phase !== context.phase ||
+        !isFieldRequiredForZone(zoneId, field.key, fieldContext)
+      ) {
+        continue;
+      }
+      if (field.type === "descriptors" && field.options.includes("none")) {
+        delete filled.statuses[field.key];
+        filled = {
+          ...filled,
+          descriptors: { ...filled.descriptors, [field.key]: ["none"] },
+        };
+      } else if (field.type === "lights") {
+        delete filled.statuses[field.key];
+        filled = {
+          ...filled,
+          lights: { ...filled.lights, [field.key]: [{ light: "none" }] },
+        };
+      } else if (!canMarkFieldUnavailable(zoneId, field.key) && field.type === "tri") {
+        delete filled.statuses[field.key];
+        filled = {
+          ...filled,
+          tri: { ...filled.tri, [field.key]: "g" },
+        };
+      } else {
+        filled.statuses[field.key] = "not_visible";
+      }
+    }
+    next = patchInspectionZone(next, zoneId, {
+      ...filled,
+      done: true,
+      donePhase: context.phase,
+    });
+  }
+  return next;
+}
+
 // ---------------------------------------------------------------------------
 // Findings (drives the summary screen + PDF)
 // ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@
 
 import { deriveDisclosedRange } from "@/lib/disclosedRange";
 import type { Service } from "@/stores/types/store.types";
+import type { ShopServicePriceMap } from "@/lib/shopServicePricing";
 
 export type ShopPriceLabel = {
   /** `$120` (fixed) · `~$90` (single estimate) · `~$70 – $86` (range) ·
@@ -33,14 +34,16 @@ export function buildShopPriceLabel(args: {
   selectedServices: Service[];
   /** Resolved per-service labor hours (empirical → book → default). */
   laborHoursMap: Map<string, number>;
-  /** serviceId → flat price (dollars) for this shop + vehicle tier. */
-  fixedPriceMap: Map<string, number>;
+  /** serviceId → fixed/range override for this shop + vehicle tier. */
+  fixedPriceMap: ShopServicePriceMap;
 }): ShopPriceLabel {
   const { shop, selectedServices, laborHoursMap, fixedPriceMap } = args;
   if (selectedServices.length === 0) return { text: null, isFixed: false };
 
   const laborRate = shop.labor_rate ?? 0;
-  const hasAnyFixed = selectedServices.some((s) => fixedPriceMap.has(s.id));
+  const hasAnyFixed = selectedServices.some(
+    (s) => fixedPriceMap.get(s.id)?.isFixed,
+  );
   const hoursFor = (s: Service) =>
     laborHoursMap.get(s.id) ?? s.default_labor_hours ?? 0;
 
@@ -56,7 +59,8 @@ export function buildShopPriceLabel(args: {
     .map((s) => ({
       serviceId: s.id,
       laborCost: laborRate * hoursFor(s),
-      partsFixed: fixedPriceMap.get(s.id) ?? 0,
+      partsLow: fixedPriceMap.get(s.id)?.lowDollars ?? 0,
+      partsHigh: fixedPriceMap.get(s.id)?.highDollars ?? 0,
     }));
   const laborCost = selectedServices.reduce(
     (sum, s) => sum + laborRate * hoursFor(s),

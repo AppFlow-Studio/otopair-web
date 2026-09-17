@@ -57,7 +57,10 @@ export function formatRange(lowDollars: number, highDollars: number): string {
 export type FixedPriceLine = {
   serviceId: string;
   laborCost: number;
-  partsFixed: number;
+  /** Legacy fixed amount. New callers should provide low/high. */
+  partsFixed?: number;
+  partsLow?: number;
+  partsHigh?: number;
 };
 
 /**
@@ -81,8 +84,12 @@ export function deriveDisclosedRange(args: {
    *  flat price isn't double-billed with labor. */
   fixedPriceLines?: FixedPriceLine[];
 }): DerivedRange {
-  const fixedParts = (args.fixedPriceLines ?? []).reduce(
-    (sum, line) => sum + Math.max(0, line.partsFixed),
+  const fixedPartsLow = (args.fixedPriceLines ?? []).reduce(
+    (sum, line) => sum + Math.max(0, line.partsLow ?? line.partsFixed ?? 0),
+    0,
+  );
+  const fixedPartsHigh = (args.fixedPriceLines ?? []).reduce(
+    (sum, line) => sum + Math.max(0, line.partsHigh ?? line.partsFixed ?? 0),
     0,
   );
   const laborReduction = (args.fixedPriceLines ?? []).reduce(
@@ -100,8 +107,8 @@ export function deriveDisclosedRange(args: {
     variablePartsLow,
     args.partsHighDollars ?? partsMid * (1 + FALLBACK_BAND_RATIO),
   );
-  const partsLow = variablePartsLow + fixedParts;
-  const partsHigh = variablePartsHigh + fixedParts;
+  const partsLow = variablePartsLow + fixedPartsLow;
+  const partsHigh = variablePartsHigh + fixedPartsHigh;
 
   const taxLow = computeBookingTax({
     laborDollars: labor,

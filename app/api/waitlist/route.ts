@@ -1,6 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { fetchMutation } from 'convex/nextjs';
+import { api } from '@/convex/_generated/api';
 import { sendWaitlistConfirmationEmail, sendWaitlistNotificationEmail } from '@/email/send';
 import { isValidEmail, normalizeEmail } from '@/lib/email';
+
+/** "Jane van Dyke" → first "Jane", last "van Dyke". */
+function splitName(name: string | undefined): { firstName?: string; lastName?: string } {
+    const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return {};
+    return { firstName: parts[0], lastName: parts.slice(1).join(' ') || undefined };
+}
+
+const str = (v: unknown, max: number) =>
+    typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : undefined;
+const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined);
+
+/**
+ * The car Oto decoded from the visitor's VIN, when there is one. Only fields
+ * of the right type are passed on, so a malformed body can't fail the save.
+ */
+function parseVehicle(raw: unknown) {
+    if (!raw || typeof raw !== 'object') return {};
+    const r = raw as Record<string, unknown>;
+    const vin = str(r.vin, 17);
+    if (!vin || !/^[A-HJ-NPR-Z0-9]{17}$/i.test(vin)) return {};
+    return Object.fromEntries(
+        Object.entries({
+            vin,
+            year: num(r.year),
+            make: str(r.make, 60),
+            model: str(r.model, 60),
+            trim: str(r.trim, 60),
+            displacementL: num(r.displacementL),
+            cylinders: num(r.cylinders),
+            fuelType: str(r.fuelType, 40),
+        }).filter(([, value]) => value !== undefined)
+    );
+}
 
 // Boroughs the coverage ladder announces but does not serve yet. The
 // borough waitlist pages (/brooklyn, /queens, /bronx, /manhattan) post one
@@ -67,6 +103,34 @@ export async function POST(request: NextRequest) {
             );
         }
 
+        // --- Every sign-up is a user ------------------------------------------
+        // Create (or refresh) the pre-signup user in Convex: a users row with
+        // no Clerk login, holding the name, email and — from Oto — the car.
+        // Signing up in the app with the same email picks it up. Until this,
+        // only Oto saved anyone; the launch-list modal, the borough waitlists
+        // and the navbar form sent two emails and stored nothing.
+        const contact = { email: cleanEmail, ...splitName(cleanName) };
+        let saved = false;
+        let claimToken: string | null = null;
+        try {
+            const stubRes = await fetchMutation(api.preSignups.createStub, { ...contact, ...parseVehicle(body.vehicle) });
+            saved = true;
+            if (stubRes?.claimToken) claimToken = stubRes.claimToken;
+        } catch (error) {
+            console.error('Failed to save the sign-up to Convex:', error);
+            // A bad vehicle payload must not cost us the person: retry with
+            // their contact details alone.
+            if (body.vehicle) {
+                try {
+                    const stubRes = await fetchMutation(api.preSignups.createStub, contact);
+                    saved = true;
+                    if (stubRes?.claimToken) claimToken = stubRes.claimToken;
+                } catch (retryError) {
+                    console.error('Failed to save the sign-up to Convex (contact only):', retryError);
+                }
+            }
+        }
+
         // Send confirmation email to user
         const confirmationResult = await sendWaitlistConfirmationEmail({
             email: cleanEmail,
@@ -90,10 +154,20 @@ export async function POST(request: NextRequest) {
             // Continue anyway - user confirmation was sent
         }
 
+        // Nothing stored and nobody emailed: don't tell them they're on the list.
+        if (!saved && !confirmationResult.success && !notificationResult.success) {
+            return NextResponse.json(
+                { error: 'Failed to process waitlist signup. Please try again.' },
+                { status: 500 }
+            );
+        }
+
         return NextResponse.json(
             {
                 success: true,
                 message: 'Successfully joined waitlist!',
+                saved,
+                claimToken,
                 confirmationSent: confirmationResult.success,
                 notificationSent: notificationResult.success,
             },

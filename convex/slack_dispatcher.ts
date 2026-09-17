@@ -25,34 +25,239 @@ import { v } from "convex/values";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
-/** category → Slack message text (mrkdwn). Fallback below for unmapped ones. */
-export const SLACK_BODY_TEMPLATES: Record<string, (payload: any) => string> = {
-  // portalStats.evaluateSlo — a windowed SLO threshold was crossed.
-  slo_breach: (p) =>
-    `:rotating_light: *SLO breach* — \`${p?.key ?? "?"}\` = ${p?.value ?? "?"} ` +
-    `(target ${p?.target ?? "?"}, alert ${p?.alert ?? "?"}) · ${p?.samples ?? 0} samples`,
+// ── Presentation helpers ─────────────────────────────────────────────────────
 
-  // v3mutations._alertEnrichmentErrorOut — a Batch 2 error-out left a config thin.
-  enrich_errorout: (p) => {
-    const q = p?.quotabilityPct != null ? String(p.quotabilityPct) : "—";
-    const batch = p?.batchId ? ` · batch \`${p.batchId}\`` : "";
+/** Where the panel lives — the CONVEX env (actions don't read Next's .env). */
+function appBase(): string {
+  return (process.env.NEXT_PUBLIC_APP_URL ?? "https://otopair.com").replace(/\/+$/, "");
+}
+
+/**
+ * Deep-link that opens Director → Enrichment → Deep-Dive already focused on this
+ * exact run. The `#enrichment` hash selects the tab; the query params are read
+ * by TabEnrichment on mount (goDeepDive). Falls back to the console root when a
+ * run/config id is missing.
+ */
+function runDeepLink(p: any): string {
+  const base = `${appBase()}/director`;
+  if (!p?.runId || !p?.vehicleConfigId) return `${base}#enrichment`;
+  const q = new URLSearchParams();
+  q.set("ddc", String(p.vehicleConfigId));
+  q.set("ddr", String(p.runId));
+  if (p.configKey) q.set("ddk", String(p.configKey));
+  return `${base}?${q.toString()}#enrichment`;
+}
+
+/** Epoch ms → "Sep 16, 2026, 3:24 PM ET" (ops team is US-eastern). */
+function fmtWhen(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms)) return "—";
+  try {
     return (
-      `:warning: *Enrichment error-out* — ${p?.label ?? "unknown vehicle"}\n` +
-      `> ${String(p?.error ?? "unknown").slice(0, 300)}\n` +
-      `quotability ${q} · ${p?.unpricedCoreRoles ?? 0} unpriced core role(s) · run \`${p?.runId ?? "?"}\`${batch}`
+      new Date(ms).toLocaleString("en-US", {
+        timeZone: "America/New_York",
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+      }) + " ET"
     );
-  },
+  } catch {
+    return new Date(ms).toISOString();
+  }
+}
 
-  // shopCustomServices — a shop's custom shortcut looks like a catalog service.
-  custom_shortcut_override: (p) =>
-    `:information_source: *Custom shortcut looks canonical* — ` +
-    `"${p?.shortcut_name ?? "?"}" ≈ ${p?.looks_like ?? "?"} (${p?.confidence ?? "?"})`,
+/** Duration ms → "1h 23m" / "4m 12s" / "45s". */
+function fmtDur(ms: number | null | undefined): string {
+  if (!ms || !Number.isFinite(ms) || ms < 0) return "—";
+  const s = Math.round(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/** Who kicked the run off, human-readable. Prefers the person, falls back to origin. */
+function fmtWho(p: any): string {
+  const TRIGGER_LABEL: Record<string, string> = {
+    new_vehicle: "New vehicle add",
+    marketplace: "Marketplace queue",
+    director_reenrich: "Director re-run",
+    director_purge: "Director purge + re-enrich",
+    claim: "Driver VIN claim",
+    mechanic: "Mechanic VIN capture",
+    heal_after_run: "Post-run heal",
+    price_sweep: "Nightly price sweep",
+    cohort_dispatch: "Nightly cohort dispatch",
+    seed: "Seed",
+  };
+  const origin = p?.trigger ? (TRIGGER_LABEL[p.trigger] ?? p.trigger) : null;
+  if (p?.actorName) {
+    const kind = p.actorKind ? ` · ${p.actorKind}` : "";
+    return `${p.actorName}${kind}${origin ? ` · ${origin}` : ""}`;
+  }
+  return origin ?? "system";
+}
+
+const SLO_DESCRIPTIONS: Record<string, string> = {
+  "slo.enrichment_success_rate_7d": "Share of enrichment runs completing (7d)",
+  "slo.avg_confidence": "Average field confidence across configs",
+  "slo.review_queue_depth": "Open items in the manual review queue",
+  "slo.spec_variance_rate_7d": "Rate of spec values disagreeing with source (7d)",
+  "slo.job_confirmation_rate_7d": "Share of jobs confirmed by the shop (7d)",
+  "slo.custom_job_exposure": "Vehicles carrying work that should be a catalog service",
 };
 
-function renderSlackText(category: string, payload: any): string {
-  const tmpl = SLACK_BODY_TEMPLATES[category];
-  if (tmpl) return tmpl(payload);
-  // Unknown category — surface it rather than dropping it. A missing template
+// ── Renderers ────────────────────────────────────────────────────────────────
+// Each returns { text, blocks? }: `text` is the required notification fallback
+// (also what non-Block-Kit clients show); `blocks` is the rich layout.
+
+type Rendered = { text: string; blocks?: any[] };
+
+/** Trim a mrkdwn string to Slack's per-section ceiling. */
+function cap(s: string, n = 2800): string {
+  return s.length > n ? s.slice(0, n - 1) + "…" : s;
+}
+
+function renderEnrichErrorout(p: any): Rendered {
+  const label = p?.label || "unknown vehicle";
+  const q = p?.quotabilityPct != null ? `${Math.round(p.quotabilityPct * 100)}%` : "—";
+  const fill = p?.fillPct != null ? `${Math.round(p.fillPct * 100)}%` : "—";
+  const url = runDeepLink(p);
+
+  // Fallback text — richer than the old one-liner, still one message.
+  const text =
+    `:warning: Enrichment error-out — ${label}\n` +
+    `${String(p?.error ?? "unknown").slice(0, 300)}\n` +
+    `who: ${fmtWho(p)} · quotability ${q} · ${p?.unpricedCoreRoles ?? 0} unpriced core role(s)\n` +
+    `View run: ${url}`;
+
+  const blocks: any[] = [
+    { type: "header", text: { type: "plain_text", text: ":warning: Enrichment error-out", emoji: true } },
+    {
+      type: "section",
+      text: { type: "mrkdwn", text: cap(`*${label}*\n> ${String(p?.error ?? "unknown").slice(0, 500)}`) },
+    },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*Who*\n${fmtWho(p)}` },
+        { type: "mrkdwn", text: `*When*\n${fmtWhen(p?.startedAt)}${p?.durationMs ? ` · ${fmtDur(p.durationMs)}` : ""}` },
+        { type: "mrkdwn", text: `*Quotability*\n${q} · fill ${fill}` },
+        { type: "mrkdwn", text: `*Unpriced core roles*\n${p?.unpricedCoreRoles ?? 0}` },
+      ],
+    },
+  ];
+
+  // Deeper issue 1 — parts gaps per service.
+  const byService: any[] = Array.isArray(p?.missingRolesByService) ? p.missingRolesByService : [];
+  if (byService.length) {
+    const lines = byService.map((s) => {
+      const miss = s.missingFitment?.length ? ` · missing fitment: \`${s.missingFitment.join("`, `")}\`` : "";
+      const unpriced = s.unpricedCount ? ` · ${s.unpricedCount} unpriced` : "";
+      return `• *${s.slug}* (${s.coreTotal} core)${unpriced}${miss}`;
+    });
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: cap(`*Parts gaps*\n${lines.join("\n")}`) } });
+  }
+
+  // Deeper issue 2 — sanity flags (rejects/flags).
+  const flags: any[] = Array.isArray(p?.sanityFlags) ? p.sanityFlags : [];
+  if (flags.length) {
+    const lines = flags.map((f) => `• \`${f.severity}\` *${f.field}* — ${f.reason}`);
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: cap(`*Sanity flags*\n${lines.join("\n")}`) } });
+  }
+
+  // Deeper issue 3 — field gaps (why fields ended empty).
+  const gaps: any[] = Array.isArray(p?.fieldGaps) ? p.fieldGaps : [];
+  if (gaps.length) {
+    const lines = gaps.map((g) => `• *${g.field}* — ${g.reason}`);
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: cap(`*Field gaps*\n${lines.join("\n")}`) } });
+  }
+
+  // Deeper issue 4 — other run errors beyond the headline.
+  const extra: string[] = Array.isArray(p?.extraErrors) ? p.extraErrors : [];
+  if (extra.length) {
+    const lines = extra.map((e) => `• ${String(e).slice(0, 200)}`);
+    blocks.push({ type: "section", text: { type: "mrkdwn", text: cap(`*Other errors*\n${lines.join("\n")}`) } });
+  }
+
+  blocks.push({
+    type: "context",
+    elements: [
+      {
+        type: "mrkdwn",
+        text: cap(
+          `run \`${p?.runId ?? "?"}\`` +
+            (p?.batchId ? ` · batch \`${p.batchId}\`` : "") +
+            (p?.configKey ? ` · config \`${p.configKey}\`` : ""),
+          900,
+        ),
+      },
+    ],
+  });
+  blocks.push({
+    type: "actions",
+    elements: [
+      {
+        type: "button",
+        text: { type: "plain_text", text: "View run on otopair.com", emoji: true },
+        url,
+        style: "primary",
+      },
+    ],
+  });
+
+  return { text, blocks: blocks.slice(0, 50) };
+}
+
+function renderSloBreach(p: any): Rendered {
+  const key = p?.key ?? "?";
+  const desc = SLO_DESCRIPTIONS[key] ?? "SLO";
+  const url = `${appBase()}/director#overview`;
+  const text =
+    `:rotating_light: SLO breach — ${desc} (\`${key}\`)\n` +
+    `value ${p?.value ?? "?"} · target ${p?.target ?? "?"} · alert ${p?.alert ?? "?"} · ${p?.samples ?? 0} samples`;
+  const blocks: any[] = [
+    { type: "header", text: { type: "plain_text", text: ":rotating_light: SLO breach", emoji: true } },
+    { type: "section", text: { type: "mrkdwn", text: `*${desc}*\n\`${key}\`` } },
+    {
+      type: "section",
+      fields: [
+        { type: "mrkdwn", text: `*Value*\n${p?.value ?? "?"}` },
+        { type: "mrkdwn", text: `*Target / alert*\n${p?.target ?? "?"} / ${p?.alert ?? "?"}` },
+        { type: "mrkdwn", text: `*Samples*\n${p?.samples ?? 0}` },
+      ],
+    },
+    {
+      type: "actions",
+      elements: [
+        { type: "button", text: { type: "plain_text", text: "Open director", emoji: true }, url },
+      ],
+    },
+  ];
+  return { text, blocks };
+}
+
+function renderCustomShortcut(p: any): Rendered {
+  return {
+    text:
+      `:information_source: *Custom shortcut looks canonical* — ` +
+      `"${p?.shortcut_name ?? "?"}" ≈ ${p?.looks_like ?? "?"} (${p?.confidence ?? "?"})`,
+  };
+}
+
+const RENDERERS: Record<string, (payload: any) => Rendered> = {
+  slo_breach: renderSloBreach,
+  enrich_errorout: renderEnrichErrorout,
+  custom_shortcut_override: renderCustomShortcut,
+};
+
+function renderSlack(category: string, payload: any): Rendered {
+  const r = RENDERERS[category];
+  if (r) return r(payload);
+  // Unknown category — surface it rather than dropping it. A missing renderer
   // is a "someone added a new slack category" signal, not a reason to go dark.
   let tail = "";
   try {
@@ -60,7 +265,7 @@ function renderSlackText(category: string, payload: any): string {
   } catch {
     tail = "(unserializable payload)";
   }
-  return `:bell: Otopair alert [${category}] ${tail}`;
+  return { text: `:bell: Otopair alert [${category}] ${tail}` };
 }
 
 export const claimPendingSlackRows = internalMutation({
@@ -125,6 +330,29 @@ export const recordSlackResult = internalMutation({
   },
 });
 
+/**
+ * Direct send test — bypasses the outbox, templates, and stale guard so you can
+ * confirm the provider + webhook actually deliver:
+ *   npx convex run slack_dispatcher:sendTestSlack '{}'
+ *   npx convex run slack_dispatcher:sendTestSlack '{"text":"hello from otopair"}'
+ * Returns { status: "sent" | "stubbed" | "failed", ... }. "stubbed" means no
+ * SLACK_WEBHOOK_URL / bot token is configured on this deployment.
+ */
+export const sendTestSlack = internalAction({
+  args: { text: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<any> => {
+    const text =
+      args.text ??
+      ":white_check_mark: Otopair Slack test — if you can read this, the dispatcher + webhook work.";
+    const result = await ctx.runAction((internal as any).lib.slack_provider.sendSlack, {
+      text,
+      category: "test",
+    });
+    console.log("[slack_dispatcher] sendTestSlack result:", JSON.stringify(result));
+    return result;
+  },
+});
+
 export const dispatchPendingSlack = internalAction({
   args: {},
   handler: async (ctx) => {
@@ -137,11 +365,12 @@ export const dispatchPendingSlack = internalAction({
     );
 
     for (const row of claimed) {
-      const text = renderSlackText(row.category, row.payload);
+      const rendered = renderSlack(row.category, row.payload);
       let result: any = { status: "failed", error: "dispatch threw" };
       try {
         result = await ctx.runAction((internal as any).lib.slack_provider.sendSlack, {
-          text,
+          text: rendered.text,
+          ...(rendered.blocks ? { blocks: rendered.blocks } : {}),
           category: row.category,
           outboxId: row.outboxId,
         });

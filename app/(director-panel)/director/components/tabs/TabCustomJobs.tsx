@@ -23,6 +23,7 @@
 
 import { useContext, useMemo, useState } from 'react'
 import { useQuery, useMutation } from 'convex/react'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
@@ -314,7 +315,7 @@ export const TabCustomJobs = () => {
                       ) : null}
                     </td>
                     <td style={tableStyles.td}>
-                      {c.canonical_suggestion?.service_name}{' '}
+                      {formatServiceDisplayName(c.canonical_suggestion?.service_name)}{' '}
                       <Badge tone={c.canonical_suggestion?.confidence === 'exact' ? 'red' : 'yellow'}>
                         {c.canonical_suggestion?.confidence}
                       </Badge>
@@ -525,7 +526,7 @@ export const TabCustomJobs = () => {
                       {c.canonical_suggestion ? (
                         <span style={{ marginLeft: 6 }}>
                           <Badge tone={c.canonical_suggestion.confidence === 'exact' ? 'red' : 'yellow'}>
-                            looks like {c.canonical_suggestion.service_name}
+                            looks like {formatServiceDisplayName(c.canonical_suggestion.service_name)}
                           </Badge>
                         </span>
                       ) : null}
@@ -602,7 +603,7 @@ export const TabCustomJobs = () => {
           statusBadge={
             detailCluster?.canonical_suggestion ? (
               <Badge tone={detailCluster.canonical_suggestion.confidence === 'exact' ? 'red' : 'yellow'}>
-                looks like {detailCluster.canonical_suggestion.service_name}
+                looks like {formatServiceDisplayName(detailCluster.canonical_suggestion.service_name)}
               </Badge>
             ) : undefined
           }
@@ -798,7 +799,7 @@ export const TabCustomJobs = () => {
           <div style={{ display: 'grid', gap: 14, fontSize: 13, lineHeight: 1.55 }}>
             <p style={{ margin: 0 }}>
               Record that <strong>&ldquo;{linking.name}&rdquo;</strong> means{' '}
-              <strong>{linking.canonical_suggestion?.service_name}</strong>.
+              <strong>{formatServiceDisplayName(linking.canonical_suggestion?.service_name)}</strong>.
             </p>
             <p style={{ margin: 0, color: 'var(--slate-600)' }}>
               From now on, a mechanic typing that name lands on the catalog service
@@ -939,7 +940,7 @@ export const TabCustomJobs = () => {
                 </p>
                 {promoting.canonical_suggestion ? (
                   <p style={{ margin: 0, color: 'var(--amber-700, #b45309)' }}>
-                    Heads up: this looks like <strong>{promoting.canonical_suggestion.service_name}</strong>{' '}
+                    Heads up: this looks like <strong>{formatServiceDisplayName(promoting.canonical_suggestion.service_name)}</strong>{' '}
                     ({promoting.canonical_suggestion.confidence}). If that&apos;s the same
                     work, alias it instead of creating a duplicate.
                   </p>

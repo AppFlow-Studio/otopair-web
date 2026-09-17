@@ -9,6 +9,7 @@ import { Badge } from '../../Primitives'
 import { LoadingBlock } from './shopsUi'
 import { can } from '@/lib/portal/capabilities'
 import type { OfferingsResult } from '@/convex/shopsOfferings'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // Services × shops offerings matrix with director toggle (shops.write).
 
@@ -87,7 +88,7 @@ export const OfferingsMatrix = () => {
                 ...catServices.map(svc => (
                   <tr key={svc.service_id} style={{ borderTop: '1px solid var(--slate-100)' }}>
                     <td style={{ padding: '5px 12px 5px 0', color: 'var(--slate-700)', whiteSpace: 'nowrap' }}>
-                      {svc.name}
+                      {formatServiceDisplayName(svc.name)}
                       {svc.offered_by.length <= 1 && (
                         <Badge tone="yellow" style={{ marginLeft: 6 }}>Gap</Badge>
                       )}
@@ -103,7 +104,7 @@ export const OfferingsMatrix = () => {
                                 setPending({ shopId: sh.id, shopName: sh.name, serviceId: svc.service_id, serviceName: svc.name, offered: !isOffered })
                                 setReason(''); setErr(null)
                               }}
-                              title={`${isOffered ? 'Disable' : 'Enable'} ${svc.name} at ${sh.name}`}
+                              title={`${isOffered ? 'Disable' : 'Enable'} ${formatServiceDisplayName(svc.name)} at ${sh.name}`}
                               style={{ border: 'none', background: 'none', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, fontSize: 14,
                                 color: isOffered ? 'var(--green-600)' : 'var(--slate-300)',
                                 fontWeight: isOffered ? 700 : 400 }}>
@@ -134,7 +135,7 @@ export const OfferingsMatrix = () => {
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {data.coverage_gaps.map(g => (
               <Badge key={g.service} tone={g.offered_by === 0 ? 'red' : 'yellow'}>
-                {g.service} ({g.offered_by === 0 ? 'no shop' : '1 shop'})
+                {formatServiceDisplayName(g.service)} ({g.offered_by === 0 ? 'no shop' : '1 shop'})
               </Badge>
             ))}
           </div>
@@ -156,7 +157,7 @@ export const OfferingsMatrix = () => {
               {pending.offered ? 'Enable' : 'Disable'} offering
             </div>
             <div style={{ fontSize: 13, color: 'var(--slate-600)', marginBottom: 16 }}>
-              <strong>{pending.serviceName}</strong> at <strong>{pending.shopName}</strong>
+              <strong>{formatServiceDisplayName(pending.serviceName)}</strong> at <strong>{pending.shopName}</strong>
             </div>
             <label style={{ fontSize: 12, fontWeight: 500, color: 'var(--slate-700)', display: 'block', marginBottom: 4 }}>
               Reason <span style={{ color: 'var(--red-500)' }}>*</span>

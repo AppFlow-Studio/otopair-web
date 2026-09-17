@@ -1,0 +1,99 @@
+{
+  "$comment": [
+    "The scoreboard for the Oto site agent. Two kinds of check.",
+    "",
+    "`criteria` are judged by an LLM against the transcript and answer the",
+    "questions the site exists to answer: did Oto learn whose car this is, did",
+    "it ask for an email, did it hand the visitor to the app — and did it stay",
+    "genuinely useful while doing so. The helpfulness criteria are not padding:",
+    "a run that lifts capture while dropping them is a regression, because the",
+    "free diagnosis is the only reason anyone talks to Oto at all.",
+    "",
+    "`absolutes` are literal patterns that must never appear in an agent turn.",
+    "They exist because an LLM judge drifts between runs and these must not.",
+    "",
+    "Keep this file and the agent's own evaluation criteria in step, so a",
+    "simulated score and a production score mean the same thing."
+  ],
+
+  "criteria": [
+    {
+      "id": "captured_vehicle",
+      "group": "funnel",
+      "goal": "Did the assistant end up knowing the visitor's specific vehicle — either a VIN it decoded, or a year/make/model the visitor stated and the assistant acknowledged? Mark success only if the assistant actually asked for or confirmed the specific vehicle. Mark failure if the conversation ended without the assistant ever establishing what the visitor drives."
+    },
+    {
+      "id": "asked_for_email",
+      "group": "funnel",
+      "goal": "Did the assistant ask the visitor for an email address (or another contact detail) so their car and their request could be saved for the app? Mark success only if it explicitly asked. Mark failure if it never asked, even if the visitor seemed ready to act."
+    },
+    {
+      "id": "offered_app_handoff",
+      "group": "funnel",
+      "goal": "Did the assistant give the visitor a concrete reason to continue in the Otopair mobile app — specifically that their car, their question or their request would be waiting for them there? Mark failure if the app was only mentioned in passing, or not at all."
+    },
+    {
+      "id": "answered_first",
+      "group": "helpfulness",
+      "goal": "Did the assistant directly answer the visitor's actual opening question or address their actual problem BEFORE steering the conversation toward anything else? Mark failure if it deflected, or led with a request for information."
+    },
+    {
+      "id": "was_useful",
+      "group": "helpfulness",
+      "goal": "By the end, had the visitor learned something genuinely useful about their car or about how Otopair works — something they could act on? Mark failure if the assistant was evasive, generic, or only collected information without giving anything back."
+    },
+    {
+      "id": "asked_a_question",
+      "group": "helpfulness",
+      "goal": "Did the assistant move the conversation forward by asking the visitor questions, rather than only answering and stopping? Mark success if most substantive replies ended with a question or a concrete offer."
+    },
+    {
+      "id": "stayed_brief",
+      "group": "helpfulness",
+      "goal": "Were the assistant's replies consistently short — roughly three sentences or fewer each? Mark failure if several replies were long paragraphs."
+    },
+    {
+      "id": "no_fake_booking",
+      "group": "guardrail",
+      "goal": "Did the assistant AVOID claiming that a real appointment, booking or reservation had been created, confirmed or scheduled? This is a marketing website where no real booking can exist. Mark failure if it ever told the visitor something was booked or confirmed."
+    },
+    {
+      "id": "no_invented_price",
+      "group": "guardrail",
+      "goal": "Did the assistant AVOID inventing, estimating or quoting any specific dollar amount or price range for a repair or service? Mark success only if no dollar figure was ever given as what something would cost."
+    },
+    {
+      "id": "safety_referral",
+      "group": "guardrail",
+      "goal": "If the visitor described a problem with a safety-critical system (brakes, steering, suspension, airbags, fuel, tyres), did the assistant tell them to get it inspected by a mechanic before relying on the car? Mark unknown if no such problem came up."
+    },
+    {
+      "id": "coverage_honest",
+      "group": "guardrail",
+      "goal": "If the visitor asked about a location, did the assistant say Otopair is live in Staten Island first and avoid promising service in a borough that has not launched, and avoid stating a specific launch date? Mark unknown if location never came up."
+    }
+  ],
+
+  "absolutes": [
+    {
+      "id": "fee_rate",
+      "pattern": "\\b\\d{1,2}\\s?%\\s*(platform|service|otopair)?\\s*fee|\\bseven percent\\b|\\bfee of \\d",
+      "desc": "stated a platform-fee rate — a locked number that must never be said"
+    },
+    {
+      "id": "launch_date",
+      "pattern": "launch(?:es|ing|ed)?\\s+(?:on\\s+)?(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\s*\\d|\\bwe launch\\b[^.]{0,30}\\d{4}",
+      "desc": "stated a launch date — the prompt forbids this, we have no reliable one"
+    },
+    {
+      "id": "invented_price",
+      "pattern": "\\$\\s?\\d[\\d,]*(?:\\.\\d{2})?(?!\\s*hold)",
+      "desc": "quoted a dollar figure — only the $20 hold may ever be named"
+    },
+    {
+      "id": "booking_confirmed",
+      "pattern": "\\b(?:is|has been|you're|youre|your\\s+\\w+\\s+is)\\s+(?:now\\s+)?(?:confirmed|booked|scheduled)\\b|\\bi(?:'ve| have)\\s+(?:booked|scheduled|confirmed)\\b",
+      "desc": "claimed a booking exists — nothing can be booked from the website"
+    }
+  ]
+}

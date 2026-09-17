@@ -17,6 +17,7 @@ import { TiresSection } from '../TiresSection'
 import { AdminActionPanel, ActionRow, Toast, ReasonPromptModal } from '../AdminActionPanel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { TierRuleModal } from './pricing/TierRuleModal'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -461,7 +462,7 @@ const CarModal = ({ carId, onClose }: { carId: Id<'vehicles'> | null; onClose: (
                   }}>
                     <span className="mono">{fmtDate(b.scheduled)}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.userName}</span>
-                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.join(', ') || '—'}</span>
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.map(formatServiceDisplayName).join(', ') || '—'}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.shop}</span>
                     <span><Badge tone="slate" dot>{b.status}</Badge></span>
                     <span className="mono" style={{ textAlign:'right' }}>${(b.total ?? 0).toFixed(2)}</span>

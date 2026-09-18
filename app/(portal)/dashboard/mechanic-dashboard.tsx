@@ -884,6 +884,8 @@ export default function MechanicDashboard() {
           shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
           shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
           shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
+          shopPricedServiceLines={(selectedWorkflowBooking as any)?.shopPricedServiceLines ?? null}
+          dynamicServiceNames={(selectedWorkflowBooking as any)?.dynamicServiceNames ?? null}
         />
       </BookingWorkflowGuard>
 
@@ -931,6 +933,8 @@ export default function MechanicDashboard() {
           shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
           shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
           shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
+          shopPricedServiceLines={(selectedWorkflowBooking as any)?.shopPricedServiceLines ?? null}
+          dynamicServiceNames={(selectedWorkflowBooking as any)?.dynamicServiceNames ?? null}
         />
       </BookingWorkflowGuard>
 

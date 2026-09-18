@@ -51,6 +51,7 @@ import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import {
   Select,
   SelectItem,
@@ -4295,7 +4296,7 @@ function SpecConfirmControl({
     <button
       type="button"
       onClick={onConfirm}
-      className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+      className="inline-flex items-center gap-1 cursor-pointer rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
     >
       <Check className="h-3.5 w-3.5" />
       Confirm spec
@@ -5098,9 +5099,18 @@ function PartsVerifyRow({
       </div>
 
       {item.current ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          Current guess: {item.current.name} · {item.current.oemNumber} (
-          {Math.round(item.current.confidence * 100)}% confidence)
+        <p className="mb-2 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+          <span>
+            Current guess: {item.current.name}
+            {item.current.oemNumber ? " ·" : ""}
+          </span>
+          {item.current.oemNumber ? (
+            <CopyableOemNumber
+              value={item.current.oemNumber}
+              className="text-[11px] text-muted-foreground"
+            />
+          ) : null}
+          <span>({Math.round(item.current.confidence * 100)}% confidence)</span>
         </p>
       ) : null}
 

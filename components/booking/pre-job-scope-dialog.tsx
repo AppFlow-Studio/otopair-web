@@ -111,6 +111,8 @@ export default function PreJobScopeDialog({
       shopSetBandLowCents={(j as any).shopSetBandLowCents ?? null}
       shopSetBandHighCents={(j as any).shopSetBandHighCents ?? null}
       shopSetBaseDefaultCents={(j as any).shopSetBaseDefaultCents ?? null}
+      shopPricedServiceLines={(j as any).shopPricedServiceLines ?? null}
+      dynamicServiceNames={(j as any).dynamicServiceNames ?? null}
     />
   );
 }

@@ -640,6 +640,8 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  /** Per-service agreed labor hours, matched to `serviceNames` by name. */
+  perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   tireSpecs?: {
     size: string;
     type: string;
@@ -2897,6 +2899,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
             shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
             shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            shopPricedServiceLines={(job as any)?.shopPricedServiceLines ?? null}
+            dynamicServiceNames={(job as any)?.dynamicServiceNames ?? null}
           />
         </BookingWorkflowGuard>
 
@@ -2942,6 +2946,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
             shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
             shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            shopPricedServiceLines={(job as any)?.shopPricedServiceLines ?? null}
+            dynamicServiceNames={(job as any)?.dynamicServiceNames ?? null}
           />
         </BookingWorkflowGuard>
 

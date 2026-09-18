@@ -17,8 +17,8 @@ import {
   Camera,
   Car,
   Check,
+  ChevronDown,
   ChevronRight,
-  Copy,
   Info,
   Loader2,
   Lock,
@@ -30,6 +30,7 @@ import {
   CalendarClock,
   Gauge,
   Trash2,
+  Wrench,
   X,
 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
@@ -85,6 +86,7 @@ import {
 import type { Id } from "@/convex/_generated/dataModel";
 import ServiceSuggestions from "@/components/booking/service-suggestions";
 import { cn } from "@/lib/utils";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
 import {
   BRAKE_PAD_BRAND_OPTIONS,
@@ -338,6 +340,10 @@ type StepKey =
   | "time_check"
   | "time_reason"
   | "mileage"
+  // Per-service set-price step (estimate cycles with ≥1 shop RANGE service):
+  // one labeled, collapsible price row per shop-priced service, shown before
+  // the parts step. See ServiceRangePricingStep.
+  | "service_prices"
   | "parts"
   | "labor"
   | "difficulty"
@@ -354,6 +360,18 @@ type StepKey =
   | "more_gate"
   | "flag"
   | "summary";
+
+/** Per-service shop-priced line for the "Set service prices" step. All-in bands
+ *  (cents, incl. tax + fee) mirror `getJobDetail.shopPricedServiceLines`. A
+ *  fixed line has all_in_low_cents == all_in_high_cents. */
+type ShopPricedServiceLine = {
+  service_id: string;
+  service_name: string;
+  is_fixed: boolean;
+  all_in_low_cents: number;
+  all_in_high_cents: number;
+  all_in_default_cents: number;
+};
 
 const generateUploadUrlRef = makeFunctionReference<"mutation">(
   "bookings:generatePostjobPhotoUploadUrl"
@@ -835,52 +853,6 @@ function computeEstimateTotals(args: {
   };
 }
 
-/**
- * Part number rendered as a click-to-copy control. Mechanics read these off to
- * order/look up parts, so make them one-tap copyable instead of hand-typing.
- * Falls back to a plain "—" when there's no number. Copy failures (blocked
- * clipboard / insecure context) degrade silently — the text stays selectable.
- */
-function CopyableOemNumber({
-  value,
-  className,
-}: {
-  value: string;
-  className?: string;
-}) {
-  const [copied, setCopied] = useState(false);
-  const canCopy = value.trim().length > 0;
-  if (!canCopy) return <span className={className}>—</span>;
-  return (
-    <button
-      type="button"
-      onClick={async (e) => {
-        e.stopPropagation();
-        try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          window.setTimeout(() => setCopied(false), 1200);
-        } catch {
-          /* clipboard unavailable — leave the text selectable */
-        }
-      }}
-      title={copied ? "Copied!" : "Copy part number"}
-      aria-label={`Copy part number ${value}`}
-      className={cn(
-        "group inline-flex max-w-full items-center gap-1 text-left font-mono tabular-nums transition-colors hover:text-primary",
-        className,
-      )}
-    >
-      <span className="truncate">{value}</span>
-      {copied ? (
-        <Check className="h-3 w-3 shrink-0 text-emerald-600" />
-      ) : (
-        <Copy className="h-3 w-3 shrink-0 text-muted-foreground/50 transition-opacity group-hover:text-primary" />
-      )}
-    </button>
-  );
-}
-
 function makePhotoId() {
   return `photo_${Math.random().toString(36).slice(2)}_${Date.now()}`;
 }
@@ -926,6 +898,8 @@ export default function PostJobSurveyDialog({
   shopSetBandLowCents,
   shopSetBandHighCents,
   shopSetBaseDefaultCents,
+  shopPricedServiceLines,
+  dynamicServiceNames,
 }: {
   open: boolean;
   bookingId?: string | null;
@@ -1007,6 +981,14 @@ export default function PostJobSurveyDialog({
    *  `lockBilling`, the post-job parts step renders read-only and shows the
    *  parts → labor → tax/fee → agreed-total flow instead of editable fields. */
   lockedQuote?: LockedQuote | null;
+  /** Per-service breakdown of the shop-set band (from
+   *  `getJobDetail.shopPricedServiceLines`). Drives the per-service "Set service
+   *  prices" step: one labeled set-price row per shop-priced service. Fixed
+   *  lines carry all_in_low == all_in_high. */
+  shopPricedServiceLines?: ShopPricedServiceLine[] | null;
+  /** Names of services priced dynamically (not shop-priced) — rendered in the
+   *  pricing step as a "priced from the parts & labor you confirm next" note. */
+  dynamicServiceNames?: string[] | null;
 }) {
   return (
     <PostJobSurveyDialogBody
@@ -1039,6 +1021,8 @@ export default function PostJobSurveyDialog({
       shopSetBandLowCents={shopSetBandLowCents ?? null}
       shopSetBandHighCents={shopSetBandHighCents ?? null}
       shopSetBaseDefaultCents={shopSetBaseDefaultCents ?? null}
+      shopPricedServiceLines={shopPricedServiceLines ?? null}
+      dynamicServiceNames={dynamicServiceNames ?? null}
     />
   );
 }
@@ -1072,6 +1056,8 @@ function PostJobSurveyDialogBody({
   shopSetBandLowCents,
   shopSetBandHighCents,
   shopSetBaseDefaultCents,
+  shopPricedServiceLines,
+  dynamicServiceNames,
 }: {
   open: boolean;
   bookingId: string | null;
@@ -1109,6 +1095,8 @@ function PostJobSurveyDialogBody({
   shopSetBandLowCents: number | null;
   shopSetBandHighCents: number | null;
   shopSetBaseDefaultCents: number | null;
+  shopPricedServiceLines: ShopPricedServiceLine[] | null;
+  dynamicServiceNames: string[] | null;
 }) {
   // Phase 2 — Pre-Job Approval mutation handles (only invoked when cycle is set).
   const submitPreJobEstimate = useMutation(
@@ -1136,6 +1124,68 @@ function PostJobSurveyDialogBody({
     shopSetBandLowCents != null &&
     shopSetBandHighCents != null &&
     shopSetBandHighCents > shopSetBandLowCents;
+
+  // Per-service set-price state for the "Set service prices" step. Keyed by
+  // service_id, seeded from each shop-priced line's all-in default. The mechanic
+  // sets one price per range service (fixed lines stay at their contract price);
+  // the aggregate `shopSetBaseCents` submitted to the server is their sum, so the
+  // existing submit path + running-total bar are unchanged. For the common
+  // single-range case a line's band equals the aggregate band (server-computed),
+  // so the sum is exact. See ServiceRangePricingStep + computeShopSetServiceLines.
+  const serviceLines = useMemo<ShopPricedServiceLine[]>(() => {
+    if (shopPricedServiceLines && shopPricedServiceLines.length > 0) {
+      return shopPricedServiceLines;
+    }
+    // Fallback for a job payload without per-service lines (older cache / server
+    // not yet redeployed): synthesize one line from the aggregate band so the
+    // step still lets the price be set (equivalent to the old single input, now
+    // labeled). Loses per-service split, but never strands the price.
+    if (
+      hasShopPriceRange &&
+      shopSetBandLowCents != null &&
+      shopSetBandHighCents != null
+    ) {
+      return [
+        {
+          service_id: "__aggregate__",
+          service_name: prefillData?.serviceName ?? "Service",
+          is_fixed: shopSetBandHighCents <= shopSetBandLowCents,
+          all_in_low_cents: shopSetBandLowCents,
+          all_in_high_cents: shopSetBandHighCents,
+          all_in_default_cents:
+            shopSetBaseDefaultCents ??
+            Math.round((shopSetBandLowCents + shopSetBandHighCents) / 2),
+        },
+      ];
+    }
+    return [];
+  }, [
+    shopPricedServiceLines,
+    hasShopPriceRange,
+    shopSetBandLowCents,
+    shopSetBandHighCents,
+    shopSetBaseDefaultCents,
+    prefillData?.serviceName,
+  ]);
+  const [serviceSetCents, setServiceSetCents] = useState<
+    Record<string, number>
+  >(() =>
+    Object.fromEntries(
+      serviceLines.map((l) => [l.service_id, l.all_in_default_cents]),
+    ),
+  );
+  // Fold the per-service picks into the single aggregate base the submit path
+  // reads. Runs whenever a per-service value changes (or the lines resolve after
+  // first render). No-op unless the booking is shop-set with per-service lines,
+  // so pure fixed / dynamic bookings keep their existing seeding untouched.
+  useEffect(() => {
+    if (serviceLines.length === 0) return;
+    const sum = serviceLines.reduce(
+      (s, l) => s + (serviceSetCents[l.service_id] ?? l.all_in_default_cents),
+      0,
+    );
+    setShopSetBaseCents(sum);
+  }, [serviceLines, serviceSetCents]);
 
   // Live workflow state for the post-submit status panel. Subscribes only
   // when cycle is set — the legacy post-job actuals path doesn't need it.
@@ -1801,6 +1851,13 @@ function PostJobSurveyDialogBody({
     if (!isEstimateCycle) {
       list.push("mileage");
     }
+    // Per-service set-price step (estimate cycles only): when the booking has a
+    // shop RANGE service, the front desk sets each range service's price here —
+    // labeled and with a breakdown — BEFORE confirming parts. Skipped for pure
+    // fixed or purely dynamic bookings (showShopSetInput is false).
+    if (isEstimateCycle && showShopSetInput) {
+      list.push("service_prices");
+    }
     if (requiresParts || (prefillData?.suggestedParts?.length ?? 0) > 0 || isEstimateCycle) {
       list.push("parts");
     }
@@ -1849,6 +1906,8 @@ function PostJobSurveyDialogBody({
     // The custom-outcomes step appears only for bookings with off-catalog lines,
     // and this query resolves after first render.
     customJobs?.length,
+    // Gates the per-service "Set service prices" step.
+    showShopSetInput,
   ]);
 
   // ─── Estimate-cycle running total ──────────────────────────────────────
@@ -2936,6 +2995,10 @@ function PostJobSurveyDialogBody({
             isTireService={tireServiceActive || parts.some((p) => isTirePartRow(p))}
             tireOemSizes={tireOemSizes}
             tirePrefill={prefillData?.prejobTires ?? null}
+            shopPricedServiceLines={serviceLines}
+            serviceSetCents={serviceSetCents}
+            setServiceSetCents={setServiceSetCents}
+            dynamicServiceNames={dynamicServiceNames ?? []}
           />
 
           {error ? (
@@ -2945,23 +3008,10 @@ function PostJobSurveyDialogBody({
           ) : null}
         </div>
 
-        {/* Set-price control for a RANGE job — shown on every estimate step
-            (incl. "Confirm parts to use") so the front desk can set the final
-            price wherever they are, not only on the labor step. The band is
-            already the customer-agreed range; a value inside it auto-approves. */}
-        {isEstimateCycle && showShopSetInput && currentStep !== "summary" ? (
-          <div className="border-t border-primary/10 bg-primary/[0.02] px-5 py-3 sm:px-10">
-            <div className="mx-auto w-full max-w-xl">
-              <ShopSetPriceInput
-                lowCents={shopSetBandLowCents as number}
-                highCents={shopSetBandHighCents as number}
-                valueCents={shopSetBaseCents}
-                onChangeCents={setShopSetBaseCents}
-                label="Set the price (within the quoted range)"
-              />
-            </div>
-          </div>
-        ) : null}
+        {/* The set-price control now lives in its own per-service "Set service
+            prices" step (ServiceRangePricingStep), rendered before the parts
+            step — so each range service's price is labeled and shown with its
+            breakdown, rather than one anonymous band pinned across every step. */}
 
         {/* Running total bar — only when cycle is set. Hidden on the summary
             step (which renders its own full breakdown). Two modes:
@@ -3174,6 +3224,192 @@ function canAdvance(
   return true;
 }
 
+/**
+ * Per-service "Set service prices" step (estimate cycles with a shop RANGE
+ * service). One collapsible row per shop-priced service: the header names the
+ * service + shows its range, a bounded input sets its price, and expanding
+ * reveals that service's parts + a labor note. Fixed lines render read-only
+ * ("Fixed"); dynamic services are listed separately as "priced from parts &
+ * labor". The per-service picks are summed into the single `shopSetBaseCents`
+ * the parent submits (see the effect in the body).
+ */
+function ServiceRangePricingStep({
+  lines,
+  serviceSetCents,
+  setServiceSetCents,
+  dynamicServiceNames,
+  parts,
+  estimatedLaborMinutes,
+}: {
+  lines: ShopPricedServiceLine[];
+  serviceSetCents: Record<string, number>;
+  setServiceSetCents: React.Dispatch<
+    React.SetStateAction<Record<string, number>>
+  >;
+  dynamicServiceNames: string[];
+  parts: PartRowState[];
+  laborRateCents: number;
+  estimatedLaborMinutes: number | null;
+}) {
+  const [expanded, setExpanded] = useState<Set<string>>(() => {
+    // Auto-expand the first range service so its breakdown is visible up front.
+    const firstRange = lines.find((l) => !l.is_fixed);
+    return new Set(firstRange ? [firstRange.service_id] : []);
+  });
+  const toggle = (id: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const fmt = (cents: number) => `$${(Math.max(0, cents) / 100).toFixed(2)}`;
+  // Booking-level labor is only meaningfully attributable to one service when
+  // there's a single shop-priced line; otherwise just note it's included.
+  const soleLine = lines.length === 1;
+
+  return (
+    <QuestionScreen
+      eyebrow="Estimate"
+      question="Set service prices"
+      hint="The customer already agreed to any price inside each range. Set each range service, then confirm the parts you're using."
+    >
+      <div className="space-y-3">
+        {lines.map((line) => {
+          const isOpen = expanded.has(line.service_id);
+          const chosen =
+            serviceSetCents[line.service_id] ?? line.all_in_default_cents;
+          const serviceParts = parts.filter(
+            (p) => p.service_id === line.service_id && !p.not_used,
+          );
+          return (
+            <div
+              key={line.service_id}
+              className="overflow-hidden rounded-2xl border border-primary/12 bg-card"
+            >
+              <button
+                type="button"
+                onClick={() => toggle(line.service_id)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/40"
+              >
+                <span className="min-w-0 flex-1 truncate text-[12px] font-semibold uppercase tracking-[0.08em] text-foreground">
+                  {line.service_name}
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-[11px] font-medium tabular-nums text-muted-foreground">
+                  {line.is_fixed
+                    ? "Fixed"
+                    : `${fmt(line.all_in_low_cents)} – ${fmt(line.all_in_high_cents)}`}
+                  <ChevronDown
+                    className={cn(
+                      "h-4 w-4 transition-transform",
+                      isOpen ? "" : "-rotate-90",
+                    )}
+                  />
+                </span>
+              </button>
+
+              <div className="border-t border-primary/10 px-4 py-3">
+                <ShopSetPriceInput
+                  lowCents={line.all_in_low_cents}
+                  highCents={line.all_in_high_cents}
+                  valueCents={chosen}
+                  onChangeCents={(cents) =>
+                    setServiceSetCents((prev) => ({
+                      ...prev,
+                      [line.service_id]: cents,
+                    }))
+                  }
+                  label={
+                    line.is_fixed ? "Price" : "Set price (within range)"
+                  }
+                />
+              </div>
+
+              {isOpen ? (
+                <div className="space-y-2 border-t border-primary/10 bg-muted/20 px-4 py-3 text-[12px]">
+                  <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                    Parts
+                  </p>
+                  {serviceParts.length > 0 ? (
+                    <ul className="space-y-1">
+                      {serviceParts.map((p, i) => {
+                        const qty = p.quantity ?? 1;
+                        const lineCost = (Number(p.cost) || 0) * qty;
+                        return (
+                          <li
+                            key={`${p.oem_number}-${i}`}
+                            className="flex items-center justify-between gap-3"
+                          >
+                            <span className="min-w-0 truncate text-foreground">
+                              {p.part_name || "Part"}
+                              {qty > 1 ? ` ×${qty}` : ""}
+                            </span>
+                            <span className="shrink-0 tabular-nums text-muted-foreground">
+                              ${lineCost.toFixed(2)}
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  ) : (
+                    <p className="text-muted-foreground">
+                      Parts are confirmed in the next step.
+                    </p>
+                  )}
+                  <div className="flex items-center gap-1.5 pt-1 text-muted-foreground">
+                    <Wrench className="h-3.5 w-3.5" />
+                    <span>
+                      Labor
+                      {soleLine && estimatedLaborMinutes
+                        ? ` ~${(estimatedLaborMinutes / 60).toFixed(1)}h`
+                        : ""}{" "}
+                      is included in this price.
+                    </span>
+                  </div>
+                  {!line.is_fixed ? (
+                    <p className="text-muted-foreground">
+                      Agreed range:{" "}
+                      <span className="tabular-nums text-foreground">
+                        {fmt(line.all_in_low_cents)} –{" "}
+                        {fmt(line.all_in_high_cents)}
+                      </span>
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+
+        {dynamicServiceNames.length > 0 ? (
+          <div className="rounded-2xl border border-dashed border-primary/15 bg-muted/20 px-4 py-3">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+              Priced from parts &amp; labor
+            </p>
+            <ul className="mt-1.5 space-y-1">
+              {dynamicServiceNames.map((name) => (
+                <li
+                  key={name}
+                  className="flex items-start gap-2 text-[12px] text-foreground"
+                >
+                  <span className="mt-1.5 h-1 w-1 shrink-0 rounded-full bg-muted-foreground/60" />
+                  <span>
+                    <span className="font-medium">{name}</span>{" "}
+                    <span className="text-muted-foreground">
+                      — priced from the parts &amp; labor you confirm next.
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </QuestionScreen>
+  );
+}
+
 function StepContent(props: {
   step: StepKey;
   bookingId: string | null;
@@ -3323,8 +3559,28 @@ function StepContent(props: {
     front?: { brand?: string | null; model?: string | null } | null;
     rear?: { brand?: string | null; model?: string | null } | null;
   } | null;
+  /** Per-service shop-priced lines + the mechanic's per-service picks, for the
+   *  "Set service prices" step. `dynamicServiceNames` are shown as a note. */
+  shopPricedServiceLines: ShopPricedServiceLine[];
+  serviceSetCents: Record<string, number>;
+  setServiceSetCents: React.Dispatch<
+    React.SetStateAction<Record<string, number>>
+  >;
+  dynamicServiceNames: string[];
 }) {
   switch (props.step) {
+    case "service_prices":
+      return (
+        <ServiceRangePricingStep
+          lines={props.shopPricedServiceLines}
+          serviceSetCents={props.serviceSetCents}
+          setServiceSetCents={props.setServiceSetCents}
+          dynamicServiceNames={props.dynamicServiceNames}
+          parts={props.parts}
+          laborRateCents={props.laborRateCents}
+          estimatedLaborMinutes={props.estimatedLaborMinutes}
+        />
+      );
     case "time_check":
       return (
         <QuestionScreen

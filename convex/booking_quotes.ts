@@ -593,25 +593,114 @@ export function computeShopSetBand(args: {
   // subset alone, mirroring the added-scope path's isolated basis.
   const partsLowCents = lines.reduce((s, l) => s + l.price_low_cents, 0);
   const partsHighCents = lines.reduce((s, l) => s + l.price_high_cents, 0);
-  const allInCents = (partsCents: number) => {
-    const taxDollars =
-      computeBookingTax({
-        laborDollars: 0,
-        partsDollars: partsCents / 100,
-        state: args.shopState,
-        zip: args.shopZip,
-      }).taxDollars ?? 0;
-    const feeDollars = computePlatformFeeDollars(partsCents / 100);
-    return (
-      partsCents +
-      Math.round(taxDollars * 100) +
-      Math.max(0, Math.round(feeDollars * 100))
-    );
-  };
+  const allInCents = (partsCents: number) =>
+    shopLineAllInCents({
+      partsCents,
+      shopState: args.shopState,
+      shopZip: args.shopZip,
+    });
   const lowCents = allInCents(partsLowCents);
   const highCents = Math.max(allInCents(partsHighCents), lowCents);
   const defaultCents = Math.round((lowCents + highCents) / 2);
   return { lowCents, highCents, defaultCents };
+}
+
+/**
+ * All-in (parts + tax + fee) cents for a shop-priced amount whose labor is
+ * folded into the flat line (laborDollars = 0). Extracted so `computeShopSetBand`
+ * (the aggregate band) and `computeShopSetServiceLines` (its per-service
+ * breakdown) are computed on the identical tax/fee basis and reconcile.
+ */
+export function shopLineAllInCents(args: {
+  partsCents: number;
+  shopState: string | null;
+  shopZip: string | null;
+}): number {
+  const taxDollars =
+    computeBookingTax({
+      laborDollars: 0,
+      partsDollars: args.partsCents / 100,
+      state: args.shopState,
+      zip: args.shopZip,
+    }).taxDollars ?? 0;
+  const feeDollars = computePlatformFeeDollars(args.partsCents / 100);
+  return (
+    args.partsCents +
+    Math.round(taxDollars * 100) +
+    Math.max(0, Math.round(feeDollars * 100))
+  );
+}
+
+/** Per-service all-in band for a single shop-priced line, for the mechanic's
+ *  per-service set-price UI. `all_in_*` are on the same basis as the aggregate
+ *  `computeShopSetBand`; `isFixed` (low == high) renders as a read-only price. */
+export type ShopSetServiceLine = {
+  service_id: Id<"services">;
+  isFixed: boolean;
+  all_in_low_cents: number;
+  all_in_high_cents: number;
+  all_in_default_cents: number;
+};
+
+/**
+ * Per-service all-in bands for the shop-priced lines, so the mechanic can set a
+ * price PER range service and see each one labeled. Computed on the same tax/fee
+ * basis as `computeShopSetBand`, so the per-service values the front desk picks
+ * sum back to (a value the server will clamp to) the aggregate band.
+ *
+ * When there is exactly ONE shop-priced line the aggregate band IS that line's
+ * band, so we adopt it verbatim — the single-service case (the common one) is
+ * then exact, with zero sub-cent tax/fee drift. With multiple shop-priced lines
+ * each is isolated (allIn per line); their sum reconciles to the aggregate
+ * modulo rounding, which `performSubmission` clamps away.
+ */
+export function computeShopSetServiceLines(args: {
+  fixedPriceLines: FixedPriceLine[] | null | undefined;
+  band: { lowCents: number; highCents: number; defaultCents: number } | null;
+  shopState: string | null;
+  shopZip: string | null;
+}): ShopSetServiceLine[] {
+  const lines = args.fixedPriceLines ?? [];
+  if (lines.length === 0) return [];
+
+  if (lines.length === 1 && args.band) {
+    const l = lines[0];
+    return [
+      {
+        service_id: l.service_id,
+        isFixed: l.price_high_cents === l.price_low_cents,
+        all_in_low_cents: args.band.lowCents,
+        all_in_high_cents: args.band.highCents,
+        all_in_default_cents: args.band.defaultCents,
+      },
+    ];
+  }
+
+  return lines.map((l) => {
+    const isFixed = l.price_high_cents === l.price_low_cents;
+    const lowCents = shopLineAllInCents({
+      partsCents: l.price_low_cents,
+      shopState: args.shopState,
+      shopZip: args.shopZip,
+    });
+    const highCents = Math.max(
+      shopLineAllInCents({
+        partsCents: l.price_high_cents,
+        shopState: args.shopState,
+        shopZip: args.shopZip,
+      }),
+      lowCents,
+    );
+    return {
+      service_id: l.service_id,
+      isFixed,
+      all_in_low_cents: lowCents,
+      all_in_high_cents: highCents,
+      all_in_default_cents: isFixed
+        ? lowCents
+        : Math.round((lowCents + highCents) / 2),
+    };
+  });
 }
 
 export type ShopSetResolution = {

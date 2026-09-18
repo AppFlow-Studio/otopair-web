@@ -84,6 +84,7 @@ import {
   computeDisclosedRange,
   computePricedPartsSnapshot,
   computeQuotedSetPrice,
+  computeShopSetServiceLines,
   resolveShopSetForBooking,
   reconcileDisclosedCeilingWithQuote,
   type PricedPartSnapshotRow,
@@ -11072,6 +11073,61 @@ export const getJobDetail = query({
         ? hoursToMinutes(recordedBaseLaborHours)
         : booking.estimated_labor_minutes ?? null;
 
+    // Per-service AGREED labor hours for the scope card's SERVICES list, so each
+    // service can show its own time (e.g. "Oil Change · 0.75 hr"). Uses the same
+    // canonical split the receipt bills from (resolveAgreedLaborLines): the
+    // agreed "base" lump distributed across booked services by catalog hours,
+    // custom lines from their agreed allocation. Lines come back booked-first
+    // then custom — the same order as `serviceNames` — but the client matches by
+    // name so a declined/reverted custom line simply shows no time.
+    const perServiceLaborBaseServices: Array<{
+      name: string;
+      catalogHours: number | null;
+    }> = [];
+    for (const sid of booking.service_ids ?? []) {
+      const svc: any = await ctx.db.get(sid);
+      if (!svc) continue;
+      perServiceLaborBaseServices.push({
+        name: svc.name ?? "Service",
+        catalogHours:
+          typeof svc.default_labor_hours === "number"
+            ? svc.default_labor_hours
+            : null,
+      });
+    }
+    const perServiceLaborCustomServices: Array<{
+      name: string;
+      durationMinutes: number | null;
+    }> = Array.isArray((booking as any).custom_services)
+      ? ((booking as any).custom_services as any[])
+          .map((c: any) => ({
+            name: typeof c?.name === "string" ? c.name.trim() : "",
+            durationMinutes:
+              typeof c?.duration_minutes === "number"
+                ? c.duration_minutes
+                : null,
+          }))
+          .filter((c: { name: string }) => c.name.length > 0)
+      : [];
+    const perServiceLaborCustomJobs = await ctx.db
+      .query("custom_jobs")
+      .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
+      .collect();
+    const { lines: perServiceLaborLines } = resolveAgreedLaborLines({
+      baseServices: perServiceLaborBaseServices,
+      customServices: perServiceLaborCustomServices,
+      customJobs: perServiceLaborCustomJobs as any,
+      allocations: agreedApproval?.labor_allocations ?? null,
+      laborSubtotalDollars:
+        agreedApproval?.labor_cents != null
+          ? agreedApproval.labor_cents / 100
+          : (booking.labor_cost ?? null),
+    });
+    const perServiceLabor = perServiceLaborLines.map((l) => ({
+      name: l.name,
+      laborHours: l.laborHours,
+    }));
+
     // Per-custom-line agreed labor for the post-job Labor step. Same problem the
     // base line had: a custom line's hours edited in the pre/mid Labor step were
     // recorded in the approval's breakdown but never written back to the
@@ -11161,6 +11217,39 @@ export const getJobDetail = query({
     });
     const shopSetBand = shopSet.band;
 
+    // Per-service breakdown of the shop-set band, so the mechanic surface can
+    // render one labeled set-price row per shop-priced service (and note the
+    // remaining dynamic services separately) instead of one anonymous band.
+    // Names resolved once from the booking's service ids; the per-service all-in
+    // bands share `computeShopSetBand`'s tax/fee basis so they reconcile.
+    const shopSetServiceLines = computeShopSetServiceLines({
+      fixedPriceLines: shopSet.fixedPriceLines,
+      band: shopSetBand,
+      shopState: shopForRate?.state ?? null,
+      shopZip: shopForRate?.zip ?? null,
+    });
+    const shopServiceNameById = new Map<string, string>();
+    for (const sid of booking.service_ids ?? []) {
+      const svc: any = await ctx.db.get(sid);
+      if (svc?.name) shopServiceNameById.set(String(sid), svc.name);
+    }
+    const shopPricedServiceLines = shopSetServiceLines.map((line) => ({
+      service_id: line.service_id,
+      service_name:
+        shopServiceNameById.get(String(line.service_id)) ?? "Service",
+      is_fixed: line.isFixed,
+      all_in_low_cents: line.all_in_low_cents,
+      all_in_high_cents: line.all_in_high_cents,
+      all_in_default_cents: line.all_in_default_cents,
+    }));
+    const shopPricedIds = new Set(
+      shopSetServiceLines.map((l) => String(l.service_id)),
+    );
+    const dynamicServiceNames = (booking.service_ids ?? [])
+      .filter((sid) => !shopPricedIds.has(String(sid)))
+      .map((sid) => shopServiceNameById.get(String(sid)))
+      .filter((name): name is string => !!name);
+
     return {
       _id: booking._id,
       _creationTime: booking._creationTime,
@@ -11210,6 +11299,9 @@ export const getJobDetail = query({
       vehicle: vehicleLabels.full,
       vehicleShort: vehicleLabels.short,
       serviceNames,
+      // Per-service agreed labor hours, matched to `serviceNames` by name, so the
+      // scope card can render each service's own time.
+      perServiceLabor,
       tireSpecs: booking.tire_specs
         ? {
             ...booking.tire_specs,
@@ -11299,6 +11391,14 @@ export const getJobDetail = query({
       // the dialog tell which service blocks are shop-priced (render FIXED) vs
       // dynamic (editable).
       fixedPriceLines: shopSet.fixedPriceLines,
+      // Per-service breakdown of the shop-set band, named + with an all-in band
+      // each, so the mechanic sets a price PER range service (labeled) rather
+      // than against one anonymous total. Fixed lines carry low == high.
+      shopPricedServiceLines,
+      // Names of the booking's services that are NOT shop-priced — priced
+      // dynamically from the parts + labor the mechanic confirms. Rendered as a
+      // "priced from parts & labor" note in the per-service pricing step.
+      dynamicServiceNames,
       // The all-in [low, high] the set-price input clamps to for the
       // shop-priced portion, and its default prefill. Null for a purely
       // dynamic booking. shopSetBandHighCents == the disclosed ceiling for a

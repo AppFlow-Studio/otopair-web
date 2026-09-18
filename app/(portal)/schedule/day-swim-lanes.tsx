@@ -1111,12 +1111,35 @@ export default function DaySwimLanes({
                     ev.recommendationState === "pending_customer";
                   const isAwaitingInfo =
                     ev.diagnosticFollowupState === "awaiting_info";
-                  const diagnosticBadge = isAwaitingRecResponse
-                    ? "Waiting for customer response"
-                    : isAwaitingInfo
-                      ? "Awaiting info"
-                      : null;
                   const pendingLabel = getPendingApprovalLabel(ev);
+                  // Actionable status shown as an always-visible corner chip so
+                  // it survives on short blocks (a 30-min diagnostic is only
+                  // ~1–2 lines tall, and an in-flow line below the fold gets
+                  // clipped by the block's overflow-hidden). Short label on the
+                  // chip; full text on the title tooltip.
+                  const cornerStatus: {
+                    short: string;
+                    full: string;
+                    tone: string;
+                  } | null = isAwaitingRecResponse
+                    ? {
+                        short: "Waiting on customer",
+                        full: "Waiting for customer response",
+                        tone: "bg-amber-100 text-amber-900",
+                      }
+                    : isAwaitingInfo
+                      ? {
+                          short: "Awaiting info",
+                          full: "Parked — awaiting info",
+                          tone: "bg-cyan-100 text-cyan-900",
+                        }
+                      : isAwaitingHold
+                        ? {
+                            short: "Confirming hold",
+                            full: "Confirming new hold with customer",
+                            tone: "bg-amber-100 text-amber-900",
+                          }
+                        : null;
 
                   // Placeholder at original position while dragging
                   if (isBeingDragged) {
@@ -1209,6 +1232,15 @@ export default function DaySwimLanes({
                           Pending quote
                         </span>
                       )}
+                      {cornerStatus && !isTentativeQuote && (
+                        <span
+                          title={cornerStatus.full}
+                          className={`absolute top-0.5 right-1 z-10 inline-flex max-w-[85%] items-center gap-1 truncate rounded px-1 py-px text-[9px] font-semibold shadow-sm ${cornerStatus.tone}`}
+                        >
+                          <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-70" />
+                          {cornerStatus.short}
+                        </span>
+                      )}
                       {slotHeight <= ROW_HEIGHT * 2 && (ev.vehicleDisplay || ev.licensePlate) ? (
                         <>
                           <div className="flex items-center gap-1.5 min-w-0">
@@ -1294,18 +1326,9 @@ export default function DaySwimLanes({
                           {pendingLabel}
                         </p>
                       )}
-                      {isAwaitingHold && (
-                        <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-900">
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                          Confirming new hold
-                        </p>
-                      )}
-                      {diagnosticBadge && (
-                        <p className="mt-0.5 inline-flex items-center gap-1 truncate rounded-sm bg-amber-100 px-1 text-[10px] font-semibold text-amber-900">
-                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                          {diagnosticBadge}
-                        </p>
-                      )}
+                      {/* Awaiting-hold / diagnostic statuses are surfaced by the
+                          always-visible corner chip above so they don't clip on
+                          short blocks. */}
                     </div>
                   );
                 })}

@@ -228,7 +228,7 @@ export const getMyUnreadCount = query({
 // Shop-staff notification feed (new bookings, quote requests)
 // ============================================================================
 
-const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring", "booking_mid_job_accepted", "booking_mid_job_declined", "booking_mid_job_expired"] as const;
+const STAFF_CATEGORIES = ["new_booking", "new_quote_request", "booking_never_started", "settlement_shortfall", "hold_expiring", "booking_mid_job_accepted", "booking_mid_job_declined", "booking_mid_job_expired", "booking_pre_job_declined"] as const;
 
 /**
  * Alerts that used to be written with `channel: "slack"` and then sat pending

@@ -41,6 +41,7 @@ import {
   UserPlus,
   Users,
   Warehouse,
+  Wrench,
   X,
 } from "lucide-react";
 
@@ -119,6 +120,12 @@ const updateManagedMechanicPhotoMutation = makeFunctionReference<"mutation">(
 );
 const deactivateManagedMechanicMutation = makeFunctionReference<"mutation">(
   "mechanics:deactivateManaged"
+);
+const enableSelfAsMechanicMutation = makeFunctionReference<"mutation">(
+  "mechanics:enableSelfAsMechanic"
+);
+const disableSelfAsMechanicMutation = makeFunctionReference<"mutation">(
+  "mechanics:disableSelfAsMechanic"
 );
 const generateUploadUrlMutation = makeFunctionReference<"mutation">("users:generateUploadUrl");
 const updateMemberRoleMutation = makeFunctionReference<"mutation">("invitations:updateMemberRole");
@@ -530,12 +537,15 @@ export default function TeamPage() {
     currentRole: string;
   } | null>(null);
   const [newRole, setNewRole] = useState<string>("");
+  const [selfActionBusy, setSelfActionBusy] = useState(false);
+  const [confirmSelfRemove, setConfirmSelfRemove] = useState(false);
   const editEmailInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
   const { user: clerkUser } = useUser();
 
-  const myShops = useTypedQuery<Array<{ _id: Id<"shops"> }>>(getMyShopsQuery);
+  const myShops = useTypedQuery<Array<{ _id: Id<"shops">; memberRole?: string }>>(getMyShopsQuery);
   const shopId = myShops?.[0]?._id as Id<"shops"> | undefined;
+  const myRole = myShops?.[0]?.memberRole;
   const teamMembers = useTypedQuery<TeamMemberRow[]>(
     getTeamMembersQuery,
     shopId ? { shopId } : "skip"
@@ -572,6 +582,12 @@ export default function TeamPage() {
   const deactivateMechanic = useMutation(deactivateManagedMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
   }) => Promise<Id<"mechanics">>;
+  const enableSelfAsMechanic = useMutation(enableSelfAsMechanicMutation) as (args: {
+    shopId: Id<"shops">;
+  }) => Promise<Id<"mechanics">>;
+  const disableSelfAsMechanic = useMutation(disableSelfAsMechanicMutation) as (args: {
+    shopId: Id<"shops">;
+  }) => Promise<{ ok: boolean; reassigned: number; unassigned: number }>;
   const generateUploadUrl = useMutation(generateUploadUrlMutation) as () => Promise<string>;
   const updateMemberRole = useMutation(updateMemberRoleMutation) as (args: {
     shopUserId: Id<"shop_users">;
@@ -626,6 +642,21 @@ export default function TeamPage() {
       const bIsCurrent = b.user.clerkUserId === clerkUser?.id ? -1 : 1;
       return aIsCurrent - bIsCurrent;
     });
+  // "Work on cars yourself" self-service (owners only). The owner is a shop_users
+  // row like anyone else; opting in gives them a mechanic profile linked via
+  // mechanic_id so they become a schedulable lane.
+  const OWNER_ROLES = new Set(["shop_owner", "owner", "admin"]);
+  const selfMember = (teamMembers ?? []).find(
+    (member) => member.user.clerkUserId === clerkUser?.id
+  );
+  const viewerIsOwner = OWNER_ROLES.has(myRole ?? "") || OWNER_ROLES.has(selfMember?.role ?? "");
+  const selfMechanicRow = selfMember?.mechanic_id
+    ? (mechanics ?? []).find((mechanic) => mechanic._id === String(selfMember.mechanic_id))
+    : undefined;
+  const selfIsMechanic =
+    !!selfMember?.mechanic_id && mechanicIds.has(String(selfMember.mechanic_id));
+  const selfActiveBookingCount = selfMechanicRow?.blockingBookingCount ?? 0;
+
   const pendingNonMechanicInvitations = (invitations ?? []).filter(
     (invitation) => invitation.status === "pending" && !invitation.mechanic_id
   );
@@ -644,6 +675,47 @@ export default function TeamPage() {
   function clearDirectoryMessages() {
     setDirectoryError(null);
     setDirectorySuccess(null);
+  }
+
+  async function handleEnableSelfAsMechanic() {
+    if (!shopId) return;
+    clearDirectoryMessages();
+    setSelfActionBusy(true);
+    try {
+      await enableSelfAsMechanic({ shopId });
+      setDirectorySuccess("You're now on the schedule as a mechanic.");
+    } catch (error) {
+      setDirectoryError(
+        error instanceof Error ? error.message : "Failed to add yourself as a mechanic."
+      );
+    } finally {
+      setSelfActionBusy(false);
+    }
+  }
+
+  async function handleDisableSelfAsMechanic() {
+    if (!shopId) return;
+    clearDirectoryMessages();
+    setSelfActionBusy(true);
+    try {
+      const result = await disableSelfAsMechanic({ shopId });
+      const moved = (result?.reassigned ?? 0) + (result?.unassigned ?? 0);
+      setDirectorySuccess(
+        moved > 0
+          ? `You've been removed from the schedule. ${moved} booking${moved === 1 ? "" : "s"} reassigned to your team.`
+          : "You've been removed from the schedule."
+      );
+      setConfirmSelfRemove(false);
+    } catch (error) {
+      // Close the dialog so the reason banner (in-progress job / nobody free)
+      // is visible in the directory card.
+      setDirectoryError(
+        error instanceof Error ? error.message : "Failed to remove yourself from the schedule."
+      );
+      setConfirmSelfRemove(false);
+    } finally {
+      setSelfActionBusy(false);
+    }
   }
 
   function handleFormRoleChange(role: MemberForm["role"]) {
@@ -1071,6 +1143,47 @@ export default function TeamPage() {
         </p>
       </div>
 
+      {viewerIsOwner && (
+        <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                <Wrench className="h-5 w-5" />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-base font-semibold text-foreground">Work on cars yourself</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {selfIsMechanic
+                    ? "You're on the schedule as a mechanic and can be assigned bookings like the rest of your team."
+                    : "Add yourself as a mechanic to appear on the schedule and take bookings alongside your team."}
+                </p>
+              </div>
+            </div>
+            <Button
+              variant={selfIsMechanic ? "outline" : "default"}
+              onClick={() =>
+                selfIsMechanic
+                  ? setConfirmSelfRemove(true)
+                  : void handleEnableSelfAsMechanic()
+              }
+              disabled={selfActionBusy || teamMembers === undefined || mechanics === undefined}
+              className="shrink-0"
+            >
+              {selfActionBusy && !selfIsMechanic ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Adding...
+                </>
+              ) : selfIsMechanic ? (
+                "Remove myself from the schedule"
+              ) : (
+                "Add myself as a mechanic"
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
+
       <div className="rounded-2xl border border-border bg-card p-6 shadow-sm">
         <div className="mb-5 flex items-center gap-2">
           <UserPlus className="h-5 w-5 text-primary" />
@@ -1473,6 +1586,32 @@ export default function TeamPage() {
         onConfirm={() => {
           if (!removeMechanicConfirm) return;
           void removeMechanic(removeMechanicConfirm);
+        }}
+      />
+
+      <ConfirmationDialog
+        open={confirmSelfRemove}
+        title="Remove yourself from the schedule?"
+        description={
+          selfActiveBookingCount > 0
+            ? `You have ${selfActiveBookingCount} active booking${selfActiveBookingCount === 1 ? "" : "s"} on your row. ${selfActiveBookingCount === 1 ? "It" : "They"} will be reassigned to another available mechanic at the same time. If a job is already in progress, or no other mechanic is free, removal is blocked so nothing is lost.`
+            : "You'll no longer appear on the schedule or be assignable to new bookings. You can add yourself back anytime."
+        }
+        onClose={() => {
+          if (selfActionBusy) return;
+          setConfirmSelfRemove(false);
+        }}
+        secondaryAction={{
+          label: "Cancel",
+          onAction: () => setConfirmSelfRemove(false),
+          variant: "outline",
+          disabled: selfActionBusy,
+        }}
+        primaryAction={{
+          label: selfActionBusy ? "Removing..." : "Remove myself",
+          onAction: () => void handleDisableSelfAsMechanic(),
+          variant: "destructive",
+          disabled: selfActionBusy,
         }}
       />
 

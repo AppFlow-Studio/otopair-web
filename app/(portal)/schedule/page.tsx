@@ -505,6 +505,11 @@ export default function SchedulePage() {
         return;
       }
 
+      // Never hijack modifier combos. Single-letter hotkeys (c = cancel, a =
+      // accept, …) must not fire when Cmd/Ctrl/Alt is held — otherwise Cmd+C to
+      // copy a part number or VIN would pop the cancel-booking dialog.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
       if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
@@ -2084,7 +2089,7 @@ export default function SchedulePage() {
           when there's no active job, so idle days show no empty gap. */}
       <div className="hidden lg:block shrink-0">
         <div className="mt-3 [&:empty]:hidden">
-          <ActiveJobStrip />
+          <ActiveJobStrip popoverPlacement="up" />
         </div>
       </div>
 

@@ -16,8 +16,12 @@ import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
-import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import {
+  splitDiagnosticServices,
+  templateForSystem,
+} from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
   CustomJobOutcome,
@@ -134,8 +138,11 @@ export default function MechanicDashboard() {
   const [toast, setToast] = useState<string>("");
   const [workflowBookingId, setWorkflowBookingId] = useState<Id<"bookings"> | null>(null);
   const [workflowMode, setWorkflowMode] = useState<
-    "prejob" | "prejob_estimate" | "postjob" | null
+    "prejob" | "prejob_estimate" | "postjob" | "diagnostic_postjob" | null
   >(null);
+  // "Do it now" from the diagnostic worksheet — the mid-job scope flow for the
+  // booking currently open in the workflow dialog.
+  const [showMidJobDialog, setShowMidJobDialog] = useState(false);
   const [pendingActiveBlock, setPendingActiveBlock] = useState<{
     activeBookingId: string;
     activeVehicle: string;
@@ -253,6 +260,7 @@ export default function MechanicDashboard() {
   function closeWorkflowDialog() {
     setWorkflowBookingId(null);
     setWorkflowMode(null);
+    setShowMidJobDialog(false);
   }
 
   function openActualsDialog(bookingId: string, mode: "complete" | "edit") {
@@ -803,20 +811,43 @@ export default function MechanicDashboard() {
         recommendedServiceNote={selectedWorkflowBooking?.recommendedServiceNote ?? null}
         followupState={selectedWorkflowBooking?.diagnosticFollowupState ?? null}
         awaitingInfoNote={selectedWorkflowBooking?.awaitingInfoNote ?? null}
+        isDiagnosticOnly={
+          splitDiagnosticServices(selectedWorkflowBooking?.serviceNames ?? [])
+            .additional.length === 0
+        }
+        additionalServiceNames={splitDiagnosticServices(
+          selectedWorkflowBooking?.serviceNames ?? [],
+        ).additional.map(formatServiceDisplayName)}
         onClose={closeWorkflowDialog}
-        onCompleted={() => {
-          setToast("Diagnostic completed");
+        onCompleted={(msg) => {
+          setToast(msg ?? "Diagnostic completed");
           closeWorkflowDialog();
         }}
+        onContinueToPostJob={() => setWorkflowMode("diagnostic_postjob")}
+        onAddWorkNow={() => setShowMidJobDialog(true)}
           onError={(msg) => setToast(msg)}
         />
       </BookingWorkflowGuard>
 
+      {/* "Do it now" from the diagnostic worksheet — add the found work to this
+          booking as mid-job scope (customer approves the new price, then it's
+          completed through the post-job survey). */}
+      <MidJobScopeDialog
+        open={showMidJobDialog}
+        bookingId={workflowBookingId}
+        onClose={() => setShowMidJobDialog(false)}
+        onSubmitted={(msg) => {
+          setShowMidJobDialog(false);
+          setToast(msg);
+        }}
+      />
+
       <BookingWorkflowGuard
         open={
           workflowBookingId !== null &&
-          workflowMode === "postjob" &&
-          !selectedWorkflowBooking?.diagnosticSystem
+          ((workflowMode === "postjob" &&
+            !selectedWorkflowBooking?.diagnosticSystem) ||
+            workflowMode === "diagnostic_postjob")
         }
         booking={selectedWorkflowBooking}
         allowedStatuses={["in_progress"]}
@@ -825,8 +856,9 @@ export default function MechanicDashboard() {
         <PostJobSurveyDialog
           open={
             workflowBookingId !== null &&
-            workflowMode === "postjob" &&
-            !selectedWorkflowBooking?.diagnosticSystem
+            ((workflowMode === "postjob" &&
+              !selectedWorkflowBooking?.diagnosticSystem) ||
+              workflowMode === "diagnostic_postjob")
           }
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
@@ -884,8 +916,7 @@ export default function MechanicDashboard() {
           shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
           shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
           shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
-          shopPricedServiceLines={(selectedWorkflowBooking as any)?.shopPricedServiceLines ?? null}
-          dynamicServiceNames={(selectedWorkflowBooking as any)?.dynamicServiceNames ?? null}
+          bookingServiceLines={(selectedWorkflowBooking as any)?.bookingServiceLines ?? null}
         />
       </BookingWorkflowGuard>
 
@@ -933,8 +964,7 @@ export default function MechanicDashboard() {
           shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
           shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
           shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
-          shopPricedServiceLines={(selectedWorkflowBooking as any)?.shopPricedServiceLines ?? null}
-          dynamicServiceNames={(selectedWorkflowBooking as any)?.dynamicServiceNames ?? null}
+          bookingServiceLines={(selectedWorkflowBooking as any)?.bookingServiceLines ?? null}
         />
       </BookingWorkflowGuard>
 

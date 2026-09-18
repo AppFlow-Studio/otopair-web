@@ -33,6 +33,7 @@ import {
   collectPerformedWork,
   recommendationWasPerformed,
 } from "./lib/performedWork";
+import { enqueueNotificationOutbox } from "./lib/notificationOutbox";
 
 const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
 
@@ -225,6 +226,34 @@ export const applyDeferredInspectionHealth = internalMutation({
         vehicleOwnerId: owner._id,
         triggeredBy: "inspection",
       });
+
+      // The one intentionally-delayed push: "your vehicle health score is
+      // ready." This job already runs ~2h after the visit (see
+      // scheduleDeferredInspectionHealth), so the delay is the scheduler having
+      // waited — no scheduled_for_ms needed. enqueueNotificationOutbox kicks the
+      // push dispatcher immediately, so it goes out within seconds of the score
+      // being (re)computed, not on the next cron tick. The stable dedupeKey
+      // makes a re-run of this job (booking reopened → completed again) reuse
+      // the existing open row instead of double-pushing.
+      if (booking.user_id) {
+        await enqueueNotificationOutbox(ctx, {
+          userId: booking.user_id,
+          bookingId: args.bookingId,
+          shopId: booking.shop_id,
+          channel: "push",
+          category: "vehicle_health_score_ready",
+          dedupeKey: `health_ready:${String(args.bookingId)}`,
+          payload: {
+            title: "Your vehicle health score is ready",
+            body: "We've finished reviewing your recent visit — tap to see your updated vehicle health.",
+            data: {
+              type: "vehicle_health_score_ready",
+              bookingId: String(args.bookingId),
+              vin: booking.vin,
+            },
+          },
+        });
+      }
     }
   },
 });

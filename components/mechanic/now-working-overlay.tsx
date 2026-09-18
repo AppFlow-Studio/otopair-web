@@ -1274,12 +1274,17 @@ function ActiveJobsList({
 export default function NowWorkingOverlay({
   open,
   jobs,
+  focusBookingId = null,
   onClose,
   onMarkComplete,
   onToast,
 }: {
   open: boolean;
   jobs: ActiveJobRow[];
+  /** When the overlay is opened for a specific car (e.g. from that booking's
+   *  drawer), land on its pane instead of the picker — even with several cars
+   *  in the bay. Null falls back to the single-job auto-focus. */
+  focusBookingId?: Id<"bookings"> | null;
   onClose: () => void;
   onMarkComplete: (bookingId: Id<"bookings">) => void;
   onToast?: (message: string) => void;
@@ -1287,19 +1292,21 @@ export default function NowWorkingOverlay({
   const [selectedId, setSelectedId] = useState<Id<"bookings"> | null>(null);
   const multiple = jobs.length > 1;
 
-  // On open, land straight in the focus view when there's a single car in the
-  // bay; otherwise show the picker. On close, forget the selection so the next
-  // open re-decides.
+  // On open, land straight in the focus view for the requested car (or the lone
+  // car in the bay); otherwise show the picker. On close, forget the selection
+  // so the next open re-decides.
   const wasOpenRef = useRef(false);
   useEffect(() => {
     if (open && !wasOpenRef.current) {
       wasOpenRef.current = true;
-      setSelectedId(jobs.length === 1 ? jobs[0].bookingId : null);
+      setSelectedId(
+        focusBookingId ?? (jobs.length === 1 ? jobs[0].bookingId : null),
+      );
     } else if (!open && wasOpenRef.current) {
       wasOpenRef.current = false;
       setSelectedId(null);
     }
-  }, [open, jobs]);
+  }, [open, jobs, focusBookingId]);
 
   // If the focused job leaves the bay (completed elsewhere, reassigned), drop
   // back to the picker instead of rendering a pane for a stale booking.

@@ -4358,6 +4358,7 @@ export const notifyEnrichmentComplete = internalMutation({
     for (const vehicle of vehicles) {
       const vin = (vehicle as any).vin as string | undefined;
       if (!vin) continue;
+      const vehicleLabel = [year, make, model].filter(Boolean).join(" ") || vin;
       const owners = await ctx.db
         .query("vehicle_owners")
         .withIndex("by_vin", (q: any) => q.eq("vin", vin))
@@ -4384,7 +4385,24 @@ export const notifyEnrichmentComplete = internalMutation({
             model,
             trim,
             title: "Your car is ready",
-            body: `${[year, make, model].filter(Boolean).join(" ")} is set up — you can now book parts-dependent services.`,
+            body: `Your ${vehicleLabel} is set up — you can now book parts-dependent services.`,
+            // The device only receives payload.data, so mirror the vehicle
+            // fields there and deep-link to the garage pre-selected on THIS car.
+            // The app already opens the garage on a specific VIN (see the
+            // walk-in claim flow, which returns `vin` so the app can "open the
+            // garage ON that vehicle"), so we key by vin — not a vehicle id.
+            // `vin`/`vehicleLabel` also ride in data as the robust selector.
+            data: {
+              deepLink: `otopair://garage/${vin}`,
+              vin,
+              vehicleLabel,
+              vehicleId: String(vehicle._id),
+              vehicleConfigId: String(vehicle_config_id),
+              year,
+              make,
+              model,
+              trim,
+            },
           },
         });
         notified++;

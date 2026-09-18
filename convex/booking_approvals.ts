@@ -45,7 +45,7 @@ import {
   type CustomerInspectionSnapshot,
 } from "../lib/inspection-measurements";
 import {
-  stampMidJobCustomJobs,
+  stampIntroducedCustomJobs,
   revertDeclinedMidJobWork,
   confirmStagedCustomServices,
 } from "./customJobs";
@@ -601,13 +601,16 @@ async function performSubmission(
     stripe_action: inRange ? "auto_approved_within_range" : undefined,
   });
 
-  // Bind the off-catalog lines this mid-job cycle introduced to this approval
-  // row, so a later decline/expiry reverts exactly these and nothing from a
-  // prior approved cycle. No-op for pre/post-job cycles.
-  if (args.cycle === "mid_job") {
-    await stampMidJobCustomJobs(ctx, {
+  // Bind the off-catalog lines this cycle introduced to this approval row, so a
+  // later decline/expiry reverts exactly these and nothing from a prior approved
+  // cycle. Both estimate cycles stage lines the customer must approve; `source`
+  // scopes the stamp so a pre-job submit binds only pre-job lines and a mid-job
+  // submit only mid-job lines. No-op for post-job.
+  if (args.cycle === "pre_job" || args.cycle === "mid_job") {
+    await stampIntroducedCustomJobs(ctx, {
       bookingId: args.bookingId,
       approvalId,
+      source: args.cycle,
       now,
     });
   }
@@ -1032,11 +1035,14 @@ export const applyApprovalDecision = mutation({
       );
     }
 
-    // Mid-job decline: the added scope was never agreed. Revert the lines this
-    // cycle introduced — kept as `declined` custom_jobs for audit (with their
-    // denied parts) but stripped from the booking so they never reach the
-    // completed job, the receipt, or the price. Then tell the shop.
-    if (cycle === "mid_job") {
+    // Estimate-cycle decline (pre-job / adjust-quote OR mid-job): the added scope
+    // was never agreed. Revert the lines this cycle introduced — kept as
+    // `declined` custom_jobs for audit (with their denied parts) but stripped from
+    // the booking so they never reach the completed job, the receipt, the price,
+    // or the post-job survey. Original booked services (service_ids) and any
+    // prior-cycle lines carry a different approval id and are untouched. Then tell
+    // the shop.
+    if (cycle === "pre_job" || cycle === "mid_job") {
       await revertDeclinedMidJobWork(ctx, {
         bookingId: args.bookingId,
         approvalId: open._id,
@@ -1045,7 +1051,10 @@ export const applyApprovalDecision = mutation({
       await enqueueShopDecisionNotice(ctx, {
         booking,
         bookingId: args.bookingId,
-        category: "booking_mid_job_declined",
+        category:
+          cycle === "pre_job"
+            ? "booking_pre_job_declined"
+            : "booking_mid_job_declined",
         title: "Extra work declined",
         body: "The customer declined the added work. It won't be charged.",
         dedupeSuffix: `declined:${open._id}`,
@@ -1457,13 +1466,27 @@ export const _listExpiredOpenApprovals = internalQuery({
         q.lt("sla_expires_at_ms", args.nowMs),
       )
       .collect();
-    return rows
-      .filter((r: any) => r.decision == null && r.sla_expires_at_ms != null)
-      .map((r: any) => ({
-        bookingId: r.booking_id as Id<"bookings">,
-        cycle: r.cycle as string,
-        approvalId: r._id as Id<"booking_approvals">,
-      }));
+    const open = rows.filter(
+      (r: any) => r.decision == null && r.sla_expires_at_ms != null,
+    );
+    return await Promise.all(
+      open.map(async (r: any) => {
+        // Discriminate an initial pre-job estimate (never approved → forfeit the
+        // deposit) from a pre-job RE-QUOTE that added scope on an already-agreed
+        // booking (revert the added scope, keep the base). A standing approved
+        // ceiling only exists once a prior estimate was accepted/auto-approved.
+        const booking: any = await ctx.db.get(
+          r.booking_id as Id<"bookings">,
+        );
+        return {
+          bookingId: r.booking_id as Id<"bookings">,
+          cycle: r.cycle as string,
+          approvalId: r._id as Id<"booking_approvals">,
+          hasPriorAcceptedScope:
+            booking?.running_approved_ceiling_cents != null,
+        };
+      }),
+    );
   },
 });
 
@@ -1475,6 +1498,7 @@ export const expireApprovals = internalAction({
       bookingId: Id<"bookings">;
       cycle: string;
       approvalId: Id<"booking_approvals">;
+      hasPriorAcceptedScope: boolean;
     }> = await ctx.runQuery(
       internal.booking_approvals._listExpiredOpenApprovals,
       { nowMs: now },
@@ -1485,14 +1509,26 @@ export const expireApprovals = internalAction({
         bookingId: row.bookingId,
       });
       if (row.cycle === "pre_job") {
-        // Customer never approved the initial estimate — forfeit the $20
-        // deposit so the mechanic is paid for the inspection. Scheduled so a
-        // single bad Stripe call doesn't poison the batch.
-        await ctx.scheduler.runAfter(
-          0,
-          internal.payments_stripe.captureDepositForfeit,
-          { bookingId: row.bookingId },
-        );
+        if (row.hasPriorAcceptedScope) {
+          // A pre-job RE-QUOTE (added scope on an already-agreed booking) the
+          // customer let lapse — not an abandoned initial estimate. Revert the
+          // added lines and roll mechanic_set back to the last approved ceiling,
+          // exactly like a mid-job expiry. Do NOT forfeit the deposit: the base
+          // was already agreed and held.
+          await ctx.runMutation(
+            internal.booking_approvals._revertToPriorCeilingAfterExpiry,
+            { bookingId: row.bookingId, approvalId: row.approvalId },
+          );
+        } else {
+          // Customer never approved the initial estimate — forfeit the $20
+          // deposit so the mechanic is paid for the inspection. Scheduled so a
+          // single bad Stripe call doesn't poison the batch.
+          await ctx.scheduler.runAfter(
+            0,
+            internal.payments_stripe.captureDepositForfeit,
+            { bookingId: row.bookingId },
+          );
+        }
       } else if (row.cycle === "mid_job") {
         // A mid-job scope increase the customer let lapse. performSubmission
         // optimistically bumped mechanic_set_price_cents at request time, so
@@ -1925,13 +1961,16 @@ export const _markApprovalExpired = internalMutation({
   },
 });
 
-/** Mid-job expiry recovery. performSubmission bumps mechanic_set_price_cents to
- *  the requested amount at REQUEST time (before approval), so a mid-job scope
- *  increase the customer lets lapse would otherwise be captured at completion
- *  even though it was never approved. Roll mechanic_set back to the last
- *  approved ceiling and restore an approved state so the job completes and
- *  captures only the agreed price. Called by expireApprovals for the mid_job
- *  branch, immediately after _markApprovalExpired. */
+/** Estimate re-quote expiry recovery. performSubmission bumps
+ *  mechanic_set_price_cents to the requested amount at REQUEST time (before
+ *  approval), so an added-scope estimate the customer lets lapse would otherwise
+ *  be captured at completion even though it was never approved. Roll mechanic_set
+ *  back to the last approved ceiling and restore an approved state so the job
+ *  completes and captures only the agreed price. Called by expireApprovals for
+ *  the mid_job branch AND for a pre_job RE-QUOTE (a booking that already has a
+ *  standing approved ceiling), immediately after _markApprovalExpired. An initial
+ *  pre-job estimate — no prior ceiling — forfeits the deposit instead and never
+ *  reaches here. */
 export const _revertToPriorCeilingAfterExpiry = internalMutation({
   args: {
     bookingId: v.id("bookings"),

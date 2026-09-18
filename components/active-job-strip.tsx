@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQuery } from "convex/react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Maximize2, Wrench } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -11,6 +12,15 @@ import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "./mechanic/now-working-overlay";
 import OverrunExtendCard from "./mechanic/overrun-extend-card";
+
+/**
+ * Dispatched on `window` to jump into the active job from elsewhere in the app —
+ * the booking drawer's "Open active job" button fires it once the inspection is
+ * in. The on-screen pill instance answers by opening the full-screen focused
+ * pane (single job) or the picker (owner, multiple jobs); the off-screen copies
+ * bail so only one overlay opens.
+ */
+export const OPEN_ACTIVE_JOB_EVENT = "otopair:open-active-job";
 
 function shortBookingCode(id: string) {
   return `BKG-${id.slice(-4).toUpperCase()}`;
@@ -23,12 +33,28 @@ function shortBookingCode(id: string) {
  * pill that opens a popover holding the live timer, the full-screen overlay
  * launcher, and the overrun-extension card.
  */
-export default function ActiveJobStrip() {
+export default function ActiveJobStrip({
+  popoverPlacement = "down",
+}: {
+  /** Which way the mechanic popover grows out of the pill. The schedule hosts
+   *  the pill at the bottom of the board, so it opens "up"; the header opens
+   *  "down". */
+  popoverPlacement?: "up" | "down";
+} = {}) {
   const header = useQuery(api.bookings.getActiveJobsForHeader);
   const router = useRouter();
   const [overlayOpen, setOverlayOpen] = useState(false);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  // Set when the overlay is opened remotely for a specific booking (the drawer's
+  // "Open active job" carries its id), so a shop with several cars in the bay
+  // lands on that job's pane instead of the picker. Null for a plain pill click.
+  const [focusBookingId, setFocusBookingId] = useState<Id<"bookings"> | null>(
+    null,
+  );
+  const reduceMotion = useReducedMotion();
+  const pillRef = useRef<HTMLButtonElement | null>(null);
+  const placeUp = popoverPlacement === "up";
 
   // Mechanic view only: surface an overrun check-in awaiting a response so the
   // pill can flag it even before the popover is opened.
@@ -62,6 +88,33 @@ export default function ActiveJobStrip() {
     return () => clearTimeout(t);
   }, [toast]);
 
+  // Remote-open: a window event (fired by the booking drawer's "Open active
+  // job", etc.) sends the viewer straight into the focused active job — the
+  // full-screen pane, not the intermediate popover.
+  //
+  // The pill is mounted more than once (mobile header + desktop header/schedule)
+  // but only one copy is on-screen at a given breakpoint. The overlay portals to
+  // document.body, so an off-screen copy that answered would still stack a second
+  // overlay. offsetParent is null under a display:none ancestor, so the hidden
+  // copies bail and exactly one overlay opens.
+  const canOpenRemotely =
+    header?.kind === "mechanic"
+      ? !!header.job
+      : header?.kind === "owner" && (header.count ?? 0) > 0;
+  useEffect(() => {
+    if (!canOpenRemotely) return;
+    function onOpen(e: Event) {
+      if (pillRef.current && pillRef.current.offsetParent === null) return;
+      const requested = (e as CustomEvent<{ bookingId?: Id<"bookings"> }>)
+        .detail?.bookingId;
+      setFocusBookingId(requested ?? null);
+      setPopoverOpen(false);
+      setOverlayOpen(true);
+    }
+    window.addEventListener(OPEN_ACTIVE_JOB_EVENT, onOpen);
+    return () => window.removeEventListener(OPEN_ACTIVE_JOB_EVENT, onOpen);
+  }, [canOpenRemotely]);
+
   if (!header) return null;
 
   /* ---------------------------------------------------------------- */
@@ -75,6 +128,7 @@ export default function ActiveJobStrip() {
     return (
       <div className="relative">
         <button
+          ref={pillRef}
           type="button"
           onClick={() => setPopoverOpen((o) => !o)}
           className={`group inline-flex h-9 items-center gap-2.5 rounded-full border bg-[linear-gradient(135deg,_#0f172a,_#0b1220)] pl-2.5 pr-3 text-slate-50 shadow-sm transition-all hover:shadow ${
@@ -120,16 +174,39 @@ export default function ActiveJobStrip() {
         </button>
 
         {popoverOpen ? (
-          <>
-            {/* Click-away backdrop */}
-            <button
-              type="button"
-              aria-hidden
-              tabIndex={-1}
-              onClick={() => setPopoverOpen(false)}
-              className="fixed inset-0 z-40 cursor-default"
-            />
-            <div className="absolute left-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-2xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] p-4 text-slate-50 shadow-xl">
+          /* Click-away backdrop */
+          <button
+            type="button"
+            aria-hidden
+            tabIndex={-1}
+            onClick={() => setPopoverOpen(false)}
+            className="fixed inset-0 z-40 cursor-default"
+          />
+        ) : null}
+        <AnimatePresence>
+          {popoverOpen ? (
+            <motion.div
+              initial={
+                reduceMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.96, y: placeUp ? 6 : -6 }
+              }
+              animate={
+                reduceMotion
+                  ? { opacity: 1 }
+                  : { opacity: 1, scale: 1, y: 0 }
+              }
+              exit={
+                reduceMotion
+                  ? { opacity: 0 }
+                  : { opacity: 0, scale: 0.96, y: placeUp ? 6 : -6 }
+              }
+              transition={{ duration: 0.16, ease: [0.16, 1, 0.3, 1] }}
+              style={{ transformOrigin: placeUp ? "bottom left" : "top left" }}
+              className={`absolute left-0 z-50 w-80 overflow-hidden rounded-2xl border border-emerald-400/30 bg-[radial-gradient(circle_at_top_left,_rgba(16,185,129,0.18),_transparent_60%),linear-gradient(180deg,_#0f172a,_#0b1220)] p-4 text-slate-50 shadow-xl ${
+                placeUp ? "bottom-full mb-2" : "top-full mt-2"
+              }`}
+            >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-400/15 text-emerald-300">
@@ -171,6 +248,7 @@ export default function ActiveJobStrip() {
                 <button
                   type="button"
                   onClick={() => {
+                    setFocusBookingId(null);
                     setPopoverOpen(false);
                     setOverlayOpen(true);
                   }}
@@ -196,12 +274,13 @@ export default function ActiveJobStrip() {
               {toast ? (
                 <p className="mt-2 text-xs text-emerald-300">{toast}</p>
               ) : null}
-            </div>
-          </>
-        ) : null}
+            </motion.div>
+          ) : null}
+        </AnimatePresence>
 
         <NowWorkingOverlay
           open={overlayOpen}
+          focusBookingId={focusBookingId}
           jobs={[
             {
               bookingId,
@@ -212,9 +291,13 @@ export default function ActiveJobStrip() {
               scheduledDate: null,
             },
           ]}
-          onClose={() => setOverlayOpen(false)}
+          onClose={() => {
+            setOverlayOpen(false);
+            setFocusBookingId(null);
+          }}
           onMarkComplete={(id) => {
             setOverlayOpen(false);
+            setFocusBookingId(null);
             router.push(`/dashboard?postjob=${String(id)}`);
           }}
         />
@@ -241,8 +324,12 @@ export default function ActiveJobStrip() {
   return (
     <>
       <button
+        ref={pillRef}
         type="button"
-        onClick={() => setOverlayOpen(true)}
+        onClick={() => {
+          setFocusBookingId(null);
+          setOverlayOpen(true);
+        }}
         title="One or more mechanics are mid-job — open full screen"
         className="group inline-flex h-9 items-center gap-2.5 rounded-full border border-emerald-400/30 bg-[linear-gradient(135deg,_#0f172a,_#0b1220)] pl-2 pr-2.5 text-slate-50 shadow-sm transition-all hover:border-emerald-400/60 hover:shadow"
       >
@@ -265,10 +352,15 @@ export default function ActiveJobStrip() {
 
       <NowWorkingOverlay
         open={overlayOpen}
+        focusBookingId={focusBookingId}
         jobs={ownerJobs}
-        onClose={() => setOverlayOpen(false)}
+        onClose={() => {
+          setOverlayOpen(false);
+          setFocusBookingId(null);
+        }}
         onMarkComplete={(id) => {
           setOverlayOpen(false);
+          setFocusBookingId(null);
           router.push(`/dashboard?postjob=${String(id)}`);
         }}
       />

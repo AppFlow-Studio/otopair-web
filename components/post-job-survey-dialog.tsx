@@ -1391,10 +1391,24 @@ function PostJobSurveyDialogBody({
   // this query is the source of truth for what the mechanic attached to each
   // extra job — used both for the outcomes step and to seed those parts into
   // the Parts step below.
-  const customJobs = useQuery(
+  const rawCustomJobs = useQuery(
     api.customJobs.listForBooking,
     open && bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
   );
+  // A line added mid-job but not yet approved by the customer carries
+  // `pending_confirmation: true`. In the COMPLETION survey that's a DRAFT — the
+  // customer never confirmed it, so it must not show in the outcomes step, feed
+  // the total, seed parts, or reach the receipt. The estimate cycles
+  // (pre_job / mid_job) are exactly where those staged lines get priced and
+  // submitted for approval, so they keep them. Filtering here — at the single
+  // source — keeps every downstream consumer (price, labor, parts, outcomes,
+  // child props) consistent without threading a flag through each one.
+  const customJobs = useMemo(() => {
+    if (cycle === "pre_job" || cycle === "mid_job") return rawCustomJobs;
+    return (rawCustomJobs ?? []).filter(
+      (j) => (j as { pending_confirmation?: boolean }).pending_confirmation !== true,
+    );
+  }, [rawCustomJobs, cycle]);
   // Tire replacement can arrive as mid-job "found work" (an extra job added via
   // Flag Issue) rather than a booked service, so it won't be in prefillData /
   // parts_required_services. Detect it from the custom-job lines too, otherwise

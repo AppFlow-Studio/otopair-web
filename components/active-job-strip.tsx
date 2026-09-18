@@ -7,20 +7,12 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Maximize2, Wrench } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import ElapsedTimer from "./mechanic/elapsed-timer";
 import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "./mechanic/now-working-overlay";
 import OverrunExtendCard from "./mechanic/overrun-extend-card";
-
-/**
- * Dispatched on `window` to jump into the active job from elsewhere in the app —
- * the booking drawer's "Open active job" button fires it once the inspection is
- * in. The on-screen pill instance answers by opening the full-screen focused
- * pane (single job) or the picker (owner, multiple jobs); the off-screen copies
- * bail so only one overlay opens.
- */
-export const OPEN_ACTIVE_JOB_EVENT = "otopair:open-active-job";
 
 function shortBookingCode(id: string) {
   return `BKG-${id.slice(-4).toUpperCase()}`;

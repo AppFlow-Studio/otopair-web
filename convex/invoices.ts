@@ -405,7 +405,12 @@ async function assembleInvoiceData(
         ...services
           .map((s): string | null => (s ? (s as Doc<"services">).name : null))
           .filter((x): x is string => Boolean(x)),
-        ...customServiceNames((booking as any).custom_services),
+        // Only lines the customer actually approved — a still-`pending_confirmation`
+        // draft the mechanic added but never got confirmed must never appear on
+        // the receipt as something paid for.
+        ...customServiceNames((booking as any).custom_services, {
+          customerVisibleOnly: true,
+        }),
       ],
       parts,
 

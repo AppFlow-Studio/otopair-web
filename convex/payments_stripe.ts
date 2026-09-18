@@ -1794,6 +1794,9 @@ export const _patchBookingCaptured = internalMutation({
       await ctx.db.patch(payment._id, {
         captured_amount_cents: args.finalCaptureAmountCents,
         status: "completed",
+        // Stamp the capture time so the booking activity timeline can show a
+        // "Payment collected" entry at the moment it actually landed.
+        captured_at_ms: payment.captured_at_ms ?? now,
         updated_at: now,
       });
     }

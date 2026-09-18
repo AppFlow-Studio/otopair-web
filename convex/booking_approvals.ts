@@ -49,6 +49,11 @@ import {
   revertDeclinedMidJobWork,
   confirmStagedCustomServices,
 } from "./customJobs";
+import {
+  enqueueNotificationOutbox,
+  buildCustomerPushPayload,
+} from "./lib/notificationOutbox";
+import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
 
@@ -673,14 +678,37 @@ async function performSubmission(
         { bookingId: args.bookingId },
       );
     }
+    // No confirmation needed either way — the price sits inside (or under) what
+    // the customer already authorized. We just TELL them the price the mechanic
+    // is doing the job for, and split the copy so a quote that came in under the
+    // disclosed low reads as good news instead of a flat "confirmed". belowMin ⊂
+    // inRange, since disclosed_low ≤ disclosed_high ≤ ceiling.
+    const priceStr = `$${(priced.total_cents / 100).toFixed(2)}`;
+    const floorCents = booking.disclosed_range_low_cents ?? 0;
+    const belowMin = floorCents > 0 && priced.total_cents < floorCents;
+    const { ymm: estYmm, vin: estVin } = await resolveVehicleDisplay(
+      ctx,
+      booking.vin,
+    );
     await enqueueCustomerApprovalPush(ctx, {
       booking,
       bookingId: args.bookingId,
-      category: "booking_estimate_in_range",
-      title: "Service confirmed",
-      body: `Your mechanic confirmed the work at $${(priced.total_cents / 100).toFixed(2)}. Work is starting now.`,
+      category: belowMin
+        ? "booking_estimate_below_range"
+        : "booking_estimate_in_range",
+      title: belowMin ? "Came in under your estimate" : "Service confirmed",
+      body: belowMin
+        ? estYmm
+          ? `Good news — your ${estYmm} came in at ${priceStr}, under your estimate. No approval needed; work is starting now.`
+          : `Good news — the work came in at ${priceStr}, under your estimate. No approval needed; work is starting now.`
+        : estYmm
+          ? `Your ${estYmm} is confirmed at ${priceStr}. Work is starting now.`
+          : `Your mechanic confirmed the work at ${priceStr}. Work is starting now.`,
       deepLink: `otopair://booking/${String(args.bookingId)}`,
       dedupeSuffix: `${args.cycle}:${approvalId}`,
+      vehicleLabel: estYmm,
+      vin: estVin,
+      extra: { priceCents: priced.total_cents, belowRange: belowMin },
     });
   } else {
     await enqueueCustomerApprovalPush(ctx, {
@@ -717,26 +745,36 @@ async function enqueueCustomerApprovalPush(
     body: string;
     deepLink: string;
     dedupeSuffix: string;
+    /** Names the car in data so the app can render/route on it. */
+    vehicleLabel?: string | null;
+    vin?: string | null;
+    /** Extra context (e.g. priceCents) — mirrored top-level + under data. */
+    extra?: Record<string, unknown>;
   },
 ) {
   const userId = args.booking.user_id;
   if (!userId) return;
   const dedupeKey = `${args.category}:${String(args.bookingId)}:${args.dedupeSuffix}`;
-  await ctx.db.insert("notification_outbox", {
-    user_id: userId,
-    booking_id: args.bookingId,
-    shop_id: args.booking.shop_id,
+  // Route through the shared enqueue path so these estimate pushes get instant
+  // dispatch (runAfter(0)) + dedupe, and the canonical `{ title, body, data: {
+  // deepLink, bookingId, … } }` shape — instead of the old direct insert that
+  // waited for the 1-min cron.
+  await enqueueNotificationOutbox(ctx, {
+    userId,
+    bookingId: args.bookingId,
+    shopId: args.booking.shop_id,
     channel: "push",
     category: args.category,
-    status: "pending",
-    dedupe_key: dedupeKey,
-    payload: {
+    dedupeKey,
+    payload: buildCustomerPushPayload({
       title: args.title,
       body: args.body,
-      data: { deepLink: args.deepLink, bookingId: String(args.bookingId) },
-    },
-    created_at: Date.now(),
-    updated_at: Date.now(),
+      bookingId: args.bookingId,
+      deepLink: args.deepLink,
+      vehicleLabel: args.vehicleLabel,
+      vin: args.vin,
+      extra: args.extra,
+    }),
   });
 }
 

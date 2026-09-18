@@ -3451,6 +3451,10 @@ export default defineSchema({
     hold_amount_cents: v.optional(v.number()),
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
+    // When the final capture landed. Drives the "Payment collected" entry in the
+    // booking activity timeline. Absent on rows that never captured or predate
+    // this field (the timeline falls back to `updated_at` for those).
+    captured_at_ms: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
 
     // How the customer originated this payment. Drives the reauth UX:

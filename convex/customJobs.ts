@@ -408,6 +408,29 @@ export async function completeCustomJobsForBooking(
   const byKey = new Map<string, any>();
   for (const row of rows) byKey.set(row.match_key, row);
 
+  // Lines the mechanic added mid-job but never got the customer to confirm
+  // (pending_confirmation on the booking's custom_services copy) are DRAFTS.
+  // The customer never approved them, so they must NOT complete or bill. Terminal
+  // them as "cancelled" — kept for audit, the same spirit as a declined line —
+  // and skip them in both completion passes below.
+  const booking: any = await ctx.db.get(args.bookingId);
+  const unconfirmedKeys = new Set<string>();
+  for (const line of ((booking?.custom_services ?? []) as any[])) {
+    if (line?.name && line.pending_confirmation === true) {
+      unconfirmedKeys.add(serviceMatchKey(String(line.name)));
+    }
+  }
+  const isUnconfirmed = (row: any) =>
+    unconfirmedKeys.has(row.match_key ?? serviceMatchKey(row.name));
+  for (const row of rows) {
+    if (row.status === "planned" && isUnconfirmed(row)) {
+      await ctx.db.patch(row._id, {
+        status: "cancelled",
+        updated_at: args.now,
+      });
+    }
+  }
+
   // Actuals beat the quote. A line quoted with one part and finished with
   // another should record the one that went in.
   const actualParts = actualPartsByMatchKey(args.partsUsed);
@@ -425,6 +448,9 @@ export async function completeCustomJobsForBooking(
     // an outcome for it (the mechanic opened the survey before the decline
     // landed), skip it — the row stays "declined".
     if (row.status === "declined") continue;
+    // Never confirmed by the customer → cancelled above, never billed here even
+    // if the survey still carried an outcome for it.
+    if (isUnconfirmed(row)) continue;
     const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
     const fitted = partsFor(row.match_key);
     await ctx.db.patch(row._id, {
@@ -463,6 +489,8 @@ export async function completeCustomJobsForBooking(
   for (const row of rows) {
     if (row.status !== "planned") continue;
     if (row.updated_at === args.now) continue;
+    // Unconfirmed drafts were cancelled above — don't auto-complete them.
+    if (isUnconfirmed(row)) continue;
     // No outcome reported, but parts may still have been fitted — record them
     // rather than closing the row emptier than the evidence allows.
     const fitted = partsFor(row.match_key);

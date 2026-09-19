@@ -227,6 +227,26 @@ crons.interval(
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
 );
 
+// Recover notification_outbox rows stranded in `dispatching` by a mid-send
+// network/timeout error (the dispatcher can't tell "delivered" from "lost", so
+// it leaves them), flipping any stuck > 10 min back to `pending` for the next
+// dispatch tick. Channel-agnostic (push/sms/email).
+crons.interval(
+  "reset-stuck-dispatching",
+  { minutes: 5 },
+  (internal as any).lib.push_dispatcher.resetStuckDispatching,
+);
+
+// Confirm actual delivery: read Expo's push receipts for accepted tickets
+// (`dispatched` rows), promoting them to `delivered` or `failed` (clearing the
+// token on DeviceNotRegistered). Runs every 2 min; receipts that never appear
+// are given up on after 30 min.
+crons.interval(
+  "poll-push-receipts",
+  { minutes: 2 },
+  (internal as any).lib.push_dispatcher.pollPushReceipts,
+);
+
 // Determinism sentinel (Wave 4): weekly probe of ONE operator-supplied VIN
 // (DETERMINISM_SENTINEL_VINS="label:VIN,…" — unset = free no-op). Sunday
 // 03:00 UTC so the ~1h probe chain finishes well before the repair/price

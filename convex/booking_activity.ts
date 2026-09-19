@@ -134,6 +134,19 @@ type ActivityEvent =
         oldValue: string | null;
         newValue: string | null;
       };
+    }
+  | {
+      /* The customer's card was charged at completion. Synthesized from the
+         payments row (there's no status_history / notification for capture), so
+         it also covers rows captured before this event existed. */
+      type: "payment_captured";
+      at: number;
+      actor: Actor;
+      data: {
+        amountCents: number;
+        cardBrand: string | null;
+        last4: string | null;
+      };
     };
 
 async function getCurrentUserOrNull(ctx: any) {
@@ -228,7 +241,7 @@ export const getBookingActivityLog = query({
     );
     if (!booking) return [];
 
-    const [statusHistory, approvals, partEdits, services, customJobs] = await Promise.all([
+    const [statusHistory, approvals, partEdits, services, customJobs, payment] = await Promise.all([
       ctx.db
         .query("booking_status_history")
         .withIndex("by_booking_id", (q: any) =>
@@ -256,6 +269,13 @@ export const getBookingActivityLog = query({
         .query("custom_jobs")
         .withIndex("by_booking", (q: any) => q.eq("booking_id", args.bookingId))
         .collect(),
+      ctx.db
+        .query("payments")
+        .withIndex("by_booking_id", (q: any) =>
+          q.eq("booking_id", args.bookingId),
+        )
+        .unique()
+        .catch(() => null),
     ]);
 
     const resolveActor = makeActorResolver(ctx);
@@ -395,6 +415,24 @@ export const getBookingActivityLog = query({
             quantity: part.quantity,
           })),
           quotedPartsCents: job.quoted_parts_cents ?? null,
+        },
+      });
+    }
+
+    // ── 6. Payment collected ────────────────────────────────────────────
+    // Capture writes no status_history / notification, so synthesize the entry
+    // from the payments row. captured_at_ms is the precise moment; fall back to
+    // updated_at for rows captured before that field existed.
+    const pay = payment as any;
+    if (pay && typeof pay.captured_amount_cents === "number" && pay.captured_amount_cents > 0) {
+      events.push({
+        type: "payment_captured",
+        at: pay.captured_at_ms ?? pay.updated_at ?? createdAt,
+        actor: await resolveActor("stripe_webhook"),
+        data: {
+          amountCents: pay.captured_amount_cents,
+          cardBrand: pay.card_brand ?? null,
+          last4: pay.card_last4 ?? null,
         },
       });
     }

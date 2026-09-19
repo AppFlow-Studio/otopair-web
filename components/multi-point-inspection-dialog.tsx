@@ -51,6 +51,7 @@ import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import {
   Select,
   SelectItem,
@@ -60,6 +61,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import {
+  isMileageConfirmRequired,
+  mileageConfirmCopy,
+} from "@/lib/mileage-audit";
 import {
   classifyInspectionMeasure,
   cornerCopyPatch,
@@ -721,6 +726,10 @@ function MultiPointInspectionDialogBody({
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
+  // Soft-confirm for a lower / far-off odometer (never a hard block). The
+  // pending action is remembered so "Save anyway" resumes the same submit.
+  const [mileageConfirmOpen, setMileageConfirmOpen] = useState(false);
+  const pendingSubmitActionRef = useRef<SubmitIntent | null>(null);
   const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
   const [inspectionStatus, setInspectionStatus] = useState<
     InspectionStatus | ""
@@ -757,17 +766,27 @@ function MultiPointInspectionDialogBody({
     });
   }, []);
 
+  // The "current mileage" baseline is the last STORED reading on the passport —
+  // what a new reading is compared against for the soft confirm. Prefer it over
+  // prefillData.mileage, which is the mechanic's own saved DRAFT
+  // (jobActuals.prejobReport): using the draft made the field compare against
+  // itself and hid a stale stored value the mechanic may be correcting (e.g. a
+  // bogus 300,000 on file while they read 66,000). The server compares against
+  // this same stored value, so client + server now agree.
   const baselineMileage =
-    prefillData?.mileage ?? passportData?.passport.mileage ?? null;
-  // An odometer physically can't run backwards, so a new reading below the
-  // vehicle's stored mileage is always an error — enforced live as the mechanic
-  // types and again as a hard gate on every "continue" path (submit + save).
-  const odometerBelowBaseline = (value: string) =>
-    typeof baselineMileage === "number" &&
-    value.trim() !== "" &&
-    Number(value) < baselineMileage;
-  const odometerTooLowMessage = () =>
-    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
+    passportData?.passport.mileage ?? prefillData?.mileage ?? null;
+  // A lower / far-off odometer no longer hard-blocks (odometers CAN legitimately
+  // read low after a cluster swap or a wrong value on file). When the new
+  // reading is anomalous the mechanic gets a soft confirm on save and the change
+  // is audited server-side. This muted hint previews that as they type.
+  const mileageNeedsConfirm =
+    mileage.trim() !== "" &&
+    isMileageConfirmRequired(baselineMileage, Number(mileage));
+  const mileageSoftHint = !mileageNeedsConfirm
+    ? ""
+    : typeof baselineMileage === "number" && Number(mileage) < baselineMileage
+      ? `Lower than the last reading (${baselineMileage.toLocaleString()} mi) — you'll confirm on save.`
+      : `Big jump from the last reading — you'll confirm on save.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -1571,18 +1590,8 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    // A backwards odometer is invalid on every continue path — block both
-    // "Submit" and "Save & close" whenever a reading has been entered (an empty
-    // reading is only required for "start", handled above).
-    if (odometerBelowBaseline(mileage)) {
-      const message = odometerTooLowMessage();
-      setError(message);
-      setMileageError(message);
-      requestAnimationFrame(() =>
-        document.getElementById("inspection-odometer")?.focus(),
-      );
-      return false;
-    }
+    // A lower / far-off odometer is NOT blocked here — handleSubmit shows a
+    // soft confirm (never a wall) and the change is audited server-side.
     setMileageError("");
     return true;
   }
@@ -1596,6 +1605,19 @@ function MultiPointInspectionDialogBody({
     }
     pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
+    // Soft confirm for a lower / far-off odometer — asks once, never blocks.
+    if (
+      mileage.trim() !== "" &&
+      isMileageConfirmRequired(baselineMileage, Number(mileage))
+    ) {
+      pendingSubmitActionRef.current = action;
+      setMileageConfirmOpen(true);
+      return;
+    }
+    await runSubmit(action);
+  }
+
+  async function runSubmit(action: SubmitIntent) {
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
@@ -2219,15 +2241,14 @@ function MultiPointInspectionDialogBody({
                     onChange={(e) => {
                       const next = e.target.value.replace(/[^0-9]/g, "");
                       setMileage(next);
-                      // Flag a backwards odometer the instant it's typed, so the
-                      // mechanic fixes it in place instead of hitting a wall at
-                      // submit time.
-                      setMileageError(
-                        odometerBelowBaseline(next)
-                          ? odometerTooLowMessage()
-                          : "",
-                      );
+                      // A lower / far-off reading is no longer an error — it's a
+                      // soft confirm on save (previewed by mileageSoftHint). Just
+                      // clear any stale server error while typing.
+                      if (mileageError) setMileageError("");
                     }}
+                    // Save on blur so the reading lands immediately, not only on
+                    // the 1s autosave debounce.
+                    onBlur={flushPendingSave}
                     placeholder="—"
                     className="w-36 rounded-lg border-2 border-primary/50 bg-card px-3 py-2 text-[18px] font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
                   />
@@ -2239,7 +2260,45 @@ function MultiPointInspectionDialogBody({
                   <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-red-600">
                     {mileageError}
                   </span>
+                ) : mileageSoftHint ? (
+                  <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-amber-600">
+                    {mileageSoftHint}
+                  </span>
                 ) : null}
+                <ConfirmationDialog
+                  open={mileageConfirmOpen}
+                  zIndexClassName="z-[100]"
+                  title={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.title ?? "Confirm odometer"
+                  }
+                  description={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.body
+                  }
+                  onClose={() => {
+                    pendingSubmitActionRef.current = null;
+                    setMileageConfirmOpen(false);
+                  }}
+                  secondaryAction={{
+                    label: "Go back",
+                    variant: "outline",
+                    onAction: () => {
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                    },
+                  }}
+                  primaryAction={{
+                    label: "Save anyway",
+                    variant: "primary",
+                    onAction: () => {
+                      const action = pendingSubmitActionRef.current ?? "close";
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                      void runSubmit(action);
+                    },
+                  }}
+                />
               </label>
               <fieldset className={phase === "mpi" ? undefined : "hidden"}>
                 <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -4295,7 +4354,7 @@ function SpecConfirmControl({
     <button
       type="button"
       onClick={onConfirm}
-      className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+      className="inline-flex items-center gap-1 cursor-pointer rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
     >
       <Check className="h-3.5 w-3.5" />
       Confirm spec
@@ -5098,9 +5157,18 @@ function PartsVerifyRow({
       </div>
 
       {item.current ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          Current guess: {item.current.name} · {item.current.oemNumber} (
-          {Math.round(item.current.confidence * 100)}% confidence)
+        <p className="mb-2 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+          <span>
+            Current guess: {item.current.name}
+            {item.current.oemNumber ? " ·" : ""}
+          </span>
+          {item.current.oemNumber ? (
+            <CopyableOemNumber
+              value={item.current.oemNumber}
+              className="text-[11px] text-muted-foreground"
+            />
+          ) : null}
+          <span>({Math.round(item.current.confidence * 100)}% confidence)</span>
         </p>
       ) : null}
 

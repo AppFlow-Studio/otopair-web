@@ -2675,9 +2675,16 @@ export default defineSchema({
     // "bay" | "mechanic" (absent = "mechanic"). A bay is a mechanics row with
     // no last name — same schedule/availability machinery, different label.
     entity_type: v.optional(v.string()),
+    // Set only when this mechanic profile IS a portal user working on cars
+    // (currently: a shop owner who opted into being schedulable). Lets us find
+    // and reuse an owner's own mechanic row instead of creating duplicates.
+    // Normal shop-added mechanics leave this unset and link back via
+    // shop_users.mechanic_id instead.
+    user_id: v.optional(v.id("users")),
   })
     .index("by_shop_id", ["shop_id"])
-    .index("by_is_active", ["is_active"]),
+    .index("by_is_active", ["is_active"])
+    .index("by_user_id", ["user_id"]),
 
   // [D] 8 fields (A/W had 6)
   time_slots: defineTable({
@@ -3444,6 +3451,10 @@ export default defineSchema({
     hold_amount_cents: v.optional(v.number()),
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
+    // When the final capture landed. Drives the "Payment collected" entry in the
+    // booking activity timeline. Absent on rows that never captured or predate
+    // this field (the timeline falls back to `updated_at` for those).
+    captured_at_ms: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
 
     // How the customer originated this payment. Drives the reauth UX:
@@ -4873,9 +4884,11 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     channel: v.string(),
     category: v.string(),
-    // `status` is the DELIVERY axis only (pending → dispatching → dispatched |
-    // failed | no_push_token | resolved-for-front_desk). Owned by enqueue + the
-    // channel dispatchers. It no longer drives the in-app feed — see read_at /
+    // `status` is the DELIVERY axis only (pending → dispatching → dispatched →
+    // delivered | failed | no_push_token | resolved-for-front_desk). Owned by
+    // enqueue + the channel dispatchers. `dispatched` = Expo accepted the ticket;
+    // `delivered` = its receipt confirmed handoff to APNs/FCM (see
+    // pollPushReceipts). It no longer drives the in-app feed — see read_at /
     // resolved_at below.
     status: v.string(),
     dedupe_key: v.string(),
@@ -4884,6 +4897,9 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.optional(v.number()),
     processed_at: v.optional(v.number()),
+    // Expo push ticket id, recorded when a push is accepted (status
+    // `dispatched`). The receipts poller reads it back to confirm delivery.
+    push_ticket_id: v.optional(v.string()),
     // READ axis: set when the user/staff has seen the row. Drives read/unread
     // styling; does NOT remove the row from the feed.
     read_at: v.optional(v.number()),
@@ -5342,9 +5358,9 @@ export default defineSchema({
       // — but it must never reach the completed job, the receipt, or the price.
       v.literal("declined"),
     ),
-    // The mid-job booking_approvals cycle that introduced this line. Set when
-    // the mechanic submits the mid-job change (stampMidJobCustomJobs); it's the
-    // reliable join that lets a customer decline revert exactly the lines that
+    // The pre/mid-job booking_approvals cycle that introduced this line. Set when
+    // the mechanic submits the estimate change (stampIntroducedCustomJobs); it's
+    // the reliable join that lets a customer decline revert exactly the lines that
     // cycle added and nothing from a prior approved cycle. Null on rows added
     // outside a mid-job cycle (source "booking"/"post_job"/"recommendation").
     introduced_by_approval_id: v.optional(v.id("booking_approvals")),
@@ -5789,6 +5805,41 @@ export default defineSchema({
     unit: v.string(),
     recordedAt: v.number(),
   }).index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
+
+  // Append-only audit of odometer CHANGES made through the shop job flow (and
+  // director edits) — who changed the reading, from what to what, at which
+  // phase, and whether an anomalous value was acknowledged. Distinct from
+  // odometer_history (which logs Smartcar/document *observations* of the value,
+  // not edits). Keyed by canonical VIN because the job flow only has a VIN.
+  // Written by convex/lib/mileageChangeEvents.ts:logMileageChange, which also
+  // mirrors a row to audit_log for the director AuditDrawer.
+  mileage_change_events: defineTable({
+    vin: v.string(), // canonical VIN
+    booking_id: v.optional(v.id("bookings")),
+    source: v.union(
+      v.literal("inspection"),
+      v.literal("prejob"),
+      v.literal("postjob"),
+      v.literal("director_edit"),
+      v.literal("checkin"),
+    ),
+    before_mileage: v.optional(v.number()),
+    after_mileage: v.number(),
+    // Why this write was flagged (or "normal"). Mirrors classifyMileageChange
+    // in lib/mileage-audit.ts.
+    reason: v.union(
+      v.literal("normal"),
+      v.literal("decrease"),
+      v.literal("far_jump"),
+    ),
+    // True when a flagged (non-"normal") value was acknowledged via the confirm.
+    confirmed: v.boolean(),
+    actor_user_id: v.optional(v.id("users")),
+    actor_name: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_vin", ["vin", "created_at"])
+    .index("by_booking", ["booking_id"]),
 
 // === [APPENDED post-merge] oto_migrations ===
 

@@ -77,3 +77,33 @@ const TEMPLATES: Record<DiagnosticSystem, string[]> = {
 export function templateForSystem(system: DiagnosticSystem): DiagnosticChecklistItem[] {
   return TEMPLATES[system].map((label) => ({ label, status: "pending" }));
 }
+
+/**
+ * A service name is "the diagnostic" when it reads as a diagnostic/scan service.
+ * Kept in sync with `resolveDiagnosticSystem`'s `/diagnost/i` fallback in
+ * convex/bookings.ts so the UI classifies a booking exactly the way the backend
+ * decides which system to run.
+ */
+export function isDiagnosticServiceName(name: string): boolean {
+  return /diagnost/i.test(name ?? "");
+}
+
+/**
+ * Split a booking's service names into the diagnostic line(s) and any other
+ * (billable repair/maintenance) work. `additional.length === 0` means the
+ * booking is diagnostic-only — its terminal action is "Complete diagnostic".
+ * Otherwise it's a combined booking that must hand off to the post-job survey
+ * so the remaining services' parts/labor get captured.
+ */
+export function splitDiagnosticServices(names: string[]): {
+  diagnostic: string[];
+  additional: string[];
+} {
+  const diagnostic: string[] = [];
+  const additional: string[] = [];
+  for (const name of names ?? []) {
+    if (isDiagnosticServiceName(name)) diagnostic.push(name);
+    else additional.push(name);
+  }
+  return { diagnostic, additional };
+}

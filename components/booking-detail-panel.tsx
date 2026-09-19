@@ -42,7 +42,10 @@ import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog"
 import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
-import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import {
+  splitDiagnosticServices,
+  templateForSystem,
+} from "@/lib/diagnostic-checklist-templates";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   EARLY_PUSH_THRESHOLD_MS,
@@ -72,7 +75,9 @@ import {
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
-import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
+import BookingTimeline from "@/components/booking/booking-timeline";
+import ElapsedTimer from "@/components/mechanic/elapsed-timer";
+import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import {
   type ActivityEvent,
@@ -640,6 +645,8 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  /** Per-service agreed labor hours, matched to `serviceNames` by name. */
+  perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   tireSpecs?: {
     size: string;
     type: string;
@@ -842,7 +849,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
     const [showDeclineModal, setShowDeclineModal] = useState(false);
-    const [showTimelineModal, setShowTimelineModal] = useState(false);
+    const [activeTab, setActiveTab] = useState<"details" | "timeline">("details");
     const [nowMs, setNowMs] = useState(() => Date.now());
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
@@ -1105,6 +1112,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setRaceConflictBookingId(null);
       setAssigningMechanicId(currentAssignmentKey);
       setIsEditingActuals(false);
+      setActiveTab("details");
       setCopiedField(null);
       if (copyEmailTimeoutRef.current !== null) {
         window.clearTimeout(copyEmailTimeoutRef.current);
@@ -1952,29 +1960,60 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             Open vehicle check
                           </button>
                         )}
-                        {canOpenMpi && (
-                          <button
-                            onClick={() => {
-                              setActionError("");
-                              setShowPrejobDialog(true);
-                            }}
-                            disabled={isActioning}
-                            title={
-                              mpiGateOpen
-                                ? "Measurements that need the car on the lift. The job can't be completed until these are in."
-                                : "Reopen the inspection to record anything noticed mid-job."
-                            }
-                            className={`${
-                              mpiGateOpen
-                                ? `${drawerPrimaryButtonClassName} flex-1`
-                                : drawerSecondaryButtonClassName
-                            } py-2.5`}
-                          >
-                            {mpiGateOpen
-                              ? "Continue inspection"
-                              : "Open inspection"}
-                          </button>
-                        )}
+                        {canOpenMpi &&
+                          (mpiGateOpen ? (
+                            <button
+                              onClick={() => {
+                                setActionError("");
+                                setShowPrejobDialog(true);
+                              }}
+                              disabled={isActioning}
+                              title="Measurements that need the car on the lift. The job can't be completed until these are in."
+                              className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                            >
+                              Continue inspection
+                            </button>
+                          ) : (
+                            // Inspection is in — the on-lift half is no longer
+                            // gating. The mechanic's attention is now the running
+                            // job, so this slot surfaces the live labor clock and
+                            // pops the active-job pill (bottom-left of the
+                            // schedule) rather than reopening the inspection.
+                            <button
+                              type="button"
+                              onClick={() =>
+                                window.dispatchEvent(
+                                  new CustomEvent(OPEN_ACTIVE_JOB_EVENT, {
+                                    detail: { bookingId: job._id },
+                                  }),
+                                )
+                              }
+                              disabled={isActioning}
+                              title="Open the active-job pill — live timer, full-screen view, and overrun controls."
+                              className={`${drawerSecondaryButtonClassName} py-2.5`}
+                            >
+                              <span
+                                className={`inline-flex h-2 w-2 shrink-0 rounded-full ${
+                                  jobPaused
+                                    ? "bg-amber-500"
+                                    : "animate-pulse bg-emerald-500"
+                                }`}
+                              />
+                              <span>Open active job</span>
+                              <ElapsedTimer
+                                startedAtMs={job.jobActuals?.startedAt}
+                                paused={jobPaused}
+                                blockedMs={
+                                  (jobBlockers?.blockedMinutes ?? 0) * 60_000
+                                }
+                                className={`font-mono text-xs font-semibold tabular-nums ${
+                                  jobPaused
+                                    ? "text-amber-600"
+                                    : "text-foreground"
+                                }`}
+                              />
+                            </button>
+                          ))}
                         {canMarkVehicleHere && (
                           <button
                             onClick={handleVehicleAtShop}
@@ -2316,6 +2355,27 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 {actionBar}
               </div>
             ) : null}
+            {job ? (
+              <div className="flex items-center gap-1 border-t border-border px-3">
+                {(["details", "timeline"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={`relative px-3 py-2.5 text-[13px] font-semibold transition-colors ${
+                      activeTab === tab
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {tab === "details" ? "Details" : "Timeline"}
+                    {activeTab === tab ? (
+                      <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+                    ) : null}
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           {/* Body */}
@@ -2337,6 +2397,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               <p className="text-sm text-muted-foreground">
                 Booking not found.
               </p>
+            ) : activeTab === "timeline" ? (
+              <BookingTimeline
+                activityLog={activityLog}
+                hideDisclosedRange={hideDisclosedRange}
+              />
             ) : (
               <div className="divide-y divide-border">
                 <VehiclePassportCard
@@ -2615,7 +2680,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </p>
                   <button
                     type="button"
-                    onClick={() => setShowTimelineModal(true)}
+                    onClick={() => setActiveTab("timeline")}
                     className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary transition-opacity hover:opacity-80"
                   >
                     Full timeline
@@ -2802,10 +2867,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           recommendedServiceNote={job?.recommendedServiceNote ?? null}
           followupState={job?.diagnosticFollowupState ?? null}
           awaitingInfoNote={job?.awaitingInfoNote ?? null}
+          isDiagnosticOnly={
+            splitDiagnosticServices(job?.serviceNames ?? []).additional.length ===
+            0
+          }
+          additionalServiceNames={splitDiagnosticServices(
+            job?.serviceNames ?? [],
+          ).additional.map(formatServiceDisplayName)}
           onClose={() => setShowDiagnosticDialog(false)}
-          onCompleted={() => {
+          onCompleted={(msg) => {
             setShowDiagnosticDialog(false);
-            onSuccess?.("Diagnostic completed");
+            onSuccess?.(msg ?? "Diagnostic completed");
+          }}
+          onContinueToPostJob={() => {
+            setShowDiagnosticDialog(false);
+            setShowPostjobDialog(true);
+          }}
+          onAddWorkNow={() => {
+            setShowDiagnosticDialog(false);
+            setShowMidJobDialog(true);
           }}
           onError={(msg) => setActionError(msg)}
           onOpenScheduler={(ctx) => {
@@ -2897,6 +2977,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
             shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
             shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            bookingServiceLines={(job as any)?.bookingServiceLines ?? null}
           />
         </BookingWorkflowGuard>
 
@@ -2942,6 +3023,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
             shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
             shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            bookingServiceLines={(job as any)?.bookingServiceLines ?? null}
           />
         </BookingWorkflowGuard>
 
@@ -3173,16 +3255,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 setIsActioning(false);
               }
             }}
-          />
-        ) : null}
-
-        {job ? (
-          <BookingTimelineModal
-            open={showTimelineModal}
-            onClose={() => setShowTimelineModal(false)}
-            history={job.history}
-            activityLog={activityLog}
-            hideDisclosedRange={hideDisclosedRange}
           />
         ) : null}
       </>

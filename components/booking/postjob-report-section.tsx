@@ -17,6 +17,7 @@ import {
 } from "@/components/drawer-panel-styles";
 import type { PostJobSurveyPayload } from "@/lib/vehicle-passport";
 import { formatPartIdentity } from "@/lib/vehicle-passport";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import { formatHoursValue } from "@/lib/labor-units";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
@@ -183,9 +184,25 @@ function ReportView({ report }: { report: PostJobSurveyPayload }) {
               >
                 <div className="min-w-0">
                   <p className="truncate font-medium">{part.part_name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatPartIdentity(part)}
-                  </p>
+                  {part.is_tire ||
+                  (part.oem_number ?? "").toUpperCase().startsWith("TIRE-") ? (
+                    // Tires have no orderable OEM number — keep the descriptive
+                    // brand/model/size string, nothing to copy.
+                    <p className="text-xs text-muted-foreground">
+                      {formatPartIdentity(part)}
+                    </p>
+                  ) : (
+                    <p className="flex min-w-0 items-center text-xs text-muted-foreground">
+                      {part.brand ? (
+                        <span className="truncate">{part.brand}&nbsp;·&nbsp;</span>
+                      ) : null}
+                      <CopyableOemNumber
+                        value={part.oem_number}
+                        className="text-xs text-muted-foreground"
+                        emptyFallback=""
+                      />
+                    </p>
+                  )}
                 </div>
                 <span className="shrink-0 text-sm">
                   {formatCurrency(part.cost)}

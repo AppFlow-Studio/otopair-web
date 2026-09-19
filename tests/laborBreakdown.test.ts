@@ -132,6 +132,33 @@ describe("resolveAgreedLaborLines", () => {
     expect(a.laborCost).toBeCloseTo(150, 6);
   });
 
+  it("does not double-bill labor when a booked service is also added as a custom line", () => {
+    // "Cabin Air Filter" is booked (0.5h) AND slipped in as an off-catalog line
+    // that collapses to the same key. The booked line owns the work; the custom
+    // duplicate must be dropped so labor isn't apportioned across two lines.
+    const { lines, totalHours } = resolveAgreedLaborLines({
+      baseServices: [{ name: "Cabin Air Filter", catalogHours: 0.5 }],
+      customServices: [{ name: "Cabin air filter", durationMinutes: 30 }],
+      customJobs: [
+        {
+          _id: "job1",
+          name: "Cabin air filter",
+          estimated_minutes: 30,
+          status: "planned",
+        },
+      ],
+      allocations: [{ line_key: "base", hours: 0.5 }],
+      laborSubtotalDollars: 75,
+    });
+    // One line only — the duplicate custom line is skipped.
+    expect(lines).toHaveLength(1);
+    expect(lines[0].name).toBe("Cabin Air Filter");
+    expect(lines[0].laborHours).toBe(0.5);
+    // No double-count: the booked line keeps the whole labor subtotal.
+    expect(totalHours).toBeCloseTo(0.5, 6);
+    expect(lines[0].laborCost).toBeCloseTo(75, 6);
+  });
+
   it("distributes the base lump across multiple booked services by catalog hours", () => {
     const { lines } = resolveAgreedLaborLines({
       baseServices: [

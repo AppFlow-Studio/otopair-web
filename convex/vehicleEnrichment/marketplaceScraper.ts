@@ -20,6 +20,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery } from "../_generated/server";
 import { api, internal } from "../_generated/api";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 import Anthropic from "@anthropic-ai/sdk";
 
 // ─── Config ─────────────────────────────────────────────────────
@@ -552,7 +553,7 @@ export const processVinQueue = internalAction({
         await ctx.scheduler.runAfter(
           delay,
           internal.vehicleEnrichment.marketplaceScraper.enrichAndTrack,
-          { vin: entry.vin, vin_queue_id: entry._id }
+          { vin: entry.vin, vin_queue_id: entry._id, trigger: "marketplace" }
         );
         enriched++;
       } catch (e: any) {
@@ -579,6 +580,10 @@ export const enrichAndTrack = internalAction({
   args: {
     vin: v.string(),
     vin_queue_id: v.id("vin_queue"),
+    // Provenance forwarded to the run (default: marketplace/system). See
+    // lib/enrichmentActor. A director "Re-run" sets trigger + actor here.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
   },
   handler: async (ctx, args) => {
     // Concurrency gate — if too many are already running, re-queue with delay
@@ -592,7 +597,7 @@ export const enrichAndTrack = internalAction({
       await ctx.scheduler.runAfter(
         60_000,
         internal.vehicleEnrichment.marketplaceScraper.enrichAndTrack,
-        { vin: args.vin, vin_queue_id: args.vin_queue_id }
+        { vin: args.vin, vin_queue_id: args.vin_queue_id, trigger: args.trigger, actor: args.actor }
       );
       return;
     }
@@ -644,6 +649,8 @@ export const enrichAndTrack = internalAction({
             displacement: decoded.displacement ?? "",
             drivetrain: decoded.drivetrain ?? undefined,
             nhtsaVinKey: decoded.nhtsaVinKey ?? undefined,
+            trigger: args.trigger ?? "marketplace",
+            actor: args.actor,
           }
         );
       }

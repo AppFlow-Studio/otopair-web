@@ -115,6 +115,14 @@ export function resolveAgreedLaborLines(input: {
   const raw: Array<{ name: string; hours: number | null }> = [];
   let totalHours = 0;
 
+  // Keys of the BOOKED services, so a custom line that duplicates one (a service
+  // added off-catalog that's already booked) is dropped below instead of billing
+  // its labor twice. Mirrors the parts twin: an added line resolving to an
+  // already-booked catalog service is redundant — the booked line owns the work.
+  const baseKeys = new Set(
+    input.baseServices.map((b) => serviceMatchKey(String(b.name))),
+  );
+
   // Booked services: distribute the agreed "base" lump across the booked lines
   // in proportion to their catalog hours so each line reads naturally and they
   // sum to the agreed base. No allocation → the catalog default stands.
@@ -141,6 +149,10 @@ export function resolveAgreedLaborLines(input: {
     const name = typeof c.name === "string" ? c.name.trim() : "";
     if (!name) continue;
     const key = serviceMatchKey(name);
+    // A custom line that duplicates a BOOKED service bills labor that the base
+    // lump already covers — skip it so the line (and its hours) isn't counted
+    // twice on the receipt.
+    if (baseKeys.has(key)) continue;
     const jobId = jobIdByKey.get(key);
     const allocHours = jobId != null ? allocByJobId.get(jobId) : undefined;
     let hours: number | null;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   canMarkFieldUnavailable,
+  completeInspectionPhaseForDevelopment,
   cornerCopyPatch,
   classify,
   createInspectionState,
@@ -1225,5 +1226,49 @@ describe("pre-check / MPI phase split (Spec v2 §1.1)", () => {
     expect(validateZoneForCompletion(state, "FL", brakeJob("mpi"))).toMatchObject({
       valid: false,
     });
+  });
+});
+
+describe("development inspection phase completion", () => {
+  it("fills only the required pre-check fields for the booked service", () => {
+    const initial = createInspectionState();
+    const state = completeInspectionPhaseForDevelopment(initial, {
+      serviceNames: ["Oil Change"],
+      phase: "pre",
+      brakeScope: { hasBrakeWork: false, front: false, rear: false },
+      isFirstShopVisit: false,
+    });
+
+    expect(state.zones.FL).toMatchObject({
+      done: true,
+      donePhase: "pre",
+      statuses: {
+        tread: "not_visible",
+        psi: "not_visible",
+        wear: "not_visible",
+        brake_visual: "not_visible",
+      },
+    });
+    expect(state.zones.ENG?.lights.warning_lights).toEqual([{ light: "none" }]);
+    expect(state.zones.FRT?.tri.horn).toBe("g");
+    expect(state.zones.UND).toEqual(initial.zones.UND);
+    expect(state.zones.FL?.measures.pad_inner ?? "").toBe("");
+  });
+
+  it("fills only the active MPI phase", () => {
+    const initial = createInspectionState();
+    const state = completeInspectionPhaseForDevelopment(initial, {
+      serviceNames: ["Brake Pad Replacement"],
+      phase: "mpi",
+      brakeScope: { hasBrakeWork: true, front: true, rear: false },
+      isFirstShopVisit: false,
+    });
+
+    expect(state.zones.FL).toMatchObject({ done: true, donePhase: "mpi" });
+    expect(state.zones.FR).toMatchObject({ done: true, donePhase: "mpi" });
+    expect(state.zones.RL).toEqual(initial.zones.RL);
+    expect(state.zones.ENG).toEqual(initial.zones.ENG);
+    expect(state.zones.FL?.statuses.tread).toBeUndefined();
+    expect(state.zones.FL?.statuses.pad_inner).toBe("not_visible");
   });
 });

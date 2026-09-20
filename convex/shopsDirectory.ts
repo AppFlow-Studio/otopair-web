@@ -14,6 +14,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { listAvailableWindowsForShopDate } from "./lib/timeSlotAvailability";
 import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
 import { resolveVehicleDisplay, enrichReviews } from "./lib/bookingEnrichment";
+import { normalizeShopServicePrice } from "./lib/shopServicePricing";
 
 // Booking statuses that no longer occupy a bay (mirrors the availability
 // engine's TERMINAL_BOOKING_STATUSES so the portal calendar agrees with what
@@ -747,7 +748,7 @@ export const shopInsights = query({
       .sort((a, b) => b.created_at - a.created_at)
       .map((a) => ({ actor: a.actor, detail: a.detail ?? null, at: a.created_at }));
 
-    // Fixed-price overrides, service names resolved.
+    // Fixed/range overrides, service names resolved.
     const svcName = new Map<string, string>();
     const fixedPrices = await Promise.all(
       fixedPriceRows.map(async (f) => {
@@ -756,10 +757,13 @@ export const shopInsights = query({
           const s = await ctx.db.get(f.service_id);
           svcName.set(sid, s?.name ?? "(service)");
         }
+        const price = normalizeShopServicePrice(f);
         return {
           service: svcName.get(sid) ?? "(service)",
           tier: f.tier,
-          price: f.price_cents / 100,
+          price: price?.isFixed ? price.lowCents / 100 : null,
+          priceLow: price ? price.lowCents / 100 : null,
+          priceHigh: price ? price.highCents / 100 : null,
         };
       }),
     );

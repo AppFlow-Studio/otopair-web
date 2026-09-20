@@ -10,6 +10,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { usePortalSidebar } from "../portal-context";
 import BookingDetailPanel, { type JobDetailPanelHandle } from "@/components/booking-detail-panel";
 import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actuals-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import RescheduleConfirmationDialog, {
   type RescheduleConfirmationProposal,
 } from "@/components/reschedule-confirmation-dialog";
@@ -21,6 +22,7 @@ import LateStartReviewDialog, {
 import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "@/components/mechanic/now-working-overlay";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   GreetingHeader,
   MetricRow,
@@ -219,20 +221,19 @@ function OwnerDashboardPage({
   const denyLateStartReview = useMutation(api.bookings.denyLateStartReview);
   const applyManualLateStartReview = useMutation(api.bookings.applyManualLateStartReview);
   const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
-  const acceptBooking = useMutation(api.bookings.accept);
-
-  const handleAcceptBooking = useCallback(
-    async (bookingId: Id<"bookings">) => {
-      try {
-        await acceptBooking({ bookingId });
-        setSuccessMessage("Booking accepted");
-      } catch (error: unknown) {
-        setSuccessMessage(
-          error instanceof Error ? error.message : "Could not accept booking.",
-        );
-      }
+  // Accepting a booking is a deliberate, review-first commitment, so it lives
+  // only inside the booking drawer. From the dashboard we send the owner to the
+  // schedule with that booking's drawer open — never a one-click accept here.
+  const openBookingOnSchedule = useCallback(
+    (bookingId: Id<"bookings">, date?: string | null) => {
+      const p = new URLSearchParams({
+        action: "open-booking",
+        bookingId: String(bookingId),
+      });
+      if (date) p.set("date", date);
+      router.push(`/schedule?${p.toString()}`);
     },
-    [acceptBooking],
+    [router],
   );
 
   useEffect(() => {
@@ -484,7 +485,7 @@ function OwnerDashboardPage({
         kind: "enroute",
         dot: "success",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: alert.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
         meta: `en route · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -504,7 +505,7 @@ function OwnerDashboardPage({
         kind: "notified",
         dot: "warning",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: alert.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
         meta: `notified · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -522,14 +523,14 @@ function OwnerDashboardPage({
         kind: "accept",
         dot: "primary",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: job.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
         meta: `${formatScheduledDateLabel(job.scheduledDate)} · ${job.scheduledTimeLabel}`,
         action: {
-          label: "Accept",
+          label: "Open",
           tone: "primary",
-          run: () => void handleAcceptBooking(job._id),
+          run: () => openBookingOnSchedule(job._id, job.scheduledDate),
         },
-        onOpen: () => setSelectedJobId(job._id),
+        onOpen: () => openBookingOnSchedule(job._id, job.scheduledDate),
       });
     }
 
@@ -562,7 +563,7 @@ function OwnerDashboardPage({
         kind: "actuals",
         dot: "muted",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: job.serviceSummary || undefined,
+        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
         meta: "needs details",
         action: {
           label: "Finalize",
@@ -593,7 +594,7 @@ function OwnerDashboardPage({
     customerLateNotificationSent,
     lateStartReviews,
     markVehicleAtShop,
-    handleAcceptBooking,
+    openBookingOnSchedule,
     router,
   ]);
 
@@ -609,8 +610,6 @@ function OwnerDashboardPage({
     count: needItems.length,
     enabled: listNavEnabled,
     onOpen: (i) => needItems[i]?.onOpen(),
-    onAccept: (i) => needItems[i]?.action?.run(),
-    canAccept: (i) => needItems[i]?.kind === "accept",
   });
 
   if (dashboard === undefined) {
@@ -703,7 +702,7 @@ function OwnerDashboardPage({
     bookingId: row.booking._id as Id<"bookings">,
     mechanicName: row.mechanicName ?? "",
     vehicle: row.booking.vehicle ?? row.booking.vehicleShort ?? "Vehicle",
-    serviceSummary: (row.booking.serviceNames ?? []).join(" · "),
+    serviceSummary: (row.booking.serviceNames ?? []).map(formatServiceDisplayName).join(" · "),
     startedAt: row.booking.startedAt ?? null,
     scheduledDate: row.booking.scheduledDate ?? null,
     blockedMinutes: row.blockedMinutes ?? 0,
@@ -828,9 +827,6 @@ function OwnerDashboardPage({
                     <span className="px-0.5">·</span>
                     <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">Enter</kbd>
                     <span>open</span>
-                    <span className="px-0.5">·</span>
-                    <kbd className="rounded border border-border bg-muted px-1 font-mono text-[10px]">A</kbd>
-                    <span>accept</span>
                   </span>
                 }
               >
@@ -875,7 +871,7 @@ function OwnerDashboardPage({
                     dot={statusDot(booking.status)}
                     code={booking.scheduledTimeLabel || undefined}
                     primary={`${booking.customerDisplayName} · ${booking.vehicle}`}
-                    secondary={booking.serviceSummary || undefined}
+                    secondary={formatServiceDisplayName(booking.serviceSummary) || undefined}
                     meta={`${mechanicName} · ${getScheduleStatusLabel(booking.status)}`}
                     onOpen={() => setSelectedJobId(booking._id)}
                   />
@@ -887,16 +883,23 @@ function OwnerDashboardPage({
           {context?.userRole !== "front_desk" ? <RevenueSection /> : null}
         </div>
 
-        <JobActualsDialog
+        <BookingWorkflowGuard
           open={actualsBookingId !== null}
+          booking={actualsJob}
+          allowedStatuses={["completed"]}
+          onAcknowledge={handleCloseActualsDialog}
+        >
+          <JobActualsDialog
+            open={actualsBookingId !== null}
           mode="edit"
           estimatedLaborMinutes={actualsJob?.estimatedLaborMinutes ?? null}
           jobActuals={actualsJob?.jobActuals ?? null}
           prefillData={actualsPrefill ?? null}
           onClose={handleCloseActualsDialog}
           onSaveDraft={handleSaveActualsDraft}
-          onFinalize={handleFinalizeActuals}
-        />
+            onFinalize={handleFinalizeActuals}
+          />
+        </BookingWorkflowGuard>
 
         <div
           className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${

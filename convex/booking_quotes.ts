@@ -21,8 +21,13 @@ import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveWinningPartForService } from "./serviceParts";
 import { quoteUnitPrice, isPriceDataStale } from "./part_prices";
 import type { TraceEntry } from "./partSelector";
-import { detectTier, resolveQuoteSeries } from "./lib/quoteEngine";
+import {
+  detectTier,
+  resolveQuoteSeries,
+  resolveVehicleConfigFromVin,
+} from "./lib/quoteEngine";
 import type { VehicleTier } from "./lib/vehicleTiers";
+import { normalizeShopServicePrice } from "./lib/shopServicePricing";
 
 /** Fallback band width when service_vehicle_specs has no engine-specific
  *  row for a service. ±8% around the client-supplied per-service parts
@@ -60,6 +65,11 @@ export type ComputeDisclosedRangeArgs = {
    *  zeroes its labor contribution. */
   shop_id?: Id<"shops"> | null;
   vehicle_config_id?: Id<"vehicle_configs"> | null;
+  /** Fallback used to resolve the config (and therefore the tier) when
+   *  `vehicle_config_id` is null at create — e.g. an unenriched vehicle. Without
+   *  this the shop_service_fixed_prices lookup is silently skipped and the
+   *  booking never captures its fixed/range price. */
+  vin?: string | null;
   /** Booked axle per service (brakes) for the engine-band sanity sidecar, so
    *  the disclosed range's per_axle labor scaling matches the customer's. */
   service_positions?: Record<string, "front" | "rear" | "both">;
@@ -82,7 +92,8 @@ export type DisclosedRangeBreakdown = {
  *  "Parts $8.10" for an oil change the customer agreed to at $60 flat. */
 export type FixedPriceLine = {
   service_id: Id<"services">;
-  price_cents: number;
+  price_low_cents: number;
+  price_high_cents: number;
 };
 
 /** Per-service projection of the quote-engine result for the booking.
@@ -115,6 +126,8 @@ export type ComputeDisclosedRangeResult = {
    *  `is_fixed_price` so the mechanic-facing UI can render a "Fixed price"
    *  badge without exposing the customer's disclosed ceiling. */
   is_fixed_price: boolean;
+  /** True when at least one shop override has unequal endpoints. */
+  has_shop_price_range: boolean;
   /** Per-service flat-price hits. Empty when no service resolved to a
    *  shop_service_fixed_prices row. Threaded into `computeQuotedSetPrice`. */
   fixed_price_lines: FixedPriceLine[];
@@ -155,15 +168,22 @@ export async function computeDisclosedRange(
   let parts_high_dollars = 0;
   let labor_reduction_dollars = 0;
   let is_fixed_price = false;
+  let has_shop_price_range = false;
   const fixed_price_lines: FixedPriceLine[] = [];
 
   // Resolve the vehicle's tier once for the whole booking — used to look up
-  // per-(shop, service, tier) flat-price overrides. Skip silently if either
-  // shop_id or vehicle_config_id wasn't supplied; this keeps the helper
-  // backward-compatible for callers that don't yet thread them through.
+  // per-(shop, service, tier) flat-price overrides. Skip silently if shop_id is
+  // absent. The config comes from `vehicle_config_id`, or is re-resolved from
+  // the VIN when that's null (an unenriched vehicle) — otherwise the shop
+  // fixed/range price would be silently skipped and the booking would never
+  // capture it.
   let tier: VehicleTier | null = null;
-  if (args.shop_id && args.vehicle_config_id) {
-    const cfg = await ctx.db.get(args.vehicle_config_id);
+  if (args.shop_id) {
+    const cfg = args.vehicle_config_id
+      ? await ctx.db.get(args.vehicle_config_id)
+      : args.vin
+        ? await resolveVehicleConfigFromVin(ctx, args.vin)
+        : null;
     if (cfg) {
       tier =
         (cfg.pricing_tier as VehicleTier | undefined) ??
@@ -182,15 +202,17 @@ export async function computeDisclosedRange(
             .eq("tier", tier!),
         )
         .unique();
-      if (fixed) {
-        const price = fixed.price_cents / 100;
-        parts_low_dollars += price;
-        parts_high_dollars += price;
+      const shopPrice = normalizeShopServicePrice(fixed);
+      if (shopPrice) {
+        parts_low_dollars += shopPrice.lowCents / 100;
+        parts_high_dollars += shopPrice.highCents / 100;
         labor_reduction_dollars += svc.labor_cost ?? 0;
-        is_fixed_price = true;
+        is_fixed_price ||= shopPrice.isFixed;
+        has_shop_price_range ||= !shopPrice.isFixed;
         fixed_price_lines.push({
           service_id: svc.service_id,
-          price_cents: fixed.price_cents,
+          price_low_cents: shopPrice.lowCents,
+          price_high_cents: shopPrice.highCents,
         });
         continue;
       }
@@ -313,6 +335,7 @@ export async function computeDisclosedRange(
     high_cents,
     breakdown,
     is_fixed_price,
+    has_shop_price_range,
     fixed_price_lines,
     quote_flags: Array.from(quote_flags_set),
     quote_fallback_low_dollars,
@@ -486,7 +509,8 @@ export function computeQuotedSetPrice(args: {
     0,
   );
   const fixedPartsCents = (fixedPriceLines ?? []).reduce(
-    (sum, l) => sum + l.price_cents,
+    (sum, l) =>
+      sum + Math.round((l.price_low_cents + l.price_high_cents) / 2),
     0,
   );
   const parts_cents = variablePartsCents + fixedPartsCents;
@@ -505,6 +529,313 @@ export function computeQuotedSetPrice(args: {
   return {
     total_cents: parts_cents + labor_cents + tax_cents + service_fee_cents,
     breakdown,
+  };
+}
+
+/**
+ * The all-in price band the front desk / mechanic may set for the SHOP-PRICED
+ * portion of a booking (fixed + range services) at job time. The chosen value
+ * is clamped to [lowCents, highCents] and becomes the shop-set base; tax + fee
+ * are already INSIDE these bounds (an "all-in" band), matching how the
+ * disclosed range was computed at create time.
+ *
+ *  - Pure shop-priced booking (every service is fixed/range): the band IS the
+ *    customer's disclosed range — the front desk sets the exact number the
+ *    customer already agreed to sit inside, no subtotal→total conversion.
+ *  - Mixed booking (shop-priced + dynamic services): only the shop-priced
+ *    subset is confirmed here; the band is that subset's all-in span (its
+ *    summed flat lows/highs + tax + fee, computed in isolation the same way
+ *    the added-scope path prices its own tax/fee). The dynamic services are
+ *    priced separately (labor × rate + parts) and summed on top.
+ *
+ * Returns null when the booking has no shop-priced lines (a purely dynamic
+ * booking — the ordinary parts+labor recompute applies, no set-price step).
+ *
+ * Pure function so getJobDetail (query) and performSubmission (mutation) share
+ * one definition and can never expose a band the server won't clamp to.
+ */
+export function computeShopSetBand(args: {
+  serviceIds: Array<Id<"services">>;
+  fixedPriceLines: FixedPriceLine[] | null | undefined;
+  disclosedLowCents: number | null | undefined;
+  disclosedHighCents: number | null | undefined;
+  quotedSetPriceCents: number | null | undefined;
+  shopState: string | null;
+  shopZip: string | null;
+}): { lowCents: number; highCents: number; defaultCents: number } | null {
+  const lines = args.fixedPriceLines ?? [];
+  if (lines.length === 0) return null;
+
+  const clamp = (val: number, lo: number, hi: number) =>
+    Math.min(hi, Math.max(lo, val));
+
+  const shopIds = new Set(lines.map((l) => String(l.service_id)));
+  const allShopPriced =
+    args.serviceIds.length > 0 &&
+    args.serviceIds.every((id) => shopIds.has(String(id)));
+
+  if (
+    allShopPriced &&
+    args.disclosedLowCents != null &&
+    args.disclosedHighCents != null
+  ) {
+    const lowCents = args.disclosedLowCents;
+    const highCents = Math.max(args.disclosedHighCents, lowCents);
+    const defaultCents =
+      args.quotedSetPriceCents != null
+        ? clamp(args.quotedSetPriceCents, lowCents, highCents)
+        : Math.round((lowCents + highCents) / 2);
+    return { lowCents, highCents, defaultCents };
+  }
+
+  // Mixed booking — isolate the shop-priced subset's all-in band (labor folded
+  // into each flat line, so laborDollars is 0). Tax + fee are computed on this
+  // subset alone, mirroring the added-scope path's isolated basis.
+  const partsLowCents = lines.reduce((s, l) => s + l.price_low_cents, 0);
+  const partsHighCents = lines.reduce((s, l) => s + l.price_high_cents, 0);
+  const allInCents = (partsCents: number) =>
+    shopLineAllInCents({
+      partsCents,
+      shopState: args.shopState,
+      shopZip: args.shopZip,
+    });
+  const lowCents = allInCents(partsLowCents);
+  const highCents = Math.max(allInCents(partsHighCents), lowCents);
+  const defaultCents = Math.round((lowCents + highCents) / 2);
+  return { lowCents, highCents, defaultCents };
+}
+
+/**
+ * All-in (parts + tax + fee) cents for a shop-priced amount whose labor is
+ * folded into the flat line (laborDollars = 0). Extracted so `computeShopSetBand`
+ * (the aggregate band) and `computeShopSetServiceLines` (its per-service
+ * breakdown) are computed on the identical tax/fee basis and reconcile.
+ */
+export function shopLineAllInCents(args: {
+  partsCents: number;
+  shopState: string | null;
+  shopZip: string | null;
+}): number {
+  const taxDollars =
+    computeBookingTax({
+      laborDollars: 0,
+      partsDollars: args.partsCents / 100,
+      state: args.shopState,
+      zip: args.shopZip,
+    }).taxDollars ?? 0;
+  const feeDollars = computePlatformFeeDollars(args.partsCents / 100);
+  return (
+    args.partsCents +
+    Math.round(taxDollars * 100) +
+    Math.max(0, Math.round(feeDollars * 100))
+  );
+}
+
+/** Per-service all-in band for a single shop-priced line, for the mechanic's
+ *  per-service set-price UI. `all_in_*` are on the same basis as the aggregate
+ *  `computeShopSetBand`; `isFixed` (low == high) renders as a read-only price. */
+export type ShopSetServiceLine = {
+  service_id: Id<"services">;
+  isFixed: boolean;
+  all_in_low_cents: number;
+  all_in_high_cents: number;
+  all_in_default_cents: number;
+};
+
+/**
+ * Per-service all-in bands for the shop-priced lines, so the mechanic can set a
+ * price PER range service and see each one labeled. Computed on the same tax/fee
+ * basis as `computeShopSetBand`, so the per-service values the front desk picks
+ * sum back to (a value the server will clamp to) the aggregate band.
+ *
+ * When there is exactly ONE shop-priced line the aggregate band IS that line's
+ * band, so we adopt it verbatim — the single-service case (the common one) is
+ * then exact, with zero sub-cent tax/fee drift. With multiple shop-priced lines
+ * each is isolated (allIn per line); their sum reconciles to the aggregate
+ * modulo rounding, which `performSubmission` clamps away.
+ */
+export function computeShopSetServiceLines(args: {
+  fixedPriceLines: FixedPriceLine[] | null | undefined;
+  band: { lowCents: number; highCents: number; defaultCents: number } | null;
+  shopState: string | null;
+  shopZip: string | null;
+}): ShopSetServiceLine[] {
+  const lines = args.fixedPriceLines ?? [];
+  if (lines.length === 0) return [];
+
+  if (lines.length === 1 && args.band) {
+    const l = lines[0];
+    return [
+      {
+        service_id: l.service_id,
+        isFixed: l.price_high_cents === l.price_low_cents,
+        all_in_low_cents: args.band.lowCents,
+        all_in_high_cents: args.band.highCents,
+        all_in_default_cents: args.band.defaultCents,
+      },
+    ];
+  }
+
+  return lines.map((l) => {
+    const isFixed = l.price_high_cents === l.price_low_cents;
+    const lowCents = shopLineAllInCents({
+      partsCents: l.price_low_cents,
+      shopState: args.shopState,
+      shopZip: args.shopZip,
+    });
+    const highCents = Math.max(
+      shopLineAllInCents({
+        partsCents: l.price_high_cents,
+        shopState: args.shopState,
+        shopZip: args.shopZip,
+      }),
+      lowCents,
+    );
+    return {
+      service_id: l.service_id,
+      isFixed,
+      all_in_low_cents: lowCents,
+      all_in_high_cents: highCents,
+      all_in_default_cents: isFixed
+        ? lowCents
+        : Math.round((lowCents + highCents) / 2),
+    };
+  });
+}
+
+export type ShopSetResolution = {
+  /** True when this booking should run the shop-set (fixed/range) flow. */
+  isShopSet: boolean;
+  /** True when at least one shop-priced line is a RANGE (low != high). */
+  hasShopPriceRange: boolean;
+  /** True when the booking is a pure FIXED price (all lines low == high). */
+  isFixedPrice: boolean;
+  /** Per-service shop-price lines (fixed/range), stored or re-resolved. */
+  fixedPriceLines: FixedPriceLine[];
+  /** The all-in [low, high] the set-price control clamps to, + default. Null
+   *  when not shop-set. */
+  band: { lowCents: number; highCents: number; defaultCents: number } | null;
+};
+
+const NOT_SHOP_SET: ShopSetResolution = {
+  isShopSet: false,
+  hasShopPriceRange: false,
+  isFixedPrice: false,
+  fixedPriceLines: [],
+  band: null,
+};
+
+/**
+ * Resolve a booking's shop-set (fixed/range) pricing state ROBUSTLY at job time.
+ *
+ * The stored `is_fixed_price` / `has_shop_price_range` / `fixed_price_lines`
+ * columns can be missing — a booking created before its vehicle_config resolved
+ * (so `computeDisclosedRange` couldn't detect the tier), or before the shop
+ * configured the range. Those bookings would otherwise be treated as ordinary
+ * dynamic jobs at job time (no set-price control; a raw parts+labor recompute).
+ *
+ * Strategy:
+ *   1. PREFER the captured contract — if the booking was stamped shop-set, use
+ *      its stored lines + disclosed range (the band the customer agreed to).
+ *   2. Else RE-RESOLVE live — config-from-VIN → tier → per-service
+ *      `shop_service_fixed_prices` lookup — and derive the band from those lines
+ *      + tax/fee (NOT the stored `disclosed_range_*`, which is the stale dynamic
+ *      quote for a booking that never captured the range).
+ *
+ * Shared by getJobDetail (display) and performSubmission (billing) so the two
+ * can never disagree. `opts.cfg`/`opts.tier` let a caller that already resolved
+ * them (getJobDetail) skip the extra reads.
+ */
+export async function resolveShopSetForBooking(
+  ctx: QueryCtx,
+  booking: any,
+  opts?: { cfg?: any; tier?: VehicleTier | null },
+): Promise<ShopSetResolution> {
+  const serviceIds: Id<"services">[] = (booking.service_ids ?? []) as Id<
+    "services"
+  >[];
+  if (!booking.shop_id || serviceIds.length === 0) return NOT_SHOP_SET;
+
+  const shop = await ctx.db.get(booking.shop_id);
+  const shopState =
+    ((shop as any)?.address_state as string | undefined) ??
+    ((shop as any)?.state as string | undefined) ??
+    null;
+  const shopZip =
+    ((shop as any)?.address_zip as string | undefined) ??
+    ((shop as any)?.zip as string | undefined) ??
+    null;
+
+  // 1. Captured contract — trust what the customer agreed to.
+  const storedLines = (booking.fixed_price_lines ?? []) as FixedPriceLine[];
+  const storedShopSet =
+    booking.has_shop_price_range === true || booking.is_fixed_price === true;
+  if (storedShopSet && storedLines.length > 0) {
+    return {
+      isShopSet: true,
+      hasShopPriceRange: booking.has_shop_price_range === true,
+      isFixedPrice: booking.is_fixed_price === true,
+      fixedPriceLines: storedLines,
+      band: computeShopSetBand({
+        serviceIds,
+        fixedPriceLines: storedLines,
+        disclosedLowCents: booking.disclosed_range_low_cents ?? null,
+        disclosedHighCents: booking.disclosed_range_high_cents ?? null,
+        quotedSetPriceCents: booking.quoted_set_price_cents ?? null,
+        shopState,
+        shopZip,
+      }),
+    };
+  }
+
+  // 2. Re-resolve live from shop_service_fixed_prices.
+  if (!booking.vin) return NOT_SHOP_SET;
+  const cfg = opts?.cfg ?? (await resolveVehicleConfigFromVin(ctx, booking.vin));
+  if (!cfg) return NOT_SHOP_SET;
+  const tier =
+    opts?.tier ??
+    (cfg.pricing_tier as VehicleTier | undefined) ??
+    (await detectTier(ctx, cfg));
+  if (!tier) return NOT_SHOP_SET;
+
+  const lines: FixedPriceLine[] = [];
+  for (const serviceId of serviceIds) {
+    const row = await ctx.db
+      .query("shop_service_fixed_prices")
+      .withIndex("by_shop_service_tier", (q) =>
+        q
+          .eq("shop_id", booking.shop_id)
+          .eq("service_id", serviceId)
+          .eq("tier", tier),
+      )
+      .unique();
+    const norm = normalizeShopServicePrice(row);
+    if (norm) {
+      lines.push({
+        service_id: serviceId,
+        price_low_cents: norm.lowCents,
+        price_high_cents: norm.highCents,
+      });
+    }
+  }
+  if (lines.length === 0) return NOT_SHOP_SET;
+
+  return {
+    isShopSet: true,
+    hasShopPriceRange: lines.some((l) => l.price_low_cents !== l.price_high_cents),
+    isFixedPrice: lines.every((l) => l.price_low_cents === l.price_high_cents),
+    fixedPriceLines: lines,
+    // Force the isolation path (disclosed = null): the stored disclosed range is
+    // the stale dynamic quote, not this shop band.
+    band: computeShopSetBand({
+      serviceIds,
+      fixedPriceLines: lines,
+      disclosedLowCents: null,
+      disclosedHighCents: null,
+      quotedSetPriceCents: null,
+      shopState,
+      shopZip,
+    }),
   };
 }
 

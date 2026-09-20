@@ -24,6 +24,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function formatWhen(date?: string | null, time?: string | null) {
   if (!date) return "";
@@ -78,7 +79,7 @@ export default function PreJobScopeDialog({
       bookingLabel={j.vehicle ?? "Vehicle"}
       bookingSubLabel={[
         j.customerName,
-        (j.serviceNames ?? []).join(", "),
+        (j.serviceNames ?? []).map(formatServiceDisplayName).join(", "),
         formatWhen(j.scheduledDate, j.scheduledTime),
       ]
         .filter(Boolean)
@@ -106,6 +107,11 @@ export default function PreJobScopeDialog({
       quotedParts={scopedQuotedParts}
       isFixedPrice={j.isFixedPrice}
       fixedBaseCents={j.fixedContractBaseCents ?? null}
+      hasShopPriceRange={(j as any).hasShopPriceRange ?? false}
+      shopSetBandLowCents={(j as any).shopSetBandLowCents ?? null}
+      shopSetBandHighCents={(j as any).shopSetBandHighCents ?? null}
+      shopSetBaseDefaultCents={(j as any).shopSetBaseDefaultCents ?? null}
+      bookingServiceLines={(j as any).bookingServiceLines ?? null}
     />
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
-import { Check, Sparkles, X } from "lucide-react";
+import Link from "next/link";
+import { ArrowUpRight, Check, Sparkles, X } from "lucide-react";
 import { OtoCard } from "./oto-card";
 import type { InfoCardPayload } from "./info-card";
 import { Step } from "./shared";
@@ -113,12 +114,29 @@ function CompareCol({
 }
 
 export function DynamicCard({ payload }: { payload: InfoCardPayload }) {
-  const { title, summary, layout, items, rows, stats, pros, cons, footnote } = payload;
+  const { title, summary, layout, items, rows, stats, pros, cons, footnote, link } = payload;
   return (
     // The agent composes this card's content at runtime, so it is the ONE
     // card whose length nobody can eyeball in advance — which is exactly why
     // it must inherit the shell's cap and its fade at the cut.
-    <OtoCard icon={Sparkles} title={title} subtitle={summary}>
+    <OtoCard
+      icon={Sparkles}
+      title={title}
+      subtitle={summary}
+      footer={
+        link ? (
+          <div className="mt-4 border-t border-[#1a1a1a]/10 pt-3">
+            <Link
+              href={link.url}
+              className="flex w-full items-center justify-between rounded-xl bg-[#1a1a1a] px-4 py-2.5 text-[13px] font-medium text-white shadow-sm transition-all hover:bg-[#5299fe] hover:shadow"
+            >
+              <span>{link.label}</span>
+              <ArrowUpRight className="h-4 w-4" />
+            </Link>
+          </div>
+        ) : null
+      }
+    >
 
       {layout === "list" && items && <Bullets items={items} />}
       {layout === "steps" && items && <Bullets items={items} ordered />}

@@ -200,7 +200,13 @@ export type EnrichedReview = {
 export type ShopInsights = {
   reviews: EnrichedReview[]
   rateHistory: { actor: string; detail: string | null; at: number }[]
-  fixedPrices: { service: string; tier: string; price: number }[]
+  fixedPrices: {
+    service: string
+    tier: string
+    price: number | null
+    priceLow: number | null
+    priceHigh: number | null
+  }[]
   portfolio: { id: string; url: string; caption: string | null }[]
   laborQa: { sampled: number; flagged: number; avgVariancePct: number | null }
   disputes: {

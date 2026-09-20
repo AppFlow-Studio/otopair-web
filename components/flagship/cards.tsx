@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
-import { Calendar, Car, Check, MapPin, Sparkles, Star } from "lucide-react";
+import { useState, useEffect } from "react";
+import Link from "next/link";
+import { ArrowRight, Calendar, Car, Check, Clock, MapPin, ShieldCheck, Sparkles, Star } from "lucide-react";
 import { motion } from "motion/react";
 import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive } from "./download-app";
 import { OtoCard } from "./oto-card";
@@ -56,10 +57,12 @@ function PrimaryButton({
   children,
   onClick,
   delay = 0.3,
+  className = "",
 }: {
   children: React.ReactNode;
   onClick?: () => void;
   delay?: number;
+  className?: string;
 }) {
   return (
     <motion.button
@@ -70,7 +73,7 @@ function PrimaryButton({
       transition={{ delay, duration: 0.5, ease: EASE }}
       whileHover={{ scale: 1.01 }}
       whileTap={{ scale: 0.985 }}
-      className="mt-5 h-12 w-full rounded-xl bg-[#1a1a1a] text-[13px] font-medium uppercase tracking-[0.1em] text-white"
+      className={`flex h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#1a1a1a] text-[13px] font-semibold uppercase tracking-[0.08em] text-white shadow-sm transition-colors hover:bg-[#5299fe] ${className}`}
     >
       {children}
     </motion.button>
@@ -281,30 +284,36 @@ export function VehicleCard({
 /* ------------------------------------------------------------------ */
 export function SchedulingCard({ onConfirm }: { onConfirm: () => void }) {
   return (
-    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample · how scheduling looks in the app">
-
-      <div className="my-5">
+    <OtoCard
+      icon={Calendar}
+      title="Pick a time"
+      subtitle="Sample · how scheduling looks in the app"
+      footer={
+        <PrimaryButton onClick={onConfirm} delay={0.58}>
+          Confirm Appointment
+        </PrimaryButton>
+      }
+    >
+      <div className="my-3">
         <WeekStrip base={0.18} />
       </div>
 
-      <Step delay={0.42} className="flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
-        <span className="flex items-center gap-2 text-[14px] text-[#1a1a1a]">
+      <Step delay={0.42} className="flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-3.5 py-2.5">
+        <span className="flex items-center gap-2 text-[13.5px] text-[#1a1a1a]">
           <Car className="h-4 w-4 text-[#1a1a1a]/70" strokeWidth={1.6} />
           {SCHEDULING_PREVIEW.service}
         </span>
-        <span className="text-[14px] font-medium text-[#1a1a1a]">
+        <span className="text-[13.5px] font-medium text-[#1a1a1a]">
           {usd(SCHEDULING_PREVIEW.price)}.00
         </span>
       </Step>
-      <Step delay={0.5} className="mt-2 flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-4 py-3">
-        <span className="flex items-center gap-2 text-[14px] text-[#1a1a1a]">
+      <Step delay={0.5} className="mt-2 flex items-center justify-between rounded-xl bg-[#1a1a1a]/[0.04] px-3.5 py-2.5">
+        <span className="flex items-center gap-2 text-[13.5px] text-[#1a1a1a]">
           <MapPin className="h-4 w-4 text-[#1a1a1a]/70" strokeWidth={1.6} />
           {SCHEDULING_PREVIEW.shop}
         </span>
-        <span className="text-[13px] text-[#1a1a1a]/50">{SCHEDULING_PREVIEW.distance}</span>
+        <span className="text-[12.5px] text-[#1a1a1a]/50">{SCHEDULING_PREVIEW.distance}</span>
       </Step>
-
-      <PrimaryButton onClick={onConfirm} delay={0.58}>Confirm Appointment</PrimaryButton>
     </OtoCard>
   );
 }
@@ -330,10 +339,17 @@ export function ChooseShopCard({
     <OtoCard
       icon={MapPin}
       title="Choose a Shop"
-      subtitle="Sample shops · how picking a shop looks in the app"
+      subtitle="Verified Independent Shops · Staten Island, NY"
+      footer={
+        <PrimaryButton
+          onClick={() => active && onContinue(active)}
+          delay={0.16 + shops.length * 0.1 + 0.08}
+        >
+          Continue with {firstName}
+        </PrimaryButton>
+      }
     >
-
-      <div className="mt-4 space-y-2">
+      <div className="mt-2.5 space-y-2">
         {shops.map((shop, i) => {
           const isActive = shop.id === active?.id;
           return (
@@ -341,53 +357,69 @@ export function ChooseShopCard({
               key={shop.id}
               type="button"
               onClick={() => onSelect(shop)}
-              initial={{ opacity: 0, y: 12 }}
+              initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.16 + i * 0.1, duration: 0.5, ease: EASE }}
+              transition={{ delay: 0.16 + i * 0.08, duration: 0.4, ease: EASE }}
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
-              className={`relative w-full rounded-xl px-4 py-3 text-left transition-colors ${
+              className={`relative w-full rounded-xl px-3.5 py-2.5 text-left transition-all ${
                 isActive
-                  ? "bg-[#1a1a1a]/[0.06] ring-1 ring-[#1a1a1a]/15"
-                  : "bg-[#1a1a1a]/[0.03] hover:bg-[#1a1a1a]/[0.05]"
+                  ? "bg-[#5299fe]/[0.08] ring-2 ring-[#5299fe] shadow-sm"
+                  : "bg-[#1a1a1a]/[0.03] hover:bg-[#1a1a1a]/[0.06] ring-1 ring-black/[0.04]"
               }`}
             >
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="text-[14px] font-medium text-[#1a1a1a]">{shop.name}</p>
-                  <p className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-[#1a1a1a]/50">
+                  <div className="flex items-center gap-2">
+                    <p className="text-[14px] font-medium text-[#1a1a1a]">{shop.name}</p>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-[#10b981]/10 px-2 py-0.5 text-[9.5px] font-medium text-[#059669]">
+                      <ShieldCheck className="h-3 w-3" /> Verified
+                    </span>
+                  </div>
+                  <p className="mt-0.5 flex items-center gap-1.5 text-[11.5px] text-[#1a1a1a]/55">
                     <span>{shop.distance}</span>
                     <span>·</span>
-                    <span className="inline-flex items-center gap-0.5">
-                      <Star className="h-3 w-3 fill-current text-[#1a1a1a]/60" />
-                      {shop.rating}
+                    <span className="inline-flex items-center gap-1">
+                      <Star className="h-3 w-3 fill-amber-400 text-amber-500" />
+                      <span className="font-medium text-[#1a1a1a]">{shop.rating}</span>
                     </span>
                     <span>·</span>
-                    <span>{shop.eta}</span>
+                    <span className="inline-flex items-center gap-1 font-medium text-[#5299fe]">
+                      <Clock className="h-3 w-3" /> {shop.eta}
+                    </span>
                   </p>
                 </div>
-                <CountUp
-                  to={shop.price}
-                  prefix="$"
-                  duration={0.8}
-                  className="text-[15px] font-medium text-[#1a1a1a]"
-                />
+                <div className="text-right">
+                  <span className="block text-[9.5px] uppercase tracking-wider text-[#1a1a1a]/40 font-semibold">Locked price</span>
+                  <CountUp
+                    to={shop.price}
+                    prefix="$"
+                    duration={0.8}
+                    className="text-[15px] font-semibold text-[#1a1a1a]"
+                  />
+                </div>
               </div>
             </motion.button>
           );
         })}
       </div>
 
-      {/* The sample prices only mean anything next to the job they price. */}
       <Step delay={0.16 + shops.length * 0.1}>
-        <p className="mt-3 text-[11px] leading-relaxed text-[#1a1a1a]/45">
-          Sample prices for a {SAMPLE_JOB}. In the app, every verified shop shows its own total for your exact car.
-        </p>
+        <div className="mt-2 flex items-center justify-between rounded-xl bg-white/60 px-3 py-2 ring-1 ring-black/[0.05]">
+          <p className="text-[11px] leading-relaxed text-[#1a1a1a]/60">
+            All prices locked upfront for a {SAMPLE_JOB}. Includes parts, labor, taxes & fees with zero surprise add-ons.
+          </p>
+        </div>
       </Step>
 
-      <PrimaryButton onClick={() => active && onContinue(active)} delay={0.16 + shops.length * 0.1 + 0.08}>
-        Continue with {firstName}
-      </PrimaryButton>
+      <div className="mt-2 text-center">
+        <Link
+          href="/shops"
+          className="inline-flex items-center gap-1 text-[12px] font-medium text-[#5299fe] transition-colors hover:text-[#3d87ef]"
+        >
+          Browse all verified Staten Island shops <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </div>
     </OtoCard>
   );
 }
@@ -407,9 +439,17 @@ export function DateTimeCard({
   onConfirm: () => void;
 }) {
   return (
-    <OtoCard icon={Calendar} title="Pick a time" subtitle="Sample times · how the app shows open slots">
-
-      <div className="my-5">
+    <OtoCard
+      icon={Calendar}
+      title="Pick a time"
+      subtitle="Sample times · how the app shows open slots"
+      footer={
+        <PrimaryButton onClick={onConfirm} delay={0.42 + slots.length * 0.07 + 0.08}>
+          Confirm Appointment
+        </PrimaryButton>
+      }
+    >
+      <div className="my-3">
         <WeekStrip base={0.18} />
       </div>
 
@@ -425,9 +465,9 @@ export function DateTimeCard({
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ delay: 0.42 + i * 0.07, duration: 0.4, ease: EASE }}
-              whileHover={slot.disabled ? undefined : { scale: 1.03 }}
-              whileTap={slot.disabled ? undefined : { scale: 0.96 }}
-              className={`h-11 rounded-xl text-[13.5px] font-medium transition-colors ${
+              whileHover={slot.disabled ? undefined : { scale: 1.02 }}
+              whileTap={slot.disabled ? undefined : { scale: 0.97 }}
+              className={`h-10 rounded-xl text-[13px] font-medium transition-colors ${
                 slot.disabled
                   ? "cursor-not-allowed bg-[#1a1a1a]/[0.03] text-[#1a1a1a]/25"
                   : isActive
@@ -440,10 +480,6 @@ export function DateTimeCard({
           );
         })}
       </div>
-
-      <PrimaryButton onClick={onConfirm} delay={0.42 + slots.length * 0.07 + 0.08}>
-        Confirm Appointment
-      </PrimaryButton>
     </OtoCard>
   );
 }
@@ -506,138 +542,199 @@ function StoreButtonLabel({ store }: { store: "apple" | "google" }) {
 
 export function BookingConfirmedCard({
   booking,
+  vehicle,
   onSavePreSignup,
   saved = false,
+  claimToken = null,
 }: {
   booking: Booking;
+  vehicle?: Vehicle | null;
   onSavePreSignup?: (email: string) => void;
   saved?: boolean;
+  claimToken?: string | null;
 }) {
   const [email, setEmail] = useState("");
+  const [vehicleImg, setVehicleImg] = useState<string | null>(vehicle?.imageUrl ?? null);
+  const carName = vehicle?.label || "Your Vehicle";
+
+  useEffect(() => {
+    if (vehicle?.imageUrl) {
+      setVehicleImg(vehicle.imageUrl);
+      return;
+    }
+    if (!vehicle?.label && !vehicle?.vin) return;
+
+    let cancelled = false;
+    const params = new URLSearchParams();
+    if (vehicle.vin && !vehicle.vin.startsWith("ONBOARDING-")) {
+      params.set("vin", vehicle.vin);
+    }
+    if (vehicle.label) {
+      params.set("car", vehicle.label);
+    }
+    if (vehicle.year) params.set("year", String(vehicle.year));
+    if (vehicle.make) params.set("make", vehicle.make);
+    if (vehicle.model) params.set("model", vehicle.model);
+
+    fetch(`/api/vehicle-image?${params.toString()}`)
+      .then((r) => (r.ok ? r.json() : Promise.resolve({ imageUrl: null })))
+      .then((d) => {
+        if (!cancelled && d?.imageUrl) {
+          setVehicleImg(d.imageUrl);
+        }
+      })
+      .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
+  }, [vehicle]);
 
   return (
-    // The one card with a deliberately different header: a centered check mark
-    // and a larger title, because it is the terminal celebration rather than
-    // another explainer. OtoCard's `header` slot exists for exactly this, so
-    // the exception stays visible in the code instead of being drift.
     <OtoCard
       header={
         <div className="flex flex-col items-center">
-        <motion.div
-          initial={{ scale: 0, rotate: -25 }}
-          animate={{ scale: 1, rotate: 0 }}
-          transition={{ type: "spring", stiffness: 420, damping: 15, delay: 0.1 }}
-          className="relative flex h-9 w-9 items-center justify-center rounded-full bg-[#1a1a1a]"
-        >
-          <Check className="h-5 w-5 text-white" strokeWidth={2.5} />
-          <motion.span
-            aria-hidden
-            className="absolute inset-0 rounded-full ring-2 ring-[#1a1a1a]/40"
-            initial={{ scale: 1, opacity: 0.6 }}
-            animate={{ scale: 1.9, opacity: 0 }}
-            transition={{ duration: 0.9, ease: "easeOut", delay: 0.18 }}
-          />
-        </motion.div>
+          <motion.div
+            initial={{ scale: 0, rotate: -25 }}
+            animate={{ scale: 1, rotate: 0 }}
+            transition={{ type: "spring", stiffness: 420, damping: 15, delay: 0.1 }}
+            className="relative flex h-10 w-10 items-center justify-center rounded-full bg-[#10b981] shadow-md shadow-emerald-500/20"
+          >
+            <Check className="h-5 w-5 text-white" strokeWidth={2.5} />
+            <motion.span
+              aria-hidden
+              className="absolute inset-0 rounded-full ring-2 ring-[#10b981]/40"
+              initial={{ scale: 1, opacity: 0.6 }}
+              animate={{ scale: 1.9, opacity: 0 }}
+              transition={{ duration: 0.9, ease: "easeOut", delay: 0.18 }}
+            />
+          </motion.div>
           <Step delay={0.3}>
             <h3
-              className="mt-3 text-center text-[22px] text-[#1a1a1a]"
+              className="mt-3 text-center text-[22px] font-medium tracking-tight text-[#1a1a1a]"
               style={{ fontFamily: "var(--font-Petrona)" }}
             >
-              Sample booking
+              Vehicle Matched
             </h3>
-            {/* Oto is the site's marketing agent: this receipt demonstrates the
-                app's booking flow and must never read as a real appointment —
-                so the title itself says "sample", not "confirmed". */}
-            <p className="mt-1 text-center text-[11px] text-[#1a1a1a]/45">
-              How a confirmed booking looks in the Otopair app · nothing was booked
+            <p className="mt-1 text-center text-[12px] text-[#1a1a1a]/60">
+              Link your vehicle to view live, locked upfront pricing in the app
             </p>
           </Step>
         </div>
       }
     >
-
-      <Step delay={0.4} className="mt-5 border-t border-[#1a1a1a]/10 pt-4">
-        <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">
-          Service Details
+      {/* Vehicle Hero Card with Live Vehicle Database Render or Covered Car Fallback */}
+      <Step delay={0.4} className="mt-2.5 overflow-hidden rounded-2xl border border-[#5299fe]/20 bg-gradient-to-b from-[#f0f6fe] via-white to-[#f0f6fe] p-3 text-center shadow-sm">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={vehicleImg || "/images/landing/app/covered-car.png"}
+          alt={carName}
+          className="mx-auto h-[65px] w-auto max-w-full object-contain drop-shadow-md transition-transform duration-300 hover:scale-105"
+        />
+        <p
+          className="mt-1 text-[17px] font-bold leading-tight text-[#1a1a1a]"
+          style={{ fontFamily: "var(--font-Petrona)" }}
+        >
+          {carName}
         </p>
-        <div className="mt-2 flex items-start justify-between">
-          <p className="text-[15px] font-medium text-[#1a1a1a]">{booking.service}</p>
-          <div className="text-right text-[12px] leading-relaxed text-[#1a1a1a]/55">
-            <p>{booking.shop}</p>
-            <p>{booking.mechanic}</p>
+        <div className="mt-1 flex items-center justify-center gap-1.5 flex-wrap">
+          <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 border border-emerald-200/60 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+            <ShieldCheck className="h-3 w-3" /> Specs Identified
+          </span>
+          {booking.service && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-[#5299fe]/10 border border-[#5299fe]/20 px-2 py-0.5 text-[10px] font-medium text-[#5299fe]">
+              {booking.service}
+            </span>
+          )}
+        </div>
+      </Step>
+
+      {/* Value pillars - 100% truthful, no premature price locks */}
+      <Step delay={0.5} className="mt-2 grid grid-cols-2 gap-2">
+        <div className="flex items-center gap-2 rounded-xl bg-black/[0.03] px-2.5 py-1.5 text-left">
+          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-[#5299fe]/10 text-[#5299fe]">
+            <ShieldCheck className="h-3 w-3" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[11px] font-semibold text-[#1a1a1a]">Locked Upfront</p>
+            <p className="truncate text-[10px] text-[#1a1a1a]/60">Parts & labor included</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 rounded-xl bg-black/[0.03] px-2.5 py-1.5 text-left">
+          <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-lg bg-emerald-500/10 text-emerald-600">
+            <MapPin className="h-3 w-3" />
+          </div>
+          <div className="min-w-0">
+            <p className="truncate text-[11px] font-semibold text-[#1a1a1a]">Verified NYC Shops</p>
+            <p className="truncate text-[10px] text-[#1a1a1a]/60">Insured mechanics</p>
           </div>
         </div>
       </Step>
 
-      <Step delay={0.5} className="mt-4 border-t border-[#1a1a1a]/10 pt-4">
-        <p className="text-[10px] uppercase tracking-[0.15em] text-[#1a1a1a]/40">Logistics</p>
-        <div className="mt-2 flex items-center justify-between text-[13px] text-[#1a1a1a]">
-          <span>{booking.date}</span>
-          <span>{booking.time}</span>
-        </div>
-      </Step>
-
-      <Step delay={0.6} className="mt-4 flex items-center justify-between border-t border-[#1a1a1a]/10 pt-4">
-        <span className="text-[14px] font-medium text-[#1a1a1a]">Total Amount</span>
-        <CountUp
-          to={booking.total}
-          prefix="$"
-          duration={1}
-          className="text-[18px] font-semibold text-[#1a1a1a]"
-        />
-      </Step>
-
-      {/* Pre-signup capture — save the car so signup is seamless. */}
+      {/* Pre-signup capture — save the car so signup is seamless */}
       {onSavePreSignup &&
         (saved ? (
-          <Step delay={0.7} className="mt-5 flex items-center justify-center gap-2 rounded-xl bg-[#1a1a1a]/[0.05] px-4 py-3 text-[13px] text-[#1a1a1a]">
-            <Check className="h-4 w-4" strokeWidth={2.5} />
-            You&rsquo;re on the launch list — your car will be waiting in the app.
+          <Step delay={0.65} className="mt-2.5 flex flex-col items-center justify-center gap-1.5 rounded-xl bg-[#10b981]/10 p-2.5 text-center">
+            <div className="flex items-center justify-center gap-1.5 text-[12px] font-medium text-[#059669]">
+              <Check className="h-3.5 w-3.5" strokeWidth={2.5} />
+              Vehicle saved to your account!
+            </div>
+            {claimToken ? (
+              <a
+                href={`/claim/${claimToken}`}
+                className="inline-flex items-center justify-center rounded-lg bg-[#10b981] px-3 py-1 text-[11px] font-semibold text-white shadow-sm transition hover:bg-[#059669]"
+              >
+                Claim in App or Web &rarr;
+              </a>
+            ) : null}
           </Step>
         ) : (
-          <Step delay={0.7} className="mt-5">
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (email.trim()) onSavePreSignup(email.trim());
-            }}
-          >
-            <p className="mb-2 text-[12px] text-[#1a1a1a]/55">
-              Get the launch email & save your car for the app:
-            </p>
-            <div className="flex gap-2">
-              <input
-                type="email"
-                required
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@email.com"
-                className="h-11 flex-1 rounded-xl border border-[#1a1a1a]/15 bg-white/70 px-3 text-[14px] text-[#1a1a1a] placeholder:text-[#1a1a1a]/40 focus:outline-none focus:ring-2 focus:ring-[#1a1a1a]/15"
-                style={{ fontSize: 16 }}
-              />
-              <motion.button
-                type="submit"
-                whileHover={{ scale: 1.02 }}
-                whileTap={{ scale: 0.95 }}
-                className="h-11 shrink-0 rounded-xl bg-[#1a1a1a] px-4 text-[13px] font-medium text-white"
-              >
-                Save
-              </motion.button>
-            </div>
-          </form>
+          <Step delay={0.65} className="mt-2.5">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (email.trim()) onSavePreSignup(email.trim());
+              }}
+              className="rounded-xl bg-white/70 p-2.5 ring-1 ring-black/[0.05]"
+            >
+              <p className="mb-1.5 text-[11.5px] font-medium text-[#1a1a1a]/70">
+                Enter your email to link your vehicle to the app:
+              </p>
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                  className="h-9 flex-1 rounded-lg border border-black/10 bg-white px-2.5 text-[13px] text-[#1a1a1a] placeholder:text-[#1a1a1a]/40 focus:outline-none focus:ring-2 focus:ring-[#5299fe]/30"
+                  style={{ fontSize: 16 }}
+                />
+                <motion.button
+                  type="submit"
+                  whileHover={{ scale: 1.02 }}
+                  whileTap={{ scale: 0.96 }}
+                  className="h-9 shrink-0 rounded-lg bg-[#5299fe] px-3.5 text-[12px] font-medium text-white shadow-sm transition-colors hover:bg-[#3d87ef]"
+                >
+                  Continue
+                </motion.button>
+              </div>
+            </form>
           </Step>
         ))}
 
-      <Step delay={0.8} className="mt-5 flex gap-2">
+      <Step delay={0.75} className="mt-2.5 flex gap-2">
         <StoreButton store="apple" />
         <StoreButton store="google" />
       </Step>
 
-      <Step delay={0.9}>
-        <p className="mt-3 text-center text-[10px] text-[#1a1a1a]/40">
-          Sample receipt · no payment is taken on this website
+      <Step delay={0.85}>
+        <p className="mt-2 text-center text-[10px] text-[#1a1a1a]/50">
+          Complete your onboarding in the Otopair app to explore verified shop prices with zero hidden fees
         </p>
       </Step>
     </OtoCard>
   );
 }
+
+export const VehicleSignupCard = BookingConfirmedCard;

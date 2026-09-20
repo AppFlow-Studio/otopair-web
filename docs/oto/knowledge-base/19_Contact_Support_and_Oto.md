@@ -2,8 +2,8 @@
 
 ## Two Otos
 
-- **Oto in the Otopair app** — the assistant drivers talk to once the app is out. It can see the driver's car, bookings and Vehicle Health Score, and it sets up real bookings
-- **Oto on the website** — a demo of the conversation. It explains Otopair and shows how the app works with clearly labeled samples. It creates no real booking, quotes no real price and has no access to any account. A visitor can leave an email with it to join the launch list
+- **Oto in the Otopair app** — the assistant drivers talk to in the app. It can see the driver's car, bookings and Vehicle Health Score, and it sets up real bookings
+- **Oto on the website** — an interactive web concierge. It answers all questions about Otopair, provides direct links to website pages, guides drivers through vehicle questions, and onboards them onto the mobile app with their vehicle linked
 
 ## What Oto does in the app
 
@@ -28,7 +28,7 @@
 
 ## The company
 
-Otopair is operated by AppFlow Creations Inc., a small team based in Staten Island, NY — which is also the first market the network serves. Otopair went live in Staten Island in 2026. It's two products: the driver app (iPhone and Android, in pre-launch) and a web dashboard for shops.
+Otopair is operated by AppFlow Creations Inc., a small team based in Staten Island, NY — which is also the first market the network serves. Otopair went live in Staten Island in 2026. It's two products: the driver app (live on iPhone and Android) and a web dashboard for shops.
 
 ## How to reach Otopair
 

@@ -1795,6 +1795,17 @@ export const confirmVehicleForUser = action({
           displacement: args.displacement,
           drivetrain: args.drivetrain,
           nhtsaVinKey: args.nhtsaVinKey,
+          trigger: "new_vehicle",
+          // The driver who added the car — resolved from the authed identity so
+          // a signup error-out names them. See lib/enrichmentActor.
+          actor: {
+            name:
+              (identity.name as string | undefined)?.trim() ||
+              [identity.givenName, identity.familyName].filter(Boolean).join(" ").trim() ||
+              "driver",
+            id: String(user._id),
+            kind: "driver",
+          },
         });
         scheduledEnrichment = true;
         console.log(
@@ -1936,6 +1947,9 @@ export const confirmVehicleForShopCustomer = action({
         );
         cacheHit = true;
       } else {
+        // Shop staff standing at the car confirmed it — attribute the run to
+        // them (resolved from the authed identity). See lib/enrichmentActor.
+        const staffIdentity = await ctx.auth.getUserIdentity();
         await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.v3pipeline.enrichVehicleBatchV3, {
           vehicleId: vehicle._id,
           year: args.year,
@@ -1946,6 +1960,15 @@ export const confirmVehicleForShopCustomer = action({
           displacement: args.displacement,
           drivetrain: args.drivetrain,
           nhtsaVinKey: args.nhtsaVinKey,
+          trigger: "mechanic",
+          actor: {
+            name:
+              (staffIdentity?.name as string | undefined)?.trim() ||
+              [staffIdentity?.givenName, staffIdentity?.familyName].filter(Boolean).join(" ").trim() ||
+              "shop staff",
+            id: staffIdentity?.subject ? String(staffIdentity.subject) : undefined,
+            kind: "mechanic",
+          },
         });
         scheduledEnrichment = true;
       }

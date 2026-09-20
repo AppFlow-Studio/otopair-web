@@ -12,6 +12,7 @@ import type { QueryCtx, MutationCtx } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { enqueueNotificationOutbox, resolveMechanicUserId } from "./bookings";
+import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import {
   isValidTicketCategory,
   ticketSubject,
@@ -114,6 +115,9 @@ export async function enqueueTicketNotifToShop(
       type: "shop_ticket",
       ticketId: String(ticketId),
       bookingId: String(ticket.booking_id),
+      ...(ticket.booking_id
+        ? { deepLink: `otopair://booking/${String(ticket.booking_id)}` }
+        : {}),
     },
   };
   await enqueueNotificationOutbox(ctx, {
@@ -153,6 +157,12 @@ export async function enqueueTicketNotifToCustomer(
 ) {
   const ticket = await ctx.db.get(ticketId);
   if (!ticket) return;
+  // Name the car the ticket is about — resolve it off the attached booking.
+  const ticketBooking = await ctx.db.get(ticket.booking_id);
+  const { ymm: ticketYmm, vin: ticketVin } = await resolveVehicleDisplay(
+    ctx,
+    (ticketBooking as any)?.vin,
+  );
   const payload = {
     title: ticket.subject ?? "Message from the shop",
     body: ticketPreview(body) || "The shop replied to your message",
@@ -160,6 +170,11 @@ export async function enqueueTicketNotifToCustomer(
       type: "shop_ticket",
       ticketId: String(ticketId),
       bookingId: String(ticket.booking_id),
+      ...(ticket.booking_id
+        ? { deepLink: `otopair://booking/${String(ticket.booking_id)}` }
+        : {}),
+      ...(ticketYmm ? { vehicleLabel: ticketYmm } : {}),
+      ...(ticketVin ? { vin: ticketVin } : {}),
     },
   };
   await enqueueNotificationOutbox(ctx, {

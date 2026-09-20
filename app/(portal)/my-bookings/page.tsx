@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { jobListTotal } from "@/lib/booking-total";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -314,7 +315,7 @@ export default function MyBookingsPage() {
                         </td>
                         <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
                         <td className="max-w-56 truncate px-3 py-4 text-foreground">
-                          {job.serviceNames.join(", ")}
+                          {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                         </td>
                         <td className="px-3 py-4">
                           <div className="flex flex-wrap items-center gap-1.5">

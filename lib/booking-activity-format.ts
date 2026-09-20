@@ -77,6 +77,26 @@ export type ActivityEvent =
       };
     }
   | {
+      type: "custom_work_added";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        name: string;
+        /** "booking" = on the original order, "mid_job" = found while working. */
+        source: string;
+        complaint: string | null;
+        systemTags: string[];
+        workType: string | null;
+        estimatedMinutes: number | null;
+        parts: Array<{
+          part_name: string;
+          oem_number: string | null;
+          quantity: number;
+        }>;
+        quotedPartsCents: number | null;
+      };
+    }
+  | {
       type: "part_edit";
       at: number;
       actor: ActivityActor;
@@ -94,6 +114,16 @@ export type ActivityEvent =
         oemNumber: string | null;
         oldValue: string | null;
         newValue: string | null;
+      };
+    }
+  | {
+      type: "payment_captured";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        amountCents: number;
+        cardBrand: string | null;
+        last4: string | null;
       };
     };
 

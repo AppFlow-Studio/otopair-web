@@ -16,6 +16,7 @@ import {
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function getDayRange(d: Date) {
   const s = dateToString(d);
@@ -96,7 +97,7 @@ export default function ScheduleSlotPicker({
       end.setHours(eh, em, 0, 0);
       return {
         id: b._id,
-        title: `${b.customerName} — ${b.serviceNames.join(", ")}`,
+        title: `${b.customerName} — ${b.serviceNames.map(formatServiceDisplayName).join(", ")}`,
         start,
         end,
         resourceId: b.mechanicId ?? undefined,

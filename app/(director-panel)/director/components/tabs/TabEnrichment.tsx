@@ -5,7 +5,7 @@
 // pipeline trace. Built natively on the panel's inline-style design system
 // (Primitives / Charts), sourcing token + role from the director session.
 
-import { useState, useContext } from 'react'
+import { useState, useContext, useEffect } from 'react'
 import { useMutation } from 'convex/react'
 import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
@@ -64,6 +64,20 @@ export function TabEnrichment() {
     setFocusRunId(runId ?? null)
     setTab('config')
   }
+
+  // Deep-link entry (e.g. the "View run" button in the enrichment error-out
+  // Slack alert): otopair.com/director?ddc=<configId>&ddr=<runId>&ddk=<key>#enrichment.
+  // The #enrichment hash already selected this tab; here we open the exact run's
+  // Deep-Dive, then strip the query so a later hashchange/refresh doesn't reopen it.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const ddc = params.get('ddc')
+    if (!ddc) return
+    goDeepDive(ddc, params.get('ddk'), params.get('ddr') ?? undefined)
+    window.history.replaceState(null, '', window.location.pathname + window.location.hash)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const claim = async (id: string) => { await claimReview({ token, id: id as Id<'review_queue'> }) }
   const openTrigger = (req: TriggerRequest) => { if (hasCap(triggerCapability(req))) setCeremony(req) }
   const openReviewSidebar = (id: string, title: string) => setSidebarItem({ id, title })

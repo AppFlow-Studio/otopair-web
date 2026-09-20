@@ -9,6 +9,7 @@ import {
 import {
   appendFixedCentDigit,
   backspaceFixedCentCurrency,
+  fixedCentCurrencyCents,
   formatFixedCentCurrency,
   syncFixedCentCurrencyInput,
 } from "@/lib/fixed-cent-currency";
@@ -19,6 +20,7 @@ type FixedCentCurrencyInputProps = Omit<
 > & {
   value: string;
   onValueChange: (value: string) => void;
+  allowEmpty?: boolean;
 };
 
 function placeCurrencyCaretAtEnd(input: HTMLInputElement) {
@@ -36,14 +38,18 @@ export default function FixedCentCurrencyInput({
   onPaste,
   onFocus,
   onClick,
+  allowEmpty = false,
   ...props
 }: FixedCentCurrencyInputProps) {
+  const formatValue = (next: string) =>
+    allowEmpty && fixedCentCurrencyCents(next) === 0 ? "" : next;
+
   const pushDigit = (digit: string) => {
-    onValueChange(appendFixedCentDigit(value, digit));
+    onValueChange(formatValue(appendFixedCentDigit(value, digit)));
   };
 
   const popDigit = () => {
-    onValueChange(backspaceFixedCentCurrency(value));
+    onValueChange(formatValue(backspaceFixedCentCurrency(value)));
   };
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -117,7 +123,7 @@ export default function FixedCentCurrencyInput({
     const next = digits
       .split("")
       .reduce((currentValue, digit) => appendFixedCentDigit(currentValue, digit), value);
-    onValueChange(formatFixedCentCurrency(next));
+    onValueChange(formatValue(formatFixedCentCurrency(next)));
     placeCurrencyCaretAtEnd(event.currentTarget);
   }
 
@@ -126,12 +132,12 @@ export default function FixedCentCurrencyInput({
       {...props}
       type="text"
       inputMode="numeric"
-      value={formatFixedCentCurrency(value)}
+      value={formatFixedCentCurrency(value, { emptyWhenBlank: allowEmpty })}
       onBeforeInput={handleBeforeInput}
       onKeyDown={handleKeyDown}
       onPaste={handlePaste}
       onChange={(event) =>
-        onValueChange(syncFixedCentCurrencyInput(value, event.target.value))
+        onValueChange(formatValue(syncFixedCentCurrencyInput(value, event.target.value)))
       }
       onFocus={(event) => {
         onFocus?.(event);

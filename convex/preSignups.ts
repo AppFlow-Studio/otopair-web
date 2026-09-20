@@ -26,6 +26,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { buildNhtsaVinKey } from "./vehicleEnrichment/types";
+import { mintClaimToken } from "./walkin_claims";
 
 function canonicalVin(vin?: string): string | undefined {
   const c = vin?.trim().toUpperCase();
@@ -330,7 +331,14 @@ export const createStub = mutation({
       vehicleAttached = true;
     }
 
-    // Never leak the internal id; the client only needs a success signal.
-    return { ok: true, isRealUser, vehicleAttached, configLinked };
+    // Mint a claim token on the stub user row so the user can claim their
+    // account via otopair://claim/<token> or /t/<token> in the app or on the web.
+    let claimToken: string | null = null;
+    if (!isRealUser) {
+      claimToken = await mintClaimToken(ctx, userId);
+    }
+
+    // Never leak the internal id; the client only needs a success signal + claimToken.
+    return { ok: true, isRealUser, vehicleAttached, configLinked, claimToken };
   },
 });

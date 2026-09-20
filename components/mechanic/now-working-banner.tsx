@@ -5,6 +5,7 @@ import { Maximize2, Wrench } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ElapsedTimer from "./elapsed-timer";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function shortBookingCode(id: string) {
   return `BKG-${id.slice(-4).toUpperCase()}`;
@@ -61,7 +62,7 @@ export default function NowWorkingBanner({
             </p>
             {job?.serviceNames && job.serviceNames.length > 0 ? (
               <p className="text-sm text-slate-400">
-                {job.serviceNames.join(" · ")}
+                {job.serviceNames.map(formatServiceDisplayName).join(" · ")}
               </p>
             ) : null}
           </div>

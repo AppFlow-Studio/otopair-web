@@ -3,9 +3,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import {
+  ArrowRight,
   Check,
+  CheckCircle2,
+  ClipboardCheck,
   Loader2,
   PauseCircle,
+  PenLine,
+  Plus,
+  Quote,
+  RotateCcw,
   Stethoscope,
   Wrench,
 } from "lucide-react";
@@ -17,20 +24,77 @@ import type {
   DiagnosticSystem,
 } from "@/lib/diagnostic-checklist-templates";
 
-const SYSTEM_LABELS: Record<DiagnosticSystem, string> = {
-  brakes: "Brakes",
-  tires_wheels: "Tires & Wheels",
-  engine: "Engine",
-  battery_electrical: "Battery & Electrical",
-  not_sure: "Not sure",
-};
+/* ------------------------------------------------------------------ */
+/*  System theming                                                      */
+/*                                                                      */
+/*  One accent per system drives the whole sheet — the progress ring,   */
+/*  the checked state, and the primary complete button. Everything else */
+/*  stays neutral so the worksheet reads calm and focused rather than   */
+/*  like a pile of pastel cards.                                        */
+/* ------------------------------------------------------------------ */
 
-const SYSTEM_TONES: Record<DiagnosticSystem, string> = {
-  brakes: "bg-red-100 text-red-900 border-red-200",
-  tires_wheels: "bg-violet-100 text-violet-900 border-violet-200",
-  engine: "bg-amber-100 text-amber-900 border-amber-200",
-  battery_electrical: "bg-sky-100 text-sky-900 border-sky-200",
-  not_sure: "bg-muted text-foreground border-border",
+interface SystemAccent {
+  label: string;
+  /** Header pill. */
+  chip: string;
+  /** Progress-ring + linear-bar fill (text color; stroke reads currentColor). */
+  fill: string;
+  /** Checkbox when an item is checked. */
+  box: string;
+  /** Row tint when an item is checked. */
+  row: string;
+  /** Primary "Complete diagnostic" button. */
+  solid: string;
+  /** Focus ring on the accent-themed panel controls. */
+  focus: string;
+}
+
+const SYSTEM_ACCENT: Record<DiagnosticSystem, SystemAccent> = {
+  engine: {
+    label: "Engine",
+    chip: "bg-amber-100 text-amber-900 border-amber-200",
+    fill: "text-amber-500",
+    box: "border-amber-500 bg-amber-500",
+    row: "bg-amber-50/70",
+    solid: "bg-amber-600 hover:bg-amber-700",
+    focus: "focus:ring-amber-300/50",
+  },
+  brakes: {
+    label: "Brakes",
+    chip: "bg-rose-100 text-rose-900 border-rose-200",
+    fill: "text-rose-500",
+    box: "border-rose-500 bg-rose-500",
+    row: "bg-rose-50/70",
+    solid: "bg-rose-600 hover:bg-rose-700",
+    focus: "focus:ring-rose-300/50",
+  },
+  tires_wheels: {
+    label: "Tires & Wheels",
+    chip: "bg-violet-100 text-violet-900 border-violet-200",
+    fill: "text-violet-500",
+    box: "border-violet-500 bg-violet-500",
+    row: "bg-violet-50/70",
+    solid: "bg-violet-600 hover:bg-violet-700",
+    focus: "focus:ring-violet-300/50",
+  },
+  battery_electrical: {
+    label: "Battery & Electrical",
+    chip: "bg-sky-100 text-sky-900 border-sky-200",
+    fill: "text-sky-500",
+    box: "border-sky-500 bg-sky-500",
+    row: "bg-sky-50/70",
+    solid: "bg-sky-600 hover:bg-sky-700",
+    focus: "focus:ring-sky-300/50",
+  },
+  not_sure: {
+    label: "General",
+    chip: "bg-slate-100 text-slate-800 border-slate-200",
+    fill: "text-slate-500",
+    box: "border-slate-600 bg-slate-600",
+    row: "bg-slate-50",
+    solid: "bg-slate-800 hover:bg-slate-900",
+    focus: "focus:ring-slate-300/50",
+  },
 };
 
 interface DiagnosticChecklistDialogProps {
@@ -53,8 +117,16 @@ interface DiagnosticChecklistDialogProps {
   recommendedServiceNote?: string | null;
   followupState?: "pending" | "awaiting_info" | "resolved" | null;
   awaitingInfoNote?: string | null;
+  /** True when the diagnostic is the booking's only service — its terminal
+   *  action completes the booking. When false (a combined booking), the
+   *  worksheet hands off to the post-job survey via `onContinueToPostJob` so the
+   *  remaining services' parts/labor get captured. */
+  isDiagnosticOnly?: boolean;
+  /** Non-diagnostic services on this booking, named in the "continue to
+   *  post-job" hand-off so the mechanic knows what's left to capture. */
+  additionalServiceNames?: string[];
   onClose: () => void;
-  onCompleted: () => void;
+  onCompleted: (message?: string) => void;
   onError?: (message: string) => void;
   onOpenScheduler?: (ctx: {
     serviceId: string;
@@ -62,6 +134,11 @@ interface DiagnosticChecklistDialogProps {
     mechanicNote: string;
     defaultDurationMinutes: number;
   }) => void;
+  /** Combined bookings only — close the worksheet and open the post-job survey. */
+  onContinueToPostJob?: () => void;
+  /** "Do it now" — close the worksheet and open the mid-job scope flow so the
+   *  mechanic can add the found work (catalog or custom) to this booking. */
+  onAddWorkNow?: () => void;
 }
 
 type ActivePanel = "recommend" | "park" | null;
@@ -80,17 +157,24 @@ export default function DiagnosticChecklistDialog({
   recommendedServiceNote,
   followupState,
   awaitingInfoNote,
+  isDiagnosticOnly = true,
+  additionalServiceNames = [],
   onClose,
   onCompleted,
   onError,
   onOpenScheduler,
+  onContinueToPostJob,
+  onAddWorkNow,
 }: DiagnosticChecklistDialogProps) {
   const updateItem = useMutation(api.bookings.updateDiagnosticChecklistItem);
   const updateFindings = useMutation(api.bookings.updateDiagnosticFindings);
   const attachRecommendation = useMutation(api.bookings.attachRecommendedService);
   const parkForInfo = useMutation(api.bookings.parkDiagnosticForInfo);
   const resumeFollowUp = useMutation(api.bookings.resumeDiagnosticFollowUp);
+  const completeDiagnostic = useMutation(api.bookings.completeDiagnosticBooking);
   const shopServices = useQuery(api.schedule.getShopServicesWithCategories);
+
+  const accent = SYSTEM_ACCENT[system] ?? SYSTEM_ACCENT.not_sure;
 
   const [busyIndex, setBusyIndex] = useState<number | null>(null);
   const [findingsDraft, setFindingsDraft] = useState(findingsNote ?? "");
@@ -112,6 +196,9 @@ export default function DiagnosticChecklistDialog({
   );
   const [parkNoteDraft, setParkNoteDraft] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // Dedicated flag for the terminal "Complete diagnostic" / "Continue to
+  // post-job" action so it doesn't collide with the recommend/park panel submit.
+  const [isWrapping, setIsWrapping] = useState(false);
 
   // Keep the local findings draft in sync when the dialog opens / loads.
   useEffect(() => {
@@ -138,8 +225,25 @@ export default function DiagnosticChecklistDialog({
     return { checked, pending, total: checklist.length };
   }, [checklist]);
 
+  // Every item resolved (nothing left "pending"). Matches the server gate in
+  // `completeDiagnosticBooking`, so the terminal action stays disabled until the
+  // mutation would accept it.
+  const allResolved = useMemo(
+    () => checklist.length > 0 && checklist.every((i) => i.status !== "pending"),
+    [checklist],
+  );
+
   const hasRecommendation =
     !!recommendationState && recommendationState !== "none";
+
+  const isAwaitingRecommendation = recommendationState === "pending_customer";
+  const isParked = followupState === "awaiting_info";
+  // The wrap-up outcome block (found-something actions + terminal complete) is
+  // available whenever the mechanic isn't already mid-panel, parked, or waiting
+  // on the customer's recommendation decision. A *declined* recommendation still
+  // shows it — that's the dead-end this fixes: the mechanic can now complete.
+  const showOutcomes =
+    active === null && !isParked && !isAwaitingRecommendation;
 
   const followUpMinutes = useMemo(() => {
     if (!recommendedServiceIdDraft || !shopServices?.categories) return 60;
@@ -222,6 +326,32 @@ export default function DiagnosticChecklistDialog({
     }
   }
 
+  // Terminal wrap-up. Diagnostic-only bookings complete right here; combined
+  // bookings hand off to the post-job survey so the other services get billed.
+  async function handleWrapUp() {
+    if (!allResolved) return;
+    if (!isDiagnosticOnly) {
+      onContinueToPostJob?.();
+      return;
+    }
+    if (!bookingId) return;
+    setIsWrapping(true);
+    try {
+      // Persist any unsaved findings before the booking flips to completed.
+      if (findingsDraft !== (findingsNote ?? "")) {
+        await updateFindings({ bookingId, note: findingsDraft });
+      }
+      await completeDiagnostic({ bookingId });
+      onCompleted("Diagnostic completed");
+    } catch (err) {
+      onError?.(
+        err instanceof Error ? err.message : "Could not complete diagnostic.",
+      );
+    } finally {
+      setIsWrapping(false);
+    }
+  }
+
   async function handleAttachRecommendation() {
     if (!bookingId) return;
     if (!recommendationNoteDraft.trim()) {
@@ -246,7 +376,7 @@ export default function DiagnosticChecklistDialog({
         scheduledTime: scheduleMode === "later" ? recTimeDraft : undefined,
       });
       setActive(null);
-      onCompleted();
+      onCompleted("Recommendation sent to customer");
     } catch (err) {
       onError?.(
         err instanceof Error ? err.message : "Could not send recommendation.",
@@ -266,13 +396,15 @@ export default function DiagnosticChecklistDialog({
     try {
       await parkForInfo({ bookingId, note: parkNoteDraft.trim() });
       setActive(null);
-      onCompleted();
+      onCompleted("Job parked — awaiting info");
     } catch (err) {
       onError?.(err instanceof Error ? err.message : "Could not park job.");
     } finally {
       setIsSubmitting(false);
     }
   }
+
+  const inputClass = `w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none transition focus:ring-2 ${accent.focus}`;
 
   return (
     <SurveyDialogShell
@@ -288,53 +420,52 @@ export default function DiagnosticChecklistDialog({
       }
       headerBadge={
         <span
-          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${SYSTEM_TONES[system]}`}
+          className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${accent.chip}`}
         >
           <Stethoscope className="h-3 w-3" />
-          {SYSTEM_LABELS[system]}
+          {accent.label}
         </span>
       }
       onClose={onClose}
-      maxWidthClassName="max-w-4xl"
+      maxWidthClassName="max-w-3xl"
       mobileFullBleed={true}
-      contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-4 sm:px-6 sm:pb-5"
+      contentClassName="min-h-0 flex-1 overflow-y-auto px-5 pb-5 pt-4 sm:px-6 sm:pb-6 sm:pt-5"
       footer={
-        <div className="flex flex-col gap-2">
-          {/* Sticky bottom actions — visible regardless of scroll */}
-          {!hasRecommendation && active === null && followupState !== "awaiting_info" ? (
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <button
-                type="button"
-                onClick={() => setActive("recommend")}
-                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900 hover:bg-amber-100"
-              >
-                <Wrench className="h-4 w-4" />
-                Recommend service
-              </button>
-              <button
-                type="button"
-                onClick={() => setActive("park")}
-                className="inline-flex min-h-[48px] items-center justify-center gap-2 rounded-xl border border-cyan-300 bg-cyan-50 px-3 py-2 text-sm font-semibold text-cyan-900 hover:bg-cyan-100"
-              >
-                <PauseCircle className="h-4 w-4" />
-                Need more info
-              </button>
+        <div className="flex flex-col gap-2.5">
+          {/* Waiting on the customer's recommendation decision — no terminal
+              action until they respond (a decline reopens the outcome block). */}
+          {isAwaitingRecommendation ? (
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-amber-900">
+              <span
+                className="mt-1 h-2 w-2 shrink-0 animate-pulse rounded-full bg-amber-500"
+                aria-hidden="true"
+              />
+              <p className="text-[13px] leading-snug">
+                Waiting for the customer to confirm
+                {recommendedServiceName ? (
+                  <> &ldquo;{recommendedServiceName}&rdquo;</>
+                ) : (
+                  " the recommended service"
+                )}
+                . You can wrap up here once they respond.
+              </p>
             </div>
           ) : null}
 
           {active === "recommend" ? (
             <SecondaryPanel
-              tone="amber"
               title="Recommend a follow-up service"
+              subtitle="Sent to the customer to confirm and schedule."
               onCancel={() => setActive(null)}
               onSubmit={handleAttachRecommendation}
               submitLabel="Send to customer"
+              submitClass={accent.solid}
               isSubmitting={isSubmitting}
             >
               <select
                 value={recommendedServiceIdDraft}
                 onChange={(e) => setRecommendedServiceIdDraft(e.target.value)}
-                className="w-full rounded-md border border-amber-200 bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300/40"
+                className={inputClass}
               >
                 <option value="">Pick a service…</option>
                 {(shopServices?.categories ?? []).map((cat: any) => (
@@ -355,21 +486,21 @@ export default function DiagnosticChecklistDialog({
                 }
                 rows={3}
                 placeholder="Mechanic's finding — what's wrong, why this service fixes it."
-                className="w-full resize-none rounded-md border border-amber-200 bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300/40"
+                className={`${inputClass} resize-none`}
               />
 
               <div className="space-y-1.5">
-                <div className="text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                   When?
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   <button
                     type="button"
                     onClick={() => setScheduleMode("now")}
-                    className={`rounded-md border px-2 py-1.5 text-xs font-medium ${
+                    className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
                       scheduleMode === "now"
-                        ? "border-amber-500 bg-amber-100 text-amber-900"
-                        : "border-amber-200 bg-background text-foreground hover:bg-amber-50"
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground hover:bg-muted/50"
                     }`}
                   >
                     Right after this job
@@ -405,10 +536,10 @@ export default function DiagnosticChecklistDialog({
                       }
                       setScheduleMode("later");
                     }}
-                    className={`rounded-md border px-2 py-1.5 text-xs font-medium ${
+                    className={`rounded-lg border px-2 py-2 text-xs font-medium transition ${
                       scheduleMode === "later"
-                        ? "border-amber-500 bg-amber-100 text-amber-900"
-                        : "border-amber-200 bg-background text-foreground hover:bg-amber-50"
+                        ? "border-foreground bg-foreground text-background"
+                        : "border-border bg-background text-foreground hover:bg-muted/50"
                     }`}
                   >
                     Schedule for later
@@ -422,7 +553,7 @@ export default function DiagnosticChecklistDialog({
                         min={todayISO}
                         value={recDateDraft}
                         onChange={(e) => setRecDateDraft(e.target.value)}
-                        className="w-full rounded-md border border-amber-200 bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-amber-300/40"
+                        className={inputClass}
                       />
                       <input
                         type="time"
@@ -442,20 +573,18 @@ export default function DiagnosticChecklistDialog({
                             `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`,
                           );
                         }}
-                        className={`w-full rounded-md border bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 ${
+                        className={`${inputClass} ${
                           proposedConflict
                             ? "border-rose-400 focus:ring-rose-300/40"
-                            : "border-amber-200 focus:ring-amber-300/40"
+                            : ""
                         }`}
                       />
                     </div>
 
-                    <div className="rounded-md border border-amber-200 bg-background/70 p-2">
-                      <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-amber-900">
+                    <div className="rounded-lg border border-border bg-muted/30 p-2">
+                      <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                         <span>Bookings on {recDateDraft}</span>
-                        <span className="text-amber-900/70">
-                          Follow-up: {followUpMinutes}m
-                        </span>
+                        <span>Follow-up: {followUpMinutes}m</span>
                       </div>
                       {dayBookings === undefined ? (
                         <p className="text-xs text-muted-foreground">
@@ -490,7 +619,7 @@ export default function DiagnosticChecklistDialog({
                               return (
                                 <li
                                   key={b._id}
-                                  className={`flex items-center justify-between gap-2 rounded-sm px-1.5 py-1 text-[12px] ${
+                                  className={`flex items-center justify-between gap-2 rounded-md px-1.5 py-1 text-[12px] ${
                                     overlaps
                                       ? "bg-rose-100 text-rose-900"
                                       : "text-foreground"
@@ -525,11 +654,12 @@ export default function DiagnosticChecklistDialog({
 
           {active === "park" ? (
             <SecondaryPanel
-              tone="cyan"
-              title="Need more info — park job"
+              title="Need more info — park the job"
+              subtitle="Pauses the job on your board until you pick it back up."
               onCancel={() => setActive(null)}
               onSubmit={handlePark}
               submitLabel="Park job"
+              submitClass="bg-foreground hover:bg-foreground/90"
               isSubmitting={isSubmitting}
             >
               <textarea
@@ -537,138 +667,229 @@ export default function DiagnosticChecklistDialog({
                 onChange={(e) => setParkNoteDraft(e.target.value.slice(0, 300))}
                 rows={3}
                 placeholder="What are you waiting on? (parts info, customer callback, second opinion…)"
-                className="w-full resize-none rounded-md border border-cyan-200 bg-background px-2 py-1.5 text-sm outline-none focus:ring-2 focus:ring-cyan-300/40"
+                className={`${inputClass} resize-none`}
               />
             </SecondaryPanel>
+          ) : null}
+
+          {/* Wrap-up: "found something?" actions + the terminal complete. */}
+          {showOutcomes ? (
+            <div className="space-y-3">
+              <div>
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Found something on the vehicle?
+                </div>
+                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-3">
+                  <OutcomeButton
+                    icon={<Plus className="h-4 w-4" />}
+                    label="Do it now"
+                    hint="Add to this job"
+                    onClick={() => onAddWorkNow?.()}
+                    disabled={!onAddWorkNow}
+                  />
+                  <OutcomeButton
+                    icon={<Wrench className="h-4 w-4" />}
+                    label="Recommend"
+                    hint="Send to customer"
+                    onClick={() => setActive("recommend")}
+                  />
+                  <OutcomeButton
+                    icon={<PauseCircle className="h-4 w-4" />}
+                    label="Need more info"
+                    hint="Park the job"
+                    onClick={() => setActive("park")}
+                  />
+                </div>
+              </div>
+
+              <div className="border-t border-border pt-2.5">
+                {!allResolved ? (
+                  <p className="mb-2 text-center text-[12px] font-medium text-muted-foreground">
+                    Check off every item to finish
+                    {counts.pending > 0 ? ` — ${counts.pending} left` : ""}.
+                  </p>
+                ) : !isDiagnosticOnly && additionalServiceNames.length > 0 ? (
+                  <p className="mb-2 text-[12px] font-medium text-muted-foreground">
+                    Next: capture{" "}
+                    <span className="font-semibold text-foreground">
+                      {additionalServiceNames.join(", ")}
+                    </span>{" "}
+                    in the post-job survey.
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleWrapUp}
+                  disabled={!allResolved || isWrapping}
+                  className={`inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                    isDiagnosticOnly ? accent.solid : "bg-foreground hover:bg-foreground/90"
+                  }`}
+                >
+                  {isWrapping ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : isDiagnosticOnly ? (
+                    <CheckCircle2 className="h-4 w-4" />
+                  ) : (
+                    <ArrowRight className="h-4 w-4" />
+                  )}
+                  {isDiagnosticOnly
+                    ? "Complete diagnostic"
+                    : "Continue to post-job survey"}
+                </button>
+              </div>
+            </div>
           ) : null}
 
           <div className="flex items-center justify-between gap-3 border-t border-border pt-2 text-xs text-muted-foreground">
             <button
               type="button"
               onClick={onClose}
-              className="underline-offset-2 hover:underline"
+              className="font-medium underline-offset-2 hover:text-foreground hover:underline"
             >
-              Save & close
+              Save &amp; close
             </button>
-            {findingsSavedAt ? <span>Saved</span> : null}
+            {findingsSavedAt ? (
+              <span className="inline-flex items-center gap-1">
+                <Check className="h-3 w-3" />
+                Saved
+              </span>
+            ) : null}
           </div>
         </div>
       }
     >
       <div className="space-y-4">
-        {/* Sticky progress header */}
-        <div className="sticky top-0 z-20 -mx-5 border-b border-border bg-card px-5 py-3 shadow-sm sm:-mx-6 sm:px-6 sm:py-4">
-          <div className="mb-2 flex items-baseline justify-between gap-3">
-            <div className="text-base font-bold tabular-nums text-foreground sm:text-sm">
-              {counts.checked} / {counts.total}{" "}
-              <span className="font-semibold uppercase tracking-wider text-muted-foreground sm:text-[11px]">
-                checked
-              </span>
+        {/* Progress hero */}
+        <div className="flex items-center gap-4 rounded-2xl border border-border bg-card p-4 sm:p-5">
+          <ProgressRing
+            checked={counts.checked}
+            total={counts.total}
+            accentText={accent.fill}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold text-foreground sm:text-base">
+              {counts.total === 0
+                ? "No checklist for this system"
+                : allResolved
+                  ? "All checks complete"
+                  : "Running the diagnostic"}
             </div>
-            {counts.pending > 0 ? (
-              <div className="text-[12px] font-semibold uppercase tracking-wider text-muted-foreground sm:text-[11px]">
-                {counts.pending} pending
-              </div>
-            ) : null}
+            <p className="mt-0.5 text-[13px] leading-snug text-muted-foreground">
+              {counts.total === 0
+                ? "Log your finding, then wrap up below."
+                : allResolved
+                  ? isDiagnosticOnly
+                    ? "Log your finding, then complete the job below."
+                    : "Log your finding, then continue to the post-job survey."
+                  : `${counts.pending} ${
+                      counts.pending === 1 ? "check" : "checks"
+                    } left — tap each one as you go.`}
+            </p>
           </div>
-          <ProgressBar checked={counts.checked} total={counts.total} />
         </div>
 
+        {/* Customer's concern */}
         {customerNotes ? (
-          <div className="rounded-xl border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900">
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider">
-              Customer states
+          <div className="rounded-2xl border border-border bg-muted/30 p-4">
+            <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <Quote className="h-3 w-3" />
+              What the customer said
             </div>
-            <p className="whitespace-pre-wrap leading-relaxed">{customerNotes}</p>
+            <p className="whitespace-pre-wrap text-[15px] font-medium leading-relaxed text-foreground sm:text-sm">
+              {customerNotes}
+            </p>
           </div>
         ) : null}
 
-        {followupState === "awaiting_info" ? (
-          <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3 text-sm text-cyan-900">
-            <div className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider">
-              Parked · awaiting info
+        {/* Parked banner */}
+        {isParked ? (
+          <div className="rounded-2xl border border-cyan-200 bg-cyan-50 p-4 text-cyan-900">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider">
+                <PauseCircle className="h-3.5 w-3.5" />
+                Parked · awaiting info
+              </span>
               <button
                 type="button"
                 onClick={handleResume}
-                className="rounded-md border border-cyan-300 bg-white px-2 py-0.5 text-[11px] font-medium text-cyan-900 hover:bg-cyan-100"
+                className="inline-flex items-center gap-1 rounded-lg border border-cyan-300 bg-white px-2.5 py-1 text-[12px] font-semibold text-cyan-900 transition hover:bg-cyan-100"
               >
+                <RotateCcw className="h-3.5 w-3.5" />
                 Resume
               </button>
             </div>
             {awaitingInfoNote ? (
-              <p className="whitespace-pre-wrap leading-relaxed">{awaitingInfoNote}</p>
+              <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                {awaitingInfoNote}
+              </p>
             ) : null}
           </div>
         ) : null}
 
-        {/* Checklist — pill summary once recommendation is sent, otherwise tap-to-toggle */}
-        {hasRecommendation && recommendationState === "pending_customer" ? (
+        {/* Checklist */}
+        {counts.total > 0 ? (
           <div>
-            <div className="mb-2 text-sm font-semibold text-foreground">
-              Diagnostic Checklist · Complete
+            <div className="mb-2 flex items-center gap-1.5 px-0.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <ClipboardCheck className="h-3.5 w-3.5" />
+              Checklist
+              <span className="ml-auto tabular-nums text-muted-foreground/80">
+                {counts.checked}/{counts.total}
+              </span>
             </div>
-            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-              {checklist.map((item, index) => (
-                <div
-                  key={`${item.label}-${index}`}
-                  className="flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-[13px] text-emerald-900"
-                >
-                  <Check className="h-3.5 w-3.5 shrink-0" />
-                  <span className="truncate">{item.label}</span>
-                </div>
-              ))}
+            <div className="overflow-hidden rounded-2xl border border-border bg-card">
+              {checklist.map((item, index) => {
+                const isChecked = item.status === "checked";
+                const busy = busyIndex === index;
+                return (
+                  <button
+                    key={`${item.label}-${index}`}
+                    type="button"
+                    onClick={() => toggleItem(index)}
+                    disabled={busy}
+                    className={`group flex w-full items-center gap-3 px-4 py-3 text-left transition-colors ${
+                      index > 0 ? "border-t border-border" : ""
+                    } ${isChecked ? accent.row : "hover:bg-muted/40"}`}
+                  >
+                    <span
+                      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-2 transition-all ${
+                        isChecked
+                          ? `${accent.box} text-white`
+                          : "border-muted-foreground/30 bg-background group-hover:border-muted-foreground/60"
+                      }`}
+                    >
+                      {isChecked ? <Check className="h-4 w-4" strokeWidth={3} /> : null}
+                    </span>
+                    <span className="min-w-0 flex-1 text-[15px] font-medium text-foreground sm:text-sm">
+                      {item.label}
+                    </span>
+                    {busy ? (
+                      <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+                    ) : isChecked ? (
+                      <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Done
+                      </span>
+                    ) : (
+                      <span className="shrink-0 text-[11px] font-medium text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100">
+                        Tap to check
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
           </div>
-        ) : (
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {checklist.map((item, index) => {
-            const isChecked = item.status === "checked";
-            return (
-              <button
-                key={`${item.label}-${index}`}
-                type="button"
-                onClick={() => toggleItem(index)}
-                disabled={busyIndex === index}
-                className={`flex w-full items-center gap-3 px-4 py-3.5 text-left transition-colors ${
-                  index > 0 ? "border-t border-border" : ""
-                } ${isChecked ? "bg-emerald-50/60" : "hover:bg-muted/40"}`}
-              >
-                <div
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md border-2 transition-colors ${
-                    isChecked
-                      ? "border-emerald-500 bg-emerald-500 text-white"
-                      : "border-border bg-background"
-                  }`}
-                >
-                  {isChecked ? <Check className="h-4 w-4" /> : null}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div
-                    className={`text-[15px] font-medium sm:text-sm ${
-                      isChecked ? "text-emerald-900" : "text-foreground"
-                    }`}
-                  >
-                    {item.label}
-                  </div>
-                </div>
-                {busyIndex === index ? (
-                  <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
-                ) : null}
-              </button>
-            );
-          })}
-        </div>
-        )}
+        ) : null}
 
-        {/* Single consolidated mechanic findings notes */}
-        <div className="rounded-xl border border-border bg-card p-3">
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="text-sm font-semibold text-foreground">
-              Mechanic&apos;s Finding
+        {/* Mechanic's finding */}
+        <div>
+          <div className="mb-2 flex items-center justify-between px-0.5">
+            <label className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              <PenLine className="h-3.5 w-3.5" />
+              Mechanic&apos;s finding
             </label>
             {!hasRecommendation ? (
-              <span className="text-[11px] text-muted-foreground">
-                Used as the default note when you recommend a service.
+              <span className="text-[11px] text-muted-foreground/80">
+                Seeds the note when you recommend work
               </span>
             ) : null}
           </div>
@@ -678,100 +899,200 @@ export default function DiagnosticChecklistDialog({
             onBlur={saveFindings}
             rows={4}
             placeholder="What did you find? What's the cause? Measurements, observations, photos taken…"
-            className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-[15px] leading-relaxed outline-none focus:ring-2 focus:ring-primary/20 sm:text-sm"
+            className={`w-full resize-none rounded-2xl border border-border bg-card px-3.5 py-3 text-[15px] leading-relaxed outline-none transition focus:ring-2 sm:text-sm ${accent.focus}`}
           />
         </div>
 
-        {allRecCard(
-          hasRecommendation,
-          recommendationState,
-          recommendedServiceName,
-          recommendedServiceNote,
-        )}
+        {/* Recommendation status */}
+        <RecommendationCard
+          hasRecommendation={hasRecommendation}
+          state={recommendationState}
+          name={recommendedServiceName}
+          note={recommendedServiceNote}
+        />
       </div>
     </SurveyDialogShell>
   );
 }
 
-function allRecCard(
-  hasRecommendation: boolean,
-  state: any,
-  name?: string | null,
-  note?: string | null,
-) {
-  if (!hasRecommendation) return null;
+/* ------------------------------------------------------------------ */
+/*  Pieces                                                              */
+/* ------------------------------------------------------------------ */
+
+function ProgressRing({
+  checked,
+  total,
+  accentText,
+}: {
+  checked: number;
+  total: number;
+  accentText: string;
+}) {
+  const size = 60;
+  const stroke = 6;
+  const r = (size - stroke) / 2;
+  const circ = 2 * Math.PI * r;
+  const pct = total > 0 ? checked / total : 0;
+  const complete = total > 0 && checked === total;
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-      <div className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-amber-900">
-        Recommended ·{" "}
-        {state === "pending_customer" ? "Sent to customer" : state}
+    <div
+      className="relative shrink-0"
+      style={{ width: size, height: size }}
+      aria-hidden="true"
+    >
+      <svg width={size} height={size} className="-rotate-90">
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          strokeWidth={stroke}
+          className="fill-none stroke-muted"
+        />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={r}
+          strokeWidth={stroke}
+          strokeLinecap="round"
+          stroke="currentColor"
+          className={`fill-none transition-[stroke-dashoffset] duration-300 ease-out ${accentText}`}
+          strokeDasharray={circ}
+          strokeDashoffset={circ * (1 - pct)}
+        />
+      </svg>
+      <div className="absolute inset-0 flex items-center justify-center">
+        {complete ? (
+          <Check className={`h-6 w-6 ${accentText}`} strokeWidth={3} />
+        ) : (
+          <span className="text-[15px] font-bold tabular-nums text-foreground">
+            {checked}
+            <span className="text-[11px] font-semibold text-muted-foreground">
+              /{total}
+            </span>
+          </span>
+        )}
       </div>
-      <div className="text-sm font-medium text-amber-900">
-        {name ?? "Recommended service"}
-      </div>
-      {note ? (
-        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-amber-900/90">
-          &quot;{note}&quot;
-        </p>
-      ) : null}
-      <p className="mt-2 text-xs text-amber-900/80">
-        Mechanic proceeds only after the customer confirms.
-      </p>
     </div>
   );
 }
 
-function ProgressBar({ checked, total }: { checked: number; total: number }) {
-  if (total === 0) return null;
-  const pct = (checked / total) * 100;
+function OutcomeButton({
+  icon,
+  label,
+  hint,
+  onClick,
+  disabled,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
   return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
-      <div
-        className="h-full bg-emerald-500 transition-[width] duration-200"
-        style={{ width: `${pct}%` }}
-      />
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className="flex items-center gap-2.5 rounded-xl border border-border bg-card px-3 py-2.5 text-left transition hover:border-foreground/20 hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-40"
+    >
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block truncate text-[13px] font-semibold text-foreground">
+          {label}
+        </span>
+        <span className="block truncate text-[11px] text-muted-foreground">
+          {hint}
+        </span>
+      </span>
+    </button>
+  );
+}
+
+function RecommendationCard({
+  hasRecommendation,
+  state,
+  name,
+  note,
+}: {
+  hasRecommendation: boolean;
+  state?: string | null;
+  name?: string | null;
+  note?: string | null;
+}) {
+  if (!hasRecommendation) return null;
+  const tone =
+    state === "confirmed"
+      ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+      : state === "declined"
+        ? "border-border bg-muted/40 text-muted-foreground"
+        : "border-amber-200 bg-amber-50 text-amber-900";
+  const stateLabel =
+    state === "pending_customer"
+      ? "Sent to customer"
+      : state === "confirmed"
+        ? "Confirmed"
+        : state === "declined"
+          ? "Declined"
+          : String(state ?? "");
+  return (
+    <div className={`rounded-2xl border p-4 ${tone}`}>
+      <div className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider">
+        <Wrench className="h-3 w-3" />
+        Recommended · {stateLabel}
+      </div>
+      <div className="text-sm font-semibold">
+        {name ?? "Recommended service"}
+      </div>
+      {note ? (
+        <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
+          &quot;{note}&quot;
+        </p>
+      ) : null}
+      {state === "pending_customer" ? (
+        <p className="mt-2 text-xs opacity-80">
+          Proceed once the customer confirms.
+        </p>
+      ) : null}
     </div>
   );
 }
 
 function SecondaryPanel({
-  tone,
   title,
+  subtitle,
   children,
   onCancel,
   onSubmit,
   submitLabel,
+  submitClass,
   isSubmitting,
 }: {
-  tone: "cyan" | "amber" | "muted";
   title: string;
+  subtitle?: string;
   children: React.ReactNode;
   onCancel: () => void;
   onSubmit: () => void;
   submitLabel: string;
+  submitClass: string;
   isSubmitting: boolean;
 }) {
-  const wrapperTone =
-    tone === "cyan"
-      ? "border-cyan-200 bg-cyan-50/40"
-      : tone === "amber"
-        ? "border-amber-200 bg-amber-50/40"
-        : "border-border bg-muted/30";
-  const submitTone =
-    tone === "cyan"
-      ? "bg-cyan-700 hover:bg-cyan-800"
-      : tone === "amber"
-        ? "bg-amber-600 hover:bg-amber-700"
-        : "bg-foreground hover:bg-foreground/90";
   return (
-    <div className={`space-y-2 rounded-xl border p-3 ${wrapperTone}`}>
-      <div className="text-sm font-semibold text-foreground">{title}</div>
+    <div className="space-y-2.5 rounded-2xl border border-border bg-muted/30 p-3.5">
+      <div>
+        <div className="text-sm font-semibold text-foreground">{title}</div>
+        {subtitle ? (
+          <div className="text-[12px] text-muted-foreground">{subtitle}</div>
+        ) : null}
+      </div>
       {children}
-      <div className="flex items-center justify-end gap-2">
+      <div className="flex items-center justify-end gap-2 pt-0.5">
         <button
           type="button"
           onClick={onCancel}
-          className="px-2.5 py-1 text-xs font-medium text-muted-foreground hover:text-foreground"
+          className="rounded-lg px-3 py-1.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
         >
           Cancel
         </button>
@@ -779,7 +1100,7 @@ function SecondaryPanel({
           type="button"
           onClick={onSubmit}
           disabled={isSubmitting}
-          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ${submitTone}`}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors disabled:opacity-50 ${submitClass}`}
         >
           {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
           {submitLabel}

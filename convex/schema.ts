@@ -964,6 +964,14 @@ export default defineSchema({
     vehicle_config_id: v.id("vehicle_configs"),
     version: v.optional(v.string()),
     trigger: v.optional(v.string()),
+    // Who kicked this run off, when a human did — captured at creation from the
+    // trigger point (director panel / walk-in claim / mechanic / signup) and
+    // threaded through the scheduler hops via lib/enrichmentActor. Absent for
+    // system runs (cron/marketplace/CLI) and on all pre-Sep-2026 rows. Feeds the
+    // enrichment error-out Slack alert ("who ran it") and the Deep-Dive header.
+    actor_name: v.optional(v.string()),
+    actor_id: v.optional(v.string()),
+    actor_kind: v.optional(v.string()), // "director" | "mechanic" | "driver" | "system"
     status: v.string(),
     total_tokens_in: v.optional(v.number()),
     total_tokens_out: v.optional(v.number()),
@@ -2208,6 +2216,14 @@ export default defineSchema({
     // sign-outs (SecureStore doesn't survive).
     onboardingDeferredStep: v.optional(v.string()),
     tellUsAboutCompleted: v.optional(v.boolean()),
+    // First-run tutorial. Stamped when the tour is COMPLETED OR SKIPPED — both
+    // are the driver saying they are done with it, and re-showing a tour
+    // someone dismissed is the fastest way to make it feel like an ad.
+    // Re-entry lives in Settings rather than being automatic.
+    //
+    // On the user row rather than AsyncStorage so it follows the account: a
+    // driver who signs in on a second device has already had the tour.
+    tutorialSeenAt: v.optional(v.number()),
     user_intentions: v.optional(v.any()),
     language: v.optional(v.string()),
     units: v.optional(v.string()),
@@ -2243,6 +2259,17 @@ export default defineSchema({
     // Set when a Clerk user.created webhook claimed a pre-existing
     // "shop-created-*" walk-in stub user by matching email or phone.
     walkInClaimedAt: v.optional(v.number()),
+    // Forwarding pointer, set when a shop-built stub is merged into a real
+    // account by `walkin_claims.claimByToken`.
+    //
+    // The stub row is kept rather than deleted — it may be referenced by rows
+    // the merge does not know about, and a dangling id is worse than a parked
+    // one. But keeping it left it fully discoverable: the shop portal's
+    // customer lookup matches on email and phone, which a retired stub still
+    // carries, so the NEXT walk-in for that person attached to the dead row
+    // and never reached their real account (Ahmad, 2026-09-10). Lookups follow
+    // this pointer instead.
+    merged_into_user_id: v.optional(v.id("users")),
     // URL-safe token embedded in the post-job claim deep link sent to
     // mechanic-created walk-in clients. Resolved by /claim/[token].
     claim_token: v.optional(v.string()),
@@ -2451,15 +2478,16 @@ export default defineSchema({
     .index("by_service_id", ["service_id"])
     .index("by_shop_and_service", ["shop_id", "service_id"]),
 
-  // Per-(shop, service, tier) flat-price overrides. Row exists ⇒ that tier
-  // is sold at `price_cents` flat (labor + parts merged); tax + platform fee
-  // still added on top by the booking flow. Missing row ⇒ engine range
-  // applies. Server rejects writes for any tier in shops.declined_tiers.
+  // Legacy table name: despite `shop_service_fixed_prices`, these rows now
+  // store either a fixed `price_cents` OR a low/high price range. Keeping the
+  // name avoids a destructive migration. Tax and platform fees remain extra.
   shop_service_fixed_prices: defineTable({
     shop_id: v.id("shops"),
     service_id: v.id("services"),
     tier: tierValidator,
-    price_cents: v.number(),
+    price_cents: v.optional(v.number()),
+    price_low_cents: v.optional(v.number()),
+    price_high_cents: v.optional(v.number()),
     updated_at: v.number(),
     updated_by_user_id: v.optional(v.id("users")),
   })
@@ -2644,9 +2672,19 @@ export default defineSchema({
     rating: v.optional(v.number()),
     review_count: v.optional(v.number()),
     is_active: v.optional(v.boolean()),
+    // "bay" | "mechanic" (absent = "mechanic"). A bay is a mechanics row with
+    // no last name — same schedule/availability machinery, different label.
+    entity_type: v.optional(v.string()),
+    // Set only when this mechanic profile IS a portal user working on cars
+    // (currently: a shop owner who opted into being schedulable). Lets us find
+    // and reuse an owner's own mechanic row instead of creating duplicates.
+    // Normal shop-added mechanics leave this unset and link back via
+    // shop_users.mechanic_id instead.
+    user_id: v.optional(v.id("users")),
   })
     .index("by_shop_id", ["shop_id"])
-    .index("by_is_active", ["is_active"]),
+    .index("by_is_active", ["is_active"])
+    .index("by_user_id", ["user_id"]),
 
   // [D] 8 fields (A/W had 6)
   time_slots: defineTable({
@@ -2976,6 +3014,20 @@ export default defineSchema({
     source_recommendation_id: v.optional(v.id("job_recommendations")),
     // Booking origin and quote baselines for mechanic-created walk-ins.
     source: v.optional(v.string()),
+    // Tracker deep link for THIS job — `otopair://claim/<token>`, handed to
+    // the customer by the shop.
+    //
+    // Per booking, not per customer. It used to live on `users.claim_token`,
+    // which was fine while a link was only ever minted once for a stranger
+    // with exactly one job. A returning customer can have several walk-ins
+    // open at the same shop — Ahmad's own test data has two on one vehicle on
+    // one day — and a user-level token cannot say which of them a given link
+    // was for; it resolved to whichever sorted most recent.
+    //
+    // `users.claim_token` stays for links already in the wild and for the
+    // account-claim path; the resolvers check this field first and fall back.
+    tracker_token: v.optional(v.string()),
+    tracker_token_expires_at: v.optional(v.number()),
     mechanic_estimated_minutes: v.optional(v.number()),
     catalog_estimated_minutes: v.optional(v.number()),
     mechanic_quoted_price: v.optional(v.number()),
@@ -3025,6 +3077,23 @@ export default defineSchema({
     // amount, no deviation." Safe to surface to mechanics; intentionally
     // NOT in MECHANIC_FORBIDDEN_FIELDS.
     is_fixed_price: v.optional(v.boolean()),
+    has_shop_price_range: v.optional(v.boolean()),
+    // Per-service shop-price lines (fixed OR range) snapshotted at create
+    // time — the same value computeDisclosedRange returns. Identifies which
+    // service_ids are shop-priced (vs dynamic) so the job-time flow can (a)
+    // separate a range/fixed portion from a dynamic portion in a mixed
+    // booking and (b) render each shop-priced service's FIXED line. Carries
+    // dollar amounts, but only ones the customer already agreed to (the
+    // disclosed band was derived from them), so no new anchoring risk.
+    fixed_price_lines: v.optional(
+      v.array(
+        v.object({
+          service_id: v.id("services"),
+          price_low_cents: v.number(),
+          price_high_cents: v.number(),
+        })
+      )
+    ),
     // Itemized parts snapshot taken at booking-create time. Same per-unit
     // prices and quantities the customer saw on the Review & Pay screen.
     // The mechanic's post-job dialog hydrates from this first so the
@@ -3238,6 +3307,8 @@ export default defineSchema({
     .index("by_shop_and_date", ["shop_id", "scheduled_date"])
     .index("by_shop_and_status", ["shop_id", "status"])
     .index("by_created_at", ["created_at"])
+    // Tracker deep link, per JOB. See tracker_token below.
+    .index("by_tracker_token", ["tracker_token"])
     .index("by_source_recommendation", ["source_recommendation_id"])
     .index("by_payment_approval_state", ["payment_approval_state"])
     .index("by_vin", ["vin"])
@@ -3380,6 +3451,10 @@ export default defineSchema({
     hold_amount_cents: v.optional(v.number()),
     incremented_total_cents: v.optional(v.number()),
     captured_amount_cents: v.optional(v.number()),
+    // When the final capture landed. Drives the "Payment collected" entry in the
+    // booking activity timeline. Absent on rows that never captured or predate
+    // this field (the timeline falls back to `updated_at` for those).
+    captured_at_ms: v.optional(v.number()),
     reauth_payment_intent_id: v.optional(v.string()),
 
     // How the customer originated this payment. Drives the reauth UX:
@@ -3744,9 +3819,6 @@ export default defineSchema({
     mechanic_id: v.id("mechanics"),
     actual_labor_minutes: v.optional(v.number()),
     actual_parts_cost: v.optional(v.number()),
-    // Labor clock. Set when the MPI gate closes, NOT at Start Job — the
-    // measurement window between them is inspection, not labor, and folding it
-    // in would inflate every labor-time standard we derive (Spec v2 §3).
     started_at: v.optional(v.number()),
     // The inspection window. mpi_started_at is stamped at Start Job;
     // mpi_completed_at when the last required MPI item lands. The pair is the
@@ -4812,9 +4884,11 @@ export default defineSchema({
     mechanic_id: v.optional(v.id("mechanics")),
     channel: v.string(),
     category: v.string(),
-    // `status` is the DELIVERY axis only (pending → dispatching → dispatched |
-    // failed | no_push_token | resolved-for-front_desk). Owned by enqueue + the
-    // channel dispatchers. It no longer drives the in-app feed — see read_at /
+    // `status` is the DELIVERY axis only (pending → dispatching → dispatched →
+    // delivered | failed | no_push_token | resolved-for-front_desk). Owned by
+    // enqueue + the channel dispatchers. `dispatched` = Expo accepted the ticket;
+    // `delivered` = its receipt confirmed handoff to APNs/FCM (see
+    // pollPushReceipts). It no longer drives the in-app feed — see read_at /
     // resolved_at below.
     status: v.string(),
     dedupe_key: v.string(),
@@ -4823,6 +4897,9 @@ export default defineSchema({
     created_at: v.number(),
     updated_at: v.optional(v.number()),
     processed_at: v.optional(v.number()),
+    // Expo push ticket id, recorded when a push is accepted (status
+    // `dispatched`). The receipts poller reads it back to confirm delivery.
+    push_ticket_id: v.optional(v.string()),
     // READ axis: set when the user/staff has seen the row. Drives read/unread
     // styling; does NOT remove the row from the feed.
     read_at: v.optional(v.number()),
@@ -5281,9 +5358,9 @@ export default defineSchema({
       // — but it must never reach the completed job, the receipt, or the price.
       v.literal("declined"),
     ),
-    // The mid-job booking_approvals cycle that introduced this line. Set when
-    // the mechanic submits the mid-job change (stampMidJobCustomJobs); it's the
-    // reliable join that lets a customer decline revert exactly the lines that
+    // The pre/mid-job booking_approvals cycle that introduced this line. Set when
+    // the mechanic submits the estimate change (stampIntroducedCustomJobs); it's
+    // the reliable join that lets a customer decline revert exactly the lines that
     // cycle added and nothing from a prior approved cycle. Null on rows added
     // outside a mid-job cycle (source "booking"/"post_job"/"recommendation").
     introduced_by_approval_id: v.optional(v.id("booking_approvals")),
@@ -5728,6 +5805,41 @@ export default defineSchema({
     unit: v.string(),
     recordedAt: v.number(),
   }).index("by_vehicle_and_date", ["vehicleOwnerId", "recordedAt"]),
+
+  // Append-only audit of odometer CHANGES made through the shop job flow (and
+  // director edits) — who changed the reading, from what to what, at which
+  // phase, and whether an anomalous value was acknowledged. Distinct from
+  // odometer_history (which logs Smartcar/document *observations* of the value,
+  // not edits). Keyed by canonical VIN because the job flow only has a VIN.
+  // Written by convex/lib/mileageChangeEvents.ts:logMileageChange, which also
+  // mirrors a row to audit_log for the director AuditDrawer.
+  mileage_change_events: defineTable({
+    vin: v.string(), // canonical VIN
+    booking_id: v.optional(v.id("bookings")),
+    source: v.union(
+      v.literal("inspection"),
+      v.literal("prejob"),
+      v.literal("postjob"),
+      v.literal("director_edit"),
+      v.literal("checkin"),
+    ),
+    before_mileage: v.optional(v.number()),
+    after_mileage: v.number(),
+    // Why this write was flagged (or "normal"). Mirrors classifyMileageChange
+    // in lib/mileage-audit.ts.
+    reason: v.union(
+      v.literal("normal"),
+      v.literal("decrease"),
+      v.literal("far_jump"),
+    ),
+    // True when a flagged (non-"normal") value was acknowledged via the confirm.
+    confirmed: v.boolean(),
+    actor_user_id: v.optional(v.id("users")),
+    actor_name: v.optional(v.string()),
+    created_at: v.number(),
+  })
+    .index("by_vin", ["vin", "created_at"])
+    .index("by_booking", ["booking_id"]),
 
 // === [APPENDED post-merge] oto_migrations ===
 

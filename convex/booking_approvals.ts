@@ -37,6 +37,7 @@ import {
 } from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { resolveShopSetForBooking } from "./booking_quotes";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
@@ -44,10 +45,15 @@ import {
   type CustomerInspectionSnapshot,
 } from "../lib/inspection-measurements";
 import {
-  stampMidJobCustomJobs,
+  stampIntroducedCustomJobs,
   revertDeclinedMidJobWork,
   confirmStagedCustomServices,
 } from "./customJobs";
+import {
+  enqueueNotificationOutbox,
+  buildCustomerPushPayload,
+} from "./lib/notificationOutbox";
+import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
 
@@ -303,10 +309,18 @@ type SubmitArgs = {
   parts: SubmittedPart[];
   laborHours?: number;
   laborRateCents?: number;
-  /** Labor hours attributable to ADDED services only (custom-job lines),
-   *  excluding the locked base. Used exclusively by the fixed-price + added-
-   *  scope path to price the added labor; ignored otherwise. */
+  /** Labor hours to bill ON TOP of a shop-set base — the sum of DYNAMIC
+   *  catalog services' labor (a mixed booking's non-flat-priced services) and
+   *  ADDED off-catalog (custom-job) labor. Excludes the shop-priced base,
+   *  whose labor is folded into the set price. For a pure fixed/range booking
+   *  this is just the added custom-job labor (0 dynamic), identical to before.
+   *  Ignored on non-shop-set bookings. */
   addedLaborHours?: number;
+  /** Front desk / mechanic's chosen ALL-IN price for the shop-priced portion
+   *  (fixed value, or a number inside a RANGE / mixed-subset band). Clamped
+   *  server-side to the shop-set band. Absent → falls back to the frozen base
+   *  / quoted midpoint / disclosed ceiling. */
+  shopSetBaseCents?: number;
   /** Per-line breakdown behind `laborHours` (the scalar total). Keyed "base" +
    *  custom-job ids. Persisted so the post-job Labor step can seed the base
    *  line with base-only labor instead of the whole-approval total. */
@@ -377,71 +391,119 @@ async function performSubmission(
     args.bookingId,
   );
 
-  const isFixedPrice = booking.is_fixed_price === true;
-  // Fixed-price bookings run the SAME confirm-hold-and-continue flow as any
-  // estimate — the base price just can't be EDITED. The customer authorized a
-  // deposit at booking; the pre-job submit is what raises the hold to the real
-  // amount (silently when it's within the disclosed contract, or via an explicit
-  // customer confirmation when added scope pushes it over). So we do NOT skip
-  // the approval machinery — we only PIN the base:
-  //   - base = the contracted flat price (a fixed booking discloses low==high),
-  //     NOT the parts+labor recompute (which can diverge from what the customer
-  //     agreed to). Frozen in `fixed_contract_base_cents` once added scope grows
-  //     the running total so a resubmit never reads the grown total as the base.
-  //   - added services (parts tagged `custom_service_name` + their labor) are
-  //     priced on top. Editing the BASE service's own parts/labor never moves
-  //     the price — it stays the flat contract.
-  let fixedBaseCents: number | null = null;
-  if (isFixedPrice) {
-    fixedBaseCents =
+  // SHOP-SET pricing covers both a fixed flat price (low == high) and a RANGE
+  // the front desk sets a number inside. Either way the booking runs the SAME
+  // confirm-hold-and-continue flow as any estimate — the base just can't be
+  // recomputed from parts+labor. The customer authorized a deposit at booking;
+  // the pre-job submit raises the hold to the real amount (silently when it's
+  // within the disclosed contract, or via an explicit customer confirmation
+  // when added scope pushes it over). So we do NOT skip the approval machinery
+  // — we only PIN the base:
+  //   - fixed : base = the flat price (low == high), no choice.
+  //   - range : base = the chosen `shopSetBaseCents`, clamped to the disclosed
+  //             band (an all-in number the customer already agreed to sit in).
+  //   - mix   : base = the shop-priced subset's set price; the DYNAMIC catalog
+  //             services (no shop_service_fixed_prices row) + added off-catalog
+  //             scope are priced on top. Editing a SHOP-PRICED service's own
+  //             parts/labor never moves the price — it stays the set price.
+  //   Frozen in `fixed_contract_base_cents` so a later added-scope estimate
+  //   prices off the agreed set price, never the running total it grew.
+  // Robust shop-set resolution — prefers the captured contract, else re-resolves
+  // shop_service_fixed_prices live (config/tier from VIN). Same helper
+  // getJobDetail uses, so the price the dialog showed == the price billed here,
+  // even for a booking that never stamped the range flags at create time.
+  const shopSet = await resolveShopSetForBooking(ctx, booking);
+  const isShopSet = shopSet.isShopSet;
+  const shopSetBand = shopSet.band;
+  let shopSetBaseCents: number | null = null;
+  if (isShopSet) {
+    // Clamp the chosen price to the shop-set band (the same band the dialog
+    // showed). Absent → the frozen base, else the band default (midpoint), else
+    // the disclosed ceiling (a fixed booking's low == high, so this is the price).
+    const clampedChosen =
+      args.shopSetBaseCents != null && shopSetBand
+        ? Math.min(
+            shopSetBand.highCents,
+            Math.max(shopSetBand.lowCents, args.shopSetBaseCents),
+          )
+        : args.shopSetBaseCents ?? null;
+    shopSetBaseCents =
+      clampedChosen ??
       (booking.fixed_contract_base_cents as number | undefined) ??
+      shopSetBand?.defaultCents ??
+      (booking.quoted_set_price_cents as number | undefined) ??
       (booking.disclosed_range_high_cents as number | undefined) ??
       Math.round((booking.total_cost ?? 0) * 100);
-    // Added PARTS+LABOR lines (tagged custom_service_name), EXCLUDING any the
-    // shop flat-prices — those are billed at their frozen flat price via the
-    // flatAddedCents component below, not parts+labor.
-    const addedParts = args.parts.filter(
+
+    // Services whose base parts/labor are folded into the set price and must
+    // NOT be re-billed. Everything else (dynamic catalog services + added
+    // off-catalog lines) is priced on top.
+    const shopPricedServiceIds = new Set(
+      shopSet.fixedPriceLines.map((l) => String(l.service_id)),
+    );
+    const isShopPricedBasePart = (p: SubmittedPart) =>
+      (p.custom_service_name ?? "").trim() === "" &&
+      p.service_id != null &&
+      shopPricedServiceIds.has(String(p.service_id));
+
+    // Parts billed on top: dynamic catalog base parts + added off-catalog
+    // parts, EXCLUDING shop-priced base parts and flat-priced added lines
+    // (billed via flatAddedCents). For a pure fixed/range booking there are no
+    // dynamic base parts, so this reduces to the added off-catalog parts —
+    // identical to the prior fixed-price path.
+    const onTopParts = args.parts.filter(
       (p) =>
-        (p.custom_service_name ?? "").trim() !== "" &&
+        !isShopPricedBasePart(p) &&
         !flatNames.has(normLineName(p.custom_service_name)),
     );
-    const addedRateCents =
+    const onTopRateCents =
       typeof args.laborRateCents === "number" && args.laborRateCents > 0
         ? args.laborRateCents
         : DEFAULT_LABOR_RATE_CENTS;
-    // Added-service labor only (base labor is locked, never re-billed). The
-    // client sends this per-line split — already excluding flat-priced lines'
-    // hours; absent → 0, NEVER the base fallback.
-    const addedLaborCents = Math.round(
-      (args.addedLaborHours ?? 0) * addedRateCents,
+    // Labor billed on top = dynamic base labor + added off-catalog labor (the
+    // client sends this combined figure in addedLaborHours; 0 for a pure
+    // fixed/range booking). NEVER the base fallback.
+    const onTopLaborCents = Math.round(
+      (args.addedLaborHours ?? 0) * onTopRateCents,
     );
-    const addedPriced = await priceWithFlat(ctx, booking, {
-      partsCents: partsSubtotalCents(addedParts),
-      laborCents: addedLaborCents,
+    const onTopPriced = await priceWithFlat(ctx, booking, {
+      partsCents: partsSubtotalCents(onTopParts),
+      laborCents: onTopLaborCents,
       flatCents: flatAddedCents,
     });
     priced = {
-      parts_subtotal_cents: addedPriced.parts_subtotal_cents,
-      labor_cents: addedPriced.labor_cents,
-      tax_cents: addedPriced.tax_cents,
-      service_fee_cents: addedPriced.service_fee_cents,
-      total_cents: fixedBaseCents + addedPriced.total_cents,
+      parts_subtotal_cents: onTopPriced.parts_subtotal_cents,
+      labor_cents: onTopPriced.labor_cents,
+      tax_cents: onTopPriced.tax_cents,
+      service_fee_cents: onTopPriced.service_fee_cents,
+      total_cents: shopSetBaseCents + onTopPriced.total_cents,
     };
   }
 
   // Gate against the disclosed/approved ceiling, exactly as a normal estimate:
-  // a plain fixed price lands in-range (raise the hold, continue), while added
-  // scope pushes it over and asks the customer. `max(base, …)` also keeps the
-  // pre_job ceiling positive for a fixed booking so it never hits the guard.
+  // a set price anywhere in the shop band lands in-range (raise the hold,
+  // continue), while scope past the band's top asks the customer. For a shop-set
+  // booking the ceiling is the shop band HIGH — so a price inside the shop's
+  // $60–$80 is in-range even when the stored disclosed range is the smaller
+  // stale dynamic quote (a booking that never captured the range). For a
+  // captured booking the band high == disclosed_range_high, so this is
+  // unchanged. `max(…)` also keeps the pre_job ceiling positive so it never
+  // hits the guard below.
   const ceiling =
-    fixedBaseCents != null
-      ? Math.max(fixedBaseCents, ceilingForCycle(booking, args.cycle))
-      : ceilingForCycle(booking, args.cycle);
+    isShopSet && shopSetBand != null
+      ? Math.max(
+          shopSetBand.highCents,
+          shopSetBaseCents ?? 0,
+          ceilingForCycle(booking, args.cycle),
+        )
+      : shopSetBaseCents != null
+        ? Math.max(shopSetBaseCents, ceilingForCycle(booking, args.cycle))
+        : ceilingForCycle(booking, args.cycle);
   // Pre-feature bookings (no disclosed range): there's no approval contract
   // — fall back to legacy behavior at capture time. Reject submission here.
-  // (Fixed-price bookings always have a positive base ceiling, so they skip
-  // this — a fixed-price job predates nothing.)
-  if (!isFixedPrice && args.cycle === "pre_job" && ceiling <= 0) {
+  // (Shop-set bookings always have a positive base ceiling, so they skip
+  // this — a shop-priced job predates nothing.)
+  if (!isShopSet && args.cycle === "pre_job" && ceiling <= 0) {
     throw new Error(
       "This booking pre-dates the pre-job approval flow and cannot be re-estimated.",
     );
@@ -544,13 +606,16 @@ async function performSubmission(
     stripe_action: inRange ? "auto_approved_within_range" : undefined,
   });
 
-  // Bind the off-catalog lines this mid-job cycle introduced to this approval
-  // row, so a later decline/expiry reverts exactly these and nothing from a
-  // prior approved cycle. No-op for pre/post-job cycles.
-  if (args.cycle === "mid_job") {
-    await stampMidJobCustomJobs(ctx, {
+  // Bind the off-catalog lines this cycle introduced to this approval row, so a
+  // later decline/expiry reverts exactly these and nothing from a prior approved
+  // cycle. Both estimate cycles stage lines the customer must approve; `source`
+  // scopes the stamp so a pre-job submit binds only pre-job lines and a mid-job
+  // submit only mid-job lines. No-op for post-job.
+  if (args.cycle === "pre_job" || args.cycle === "mid_job") {
+    await stampIntroducedCustomJobs(ctx, {
       bookingId: args.bookingId,
       approvalId,
+      source: args.cycle,
       now,
     });
   }
@@ -568,11 +633,14 @@ async function performSubmission(
     mechanic_set_price_cents: priced.total_cents,
     updated_at: now,
   };
-  // Freeze the fixed contract base the first time added scope is billed, so
-  // every later added-scope estimate keeps pricing off the original flat price
-  // rather than the running total it just grew.
-  if (fixedBaseCents != null && booking.fixed_contract_base_cents == null) {
-    bookingPatch.fixed_contract_base_cents = fixedBaseCents;
+  // Pin the shop-set base so a later added-scope estimate prices off the agreed
+  // set price, never the running total it grew. A pre-job (re)submit (re)confirms
+  // the chosen base within its band; mid/post-job keep whatever the customer
+  // already agreed to (never let mid-job silently re-choose the base).
+  if (shopSetBaseCents != null) {
+    if (args.cycle === "pre_job" || booking.fixed_contract_base_cents == null) {
+      bookingPatch.fixed_contract_base_cents = shopSetBaseCents;
+    }
   }
   if (inRange) {
     bookingPatch.running_approved_ceiling_cents = priced.total_cents;
@@ -583,12 +651,13 @@ async function performSubmission(
     // agreed amount instead of the original estimate. (Out-of-range stays
     // pending; totals are synced on customer approval in applyApprovalDecision.)
     bookingPatch.total_cost = priced.total_cents / 100;
-    if (fixedBaseCents == null) {
-      // Non-fixed: sync the full breakdown. For fixed+added, `priced` holds the
-      // ADDED delta only (parts/labor), while the base parts/labor stay locked
-      // on the booking — the added breakdown lives on custom_services/custom_
-      // jobs and the receipt attributes it there. Overwriting with the delta
-      // would erase the base line, so move only the all-in total above.
+    if (shopSetBaseCents == null) {
+      // Non-shop-set: sync the full breakdown. For a shop-set booking `priced`
+      // holds only the ON-TOP delta (dynamic + added parts/labor); the shop-set
+      // base parts/labor stay as snapshotted on the booking, and the on-top
+      // breakdown is attributed via custom_services/custom_jobs on the receipt.
+      // Overwriting with the delta would erase the base line, so move only the
+      // all-in total above.
       bookingPatch.parts_cost = priced.parts_subtotal_cents / 100;
       bookingPatch.labor_cost = priced.labor_cents / 100;
     }
@@ -609,14 +678,37 @@ async function performSubmission(
         { bookingId: args.bookingId },
       );
     }
+    // No confirmation needed either way — the price sits inside (or under) what
+    // the customer already authorized. We just TELL them the price the mechanic
+    // is doing the job for, and split the copy so a quote that came in under the
+    // disclosed low reads as good news instead of a flat "confirmed". belowMin ⊂
+    // inRange, since disclosed_low ≤ disclosed_high ≤ ceiling.
+    const priceStr = `$${(priced.total_cents / 100).toFixed(2)}`;
+    const floorCents = booking.disclosed_range_low_cents ?? 0;
+    const belowMin = floorCents > 0 && priced.total_cents < floorCents;
+    const { ymm: estYmm, vin: estVin } = await resolveVehicleDisplay(
+      ctx,
+      booking.vin,
+    );
     await enqueueCustomerApprovalPush(ctx, {
       booking,
       bookingId: args.bookingId,
-      category: "booking_estimate_in_range",
-      title: "Service confirmed",
-      body: `Your mechanic confirmed the work at $${(priced.total_cents / 100).toFixed(2)}. Work is starting now.`,
+      category: belowMin
+        ? "booking_estimate_below_range"
+        : "booking_estimate_in_range",
+      title: belowMin ? "Came in under your estimate" : "Service confirmed",
+      body: belowMin
+        ? estYmm
+          ? `Good news — your ${estYmm} came in at ${priceStr}, under your estimate. No approval needed; work is starting now.`
+          : `Good news — the work came in at ${priceStr}, under your estimate. No approval needed; work is starting now.`
+        : estYmm
+          ? `Your ${estYmm} is confirmed at ${priceStr}. Work is starting now.`
+          : `Your mechanic confirmed the work at ${priceStr}. Work is starting now.`,
       deepLink: `otopair://booking/${String(args.bookingId)}`,
       dedupeSuffix: `${args.cycle}:${approvalId}`,
+      vehicleLabel: estYmm,
+      vin: estVin,
+      extra: { priceCents: priced.total_cents, belowRange: belowMin },
     });
   } else {
     await enqueueCustomerApprovalPush(ctx, {
@@ -653,26 +745,36 @@ async function enqueueCustomerApprovalPush(
     body: string;
     deepLink: string;
     dedupeSuffix: string;
+    /** Names the car in data so the app can render/route on it. */
+    vehicleLabel?: string | null;
+    vin?: string | null;
+    /** Extra context (e.g. priceCents) — mirrored top-level + under data. */
+    extra?: Record<string, unknown>;
   },
 ) {
   const userId = args.booking.user_id;
   if (!userId) return;
   const dedupeKey = `${args.category}:${String(args.bookingId)}:${args.dedupeSuffix}`;
-  await ctx.db.insert("notification_outbox", {
-    user_id: userId,
-    booking_id: args.bookingId,
-    shop_id: args.booking.shop_id,
+  // Route through the shared enqueue path so these estimate pushes get instant
+  // dispatch (runAfter(0)) + dedupe, and the canonical `{ title, body, data: {
+  // deepLink, bookingId, … } }` shape — instead of the old direct insert that
+  // waited for the 1-min cron.
+  await enqueueNotificationOutbox(ctx, {
+    userId,
+    bookingId: args.bookingId,
+    shopId: args.booking.shop_id,
     channel: "push",
     category: args.category,
-    status: "pending",
-    dedupe_key: dedupeKey,
-    payload: {
+    dedupeKey,
+    payload: buildCustomerPushPayload({
       title: args.title,
       body: args.body,
-      data: { deepLink: args.deepLink, bookingId: String(args.bookingId) },
-    },
-    created_at: Date.now(),
-    updated_at: Date.now(),
+      bookingId: args.bookingId,
+      deepLink: args.deepLink,
+      vehicleLabel: args.vehicleLabel,
+      vin: args.vin,
+      extra: args.extra,
+    }),
   });
 }
 
@@ -731,6 +833,7 @@ export const submitPreJobEstimate = mutation({
     laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     scopePhotoIds: v.optional(v.array(v.id("_storage"))),
+    shopSetBaseCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user } = await requireShopStaffForBooking(ctx, args.bookingId);
@@ -744,6 +847,7 @@ export const submitPreJobEstimate = mutation({
       laborAllocations: args.laborAllocations,
       notes: args.notes,
       scopePhotoIds: args.scopePhotoIds,
+      shopSetBaseCents: args.shopSetBaseCents,
       submittedByUserId: user._id,
     });
   },
@@ -759,6 +863,7 @@ export const submitMidJobChange = mutation({
     laborAllocations: v.optional(v.array(laborAllocationValidator)),
     notes: v.optional(v.string()),
     scopePhotoIds: v.optional(v.array(v.id("_storage"))),
+    shopSetBaseCents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const { user, booking } = await requireShopStaffForBooking(
@@ -780,6 +885,7 @@ export const submitMidJobChange = mutation({
       laborAllocations: args.laborAllocations,
       notes: args.notes,
       scopePhotoIds: args.scopePhotoIds,
+      shopSetBaseCents: args.shopSetBaseCents,
       submittedByUserId: user._id,
     });
   },
@@ -844,6 +950,10 @@ export const applyApprovalDecision = mutation({
 
     const now = Date.now();
     const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";
+    // Resolve shop-set state robustly (stored flags may be absent on a booking
+    // that never captured the range — see resolveShopSetForBooking). Drives the
+    // "don't overwrite the locked base breakdown" guard below.
+    const decisionShopSet = await resolveShopSetForBooking(ctx, booking);
 
     if (args.decision === "approved") {
       const newCeiling = open.mechanic_set_price_cents;
@@ -870,11 +980,11 @@ export const applyApprovalDecision = mutation({
         total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
         updated_at: now,
       };
-      // For fixed-price bookings the approval row's parts/labor are the ADDED
-      // delta only (the base stays locked), so syncing them onto the booking
-      // would erase the base line. Move only the all-in total; the added
-      // breakdown lives on custom_services/custom_jobs for the receipt.
-      if (booking.is_fixed_price !== true) {
+      // For shop-set bookings (fixed OR range) the approval row's parts/labor
+      // are the ON-TOP delta only (the base stays locked), so syncing them onto
+      // the booking would erase the base line. Move only the all-in total; the
+      // on-top breakdown lives on custom_services/custom_jobs for the receipt.
+      if (!decisionShopSet.isShopSet) {
         approvedPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
         approvedPatch.labor_cost = (open.labor_cents ?? 0) / 100;
       }
@@ -963,11 +1073,14 @@ export const applyApprovalDecision = mutation({
       );
     }
 
-    // Mid-job decline: the added scope was never agreed. Revert the lines this
-    // cycle introduced — kept as `declined` custom_jobs for audit (with their
-    // denied parts) but stripped from the booking so they never reach the
-    // completed job, the receipt, or the price. Then tell the shop.
-    if (cycle === "mid_job") {
+    // Estimate-cycle decline (pre-job / adjust-quote OR mid-job): the added scope
+    // was never agreed. Revert the lines this cycle introduced — kept as
+    // `declined` custom_jobs for audit (with their denied parts) but stripped from
+    // the booking so they never reach the completed job, the receipt, the price,
+    // or the post-job survey. Original booked services (service_ids) and any
+    // prior-cycle lines carry a different approval id and are untouched. Then tell
+    // the shop.
+    if (cycle === "pre_job" || cycle === "mid_job") {
       await revertDeclinedMidJobWork(ctx, {
         bookingId: args.bookingId,
         approvalId: open._id,
@@ -976,7 +1089,10 @@ export const applyApprovalDecision = mutation({
       await enqueueShopDecisionNotice(ctx, {
         booking,
         bookingId: args.bookingId,
-        category: "booking_mid_job_declined",
+        category:
+          cycle === "pre_job"
+            ? "booking_pre_job_declined"
+            : "booking_mid_job_declined",
         title: "Extra work declined",
         body: "The customer declined the added work. It won't be charged.",
         dedupeSuffix: `declined:${open._id}`,
@@ -1025,6 +1141,7 @@ export const _recordApprovalApproved = internalMutation({
     if (cycle !== "pre_job" && cycle !== "mid_job") {
       throw new Error("This estimate can't be authorized as a hold.");
     }
+    const reauthShopSet = await resolveShopSetForBooking(ctx, booking);
 
     const now = Date.now();
     const newCeiling = open.mechanic_set_price_cents;
@@ -1045,9 +1162,10 @@ export const _recordApprovalApproved = internalMutation({
       total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
       updated_at: now,
     };
-    // Fixed-price: the approval row's parts/labor are the added delta only —
-    // don't erase the locked base breakdown. (Mirrors applyApprovalDecision.)
-    if (booking.is_fixed_price !== true) {
+    // Shop-set (fixed OR range): the approval row's parts/labor are the on-top
+    // delta only — don't erase the locked base breakdown. (Mirrors
+    // applyApprovalDecision.)
+    if (!reauthShopSet.isShopSet) {
       reauthPatch.parts_cost = (open.parts_subtotal_cents ?? 0) / 100;
       reauthPatch.labor_cost = (open.labor_cents ?? 0) / 100;
     }
@@ -1386,13 +1504,27 @@ export const _listExpiredOpenApprovals = internalQuery({
         q.lt("sla_expires_at_ms", args.nowMs),
       )
       .collect();
-    return rows
-      .filter((r: any) => r.decision == null && r.sla_expires_at_ms != null)
-      .map((r: any) => ({
-        bookingId: r.booking_id as Id<"bookings">,
-        cycle: r.cycle as string,
-        approvalId: r._id as Id<"booking_approvals">,
-      }));
+    const open = rows.filter(
+      (r: any) => r.decision == null && r.sla_expires_at_ms != null,
+    );
+    return await Promise.all(
+      open.map(async (r: any) => {
+        // Discriminate an initial pre-job estimate (never approved → forfeit the
+        // deposit) from a pre-job RE-QUOTE that added scope on an already-agreed
+        // booking (revert the added scope, keep the base). A standing approved
+        // ceiling only exists once a prior estimate was accepted/auto-approved.
+        const booking: any = await ctx.db.get(
+          r.booking_id as Id<"bookings">,
+        );
+        return {
+          bookingId: r.booking_id as Id<"bookings">,
+          cycle: r.cycle as string,
+          approvalId: r._id as Id<"booking_approvals">,
+          hasPriorAcceptedScope:
+            booking?.running_approved_ceiling_cents != null,
+        };
+      }),
+    );
   },
 });
 
@@ -1404,6 +1536,7 @@ export const expireApprovals = internalAction({
       bookingId: Id<"bookings">;
       cycle: string;
       approvalId: Id<"booking_approvals">;
+      hasPriorAcceptedScope: boolean;
     }> = await ctx.runQuery(
       internal.booking_approvals._listExpiredOpenApprovals,
       { nowMs: now },
@@ -1414,14 +1547,26 @@ export const expireApprovals = internalAction({
         bookingId: row.bookingId,
       });
       if (row.cycle === "pre_job") {
-        // Customer never approved the initial estimate — forfeit the $20
-        // deposit so the mechanic is paid for the inspection. Scheduled so a
-        // single bad Stripe call doesn't poison the batch.
-        await ctx.scheduler.runAfter(
-          0,
-          internal.payments_stripe.captureDepositForfeit,
-          { bookingId: row.bookingId },
-        );
+        if (row.hasPriorAcceptedScope) {
+          // A pre-job RE-QUOTE (added scope on an already-agreed booking) the
+          // customer let lapse — not an abandoned initial estimate. Revert the
+          // added lines and roll mechanic_set back to the last approved ceiling,
+          // exactly like a mid-job expiry. Do NOT forfeit the deposit: the base
+          // was already agreed and held.
+          await ctx.runMutation(
+            internal.booking_approvals._revertToPriorCeilingAfterExpiry,
+            { bookingId: row.bookingId, approvalId: row.approvalId },
+          );
+        } else {
+          // Customer never approved the initial estimate — forfeit the $20
+          // deposit so the mechanic is paid for the inspection. Scheduled so a
+          // single bad Stripe call doesn't poison the batch.
+          await ctx.scheduler.runAfter(
+            0,
+            internal.payments_stripe.captureDepositForfeit,
+            { bookingId: row.bookingId },
+          );
+        }
       } else if (row.cycle === "mid_job") {
         // A mid-job scope increase the customer let lapse. performSubmission
         // optimistically bumped mechanic_set_price_cents at request time, so
@@ -1854,13 +1999,16 @@ export const _markApprovalExpired = internalMutation({
   },
 });
 
-/** Mid-job expiry recovery. performSubmission bumps mechanic_set_price_cents to
- *  the requested amount at REQUEST time (before approval), so a mid-job scope
- *  increase the customer lets lapse would otherwise be captured at completion
- *  even though it was never approved. Roll mechanic_set back to the last
- *  approved ceiling and restore an approved state so the job completes and
- *  captures only the agreed price. Called by expireApprovals for the mid_job
- *  branch, immediately after _markApprovalExpired. */
+/** Estimate re-quote expiry recovery. performSubmission bumps
+ *  mechanic_set_price_cents to the requested amount at REQUEST time (before
+ *  approval), so an added-scope estimate the customer lets lapse would otherwise
+ *  be captured at completion even though it was never approved. Roll mechanic_set
+ *  back to the last approved ceiling and restore an approved state so the job
+ *  completes and captures only the agreed price. Called by expireApprovals for
+ *  the mid_job branch AND for a pre_job RE-QUOTE (a booking that already has a
+ *  standing approved ceiling), immediately after _markApprovalExpired. An initial
+ *  pre-job estimate — no prior ceiling — forfeits the deposit instead and never
+ *  reaches here. */
 export const _revertToPriorCeilingAfterExpiry = internalMutation({
   args: {
     bookingId: v.id("bookings"),

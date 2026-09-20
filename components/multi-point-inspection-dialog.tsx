@@ -17,7 +17,9 @@ import {
 } from "@/components/fluid-catalog-select-field";
 import {
   Camera,
+  CarFront,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +27,7 @@ import {
   Copy,
   Download,
   EyeOff,
+  Gauge,
   Info,
   Loader2,
   Plus,
@@ -48,6 +51,7 @@ import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import {
   Select,
   SelectItem,
@@ -57,6 +61,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import {
+  isMileageConfirmRequired,
+  mileageConfirmCopy,
+} from "@/lib/mileage-audit";
 import {
   classifyInspectionMeasure,
   cornerCopyPatch,
@@ -72,6 +80,7 @@ import {
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
   canMarkFieldUnavailable,
+  completeInspectionPhaseForDevelopment,
   isNysSafetyField,
   isFieldApplicableToZone,
   isZoneDoneForPhase,
@@ -265,7 +274,7 @@ const TRI_DOT: Record<TriValue, string> = {
   r: "bg-red-500 border-red-500",
 };
 
-// Matches the green/blue/red answer-choice palette in pre-job-survey-dialog.tsx
+// Shared green/blue/red answer-choice palette for inspection responses.
 // (ConditionButtons' conditionPalette), used for tri fields rendered as pills.
 const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
   g: "border-emerald-300 bg-emerald-50 text-emerald-700",
@@ -592,6 +601,29 @@ function MultiPointInspectionDialogBody({
     );
   }, [bookingId, passportData, ensureVehicleTireOptions]);
 
+  // Real vehicle thumbnail for the header card. The /api/vehicle-image route
+  // resolves on-demand (VDB) and caches to vehicles/vehicle_configs.image_url,
+  // so a photo appears even when it wasn't pre-fetched. Failures are silent —
+  // the card falls back to a car glyph. (Same pattern as the flagship cards.)
+  const [vehicleImg, setVehicleImg] = useState<string | null>(null);
+  useEffect(() => {
+    const vin = passportData?.vin;
+    if (!vin) return;
+    let cancelled = false;
+    setVehicleImg(null);
+    fetch(`/api/vehicle-image?vin=${encodeURIComponent(vin)}`)
+      .then((r) => (r.ok ? r.json() : { imageUrl: null }))
+      .then((d) => {
+        if (!cancelled && d?.imageUrl) setVehicleImg(d.imageUrl as string);
+      })
+      .catch(() => {
+        // non-fatal — the card keeps its fallback glyph
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [passportData?.vin]);
+
   const prepareInspectionPhotoUpload = useMutation(
     prepareInspectionPhotoUploadRef,
   ) as (args: {
@@ -694,6 +726,10 @@ function MultiPointInspectionDialogBody({
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
+  // Soft-confirm for a lower / far-off odometer (never a hard block). The
+  // pending action is remembered so "Save anyway" resumes the same submit.
+  const [mileageConfirmOpen, setMileageConfirmOpen] = useState(false);
+  const pendingSubmitActionRef = useRef<SubmitIntent | null>(null);
   const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
   const [inspectionStatus, setInspectionStatus] = useState<
     InspectionStatus | ""
@@ -730,17 +766,27 @@ function MultiPointInspectionDialogBody({
     });
   }, []);
 
+  // The "current mileage" baseline is the last STORED reading on the passport —
+  // what a new reading is compared against for the soft confirm. Prefer it over
+  // prefillData.mileage, which is the mechanic's own saved DRAFT
+  // (jobActuals.prejobReport): using the draft made the field compare against
+  // itself and hid a stale stored value the mechanic may be correcting (e.g. a
+  // bogus 300,000 on file while they read 66,000). The server compares against
+  // this same stored value, so client + server now agree.
   const baselineMileage =
-    prefillData?.mileage ?? passportData?.passport.mileage ?? null;
-  // An odometer physically can't run backwards, so a new reading below the
-  // vehicle's stored mileage is always an error — enforced live as the mechanic
-  // types and again as a hard gate on every "continue" path (submit + save).
-  const odometerBelowBaseline = (value: string) =>
-    typeof baselineMileage === "number" &&
-    value.trim() !== "" &&
-    Number(value) < baselineMileage;
-  const odometerTooLowMessage = () =>
-    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
+    passportData?.passport.mileage ?? prefillData?.mileage ?? null;
+  // A lower / far-off odometer no longer hard-blocks (odometers CAN legitimately
+  // read low after a cluster swap or a wrong value on file). When the new
+  // reading is anomalous the mechanic gets a soft confirm on save and the change
+  // is audited server-side. This muted hint previews that as they type.
+  const mileageNeedsConfirm =
+    mileage.trim() !== "" &&
+    isMileageConfirmRequired(baselineMileage, Number(mileage));
+  const mileageSoftHint = !mileageNeedsConfirm
+    ? ""
+    : typeof baselineMileage === "number" && Number(mileage) < baselineMileage
+      ? `Lower than the last reading (${baselineMileage.toLocaleString()} mi) — you'll confirm on save.`
+      : `Big jump from the last reading — you'll confirm on save.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -1032,6 +1078,22 @@ function MultiPointInspectionDialogBody({
       getDirtyIncompleteZones(state).length === 0,
     [requiredZones, state, phase],
   );
+
+  const completeCurrentPhaseForDevelopment = useCallback(() => {
+    setState((prev) =>
+      completeInspectionPhaseForDevelopment(prev, {
+        ...completionContext,
+        inspectionState: prev,
+      }),
+    );
+    if (typeof baselineMileage === "number") setMileage(String(baselineMileage));
+    if (phase === "mpi") setLiftStatus("yes");
+    setConfirmedSpecZones((prev) => new Set([...prev, ...requiredZones]));
+    setFieldErrors({});
+    setError("");
+    setCopyPromptFor(null);
+    setActiveZone(null);
+  }, [baselineMileage, completionContext, phase, requiredZones]);
 
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
@@ -1528,18 +1590,8 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    // A backwards odometer is invalid on every continue path — block both
-    // "Submit" and "Save & close" whenever a reading has been entered (an empty
-    // reading is only required for "start", handled above).
-    if (odometerBelowBaseline(mileage)) {
-      const message = odometerTooLowMessage();
-      setError(message);
-      setMileageError(message);
-      requestAnimationFrame(() =>
-        document.getElementById("inspection-odometer")?.focus(),
-      );
-      return false;
-    }
+    // A lower / far-off odometer is NOT blocked here — handleSubmit shows a
+    // soft confirm (never a wall) and the change is audited server-side.
     setMileageError("");
     return true;
   }
@@ -1553,6 +1605,19 @@ function MultiPointInspectionDialogBody({
     }
     pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
+    // Soft confirm for a lower / far-off odometer — asks once, never blocks.
+    if (
+      mileage.trim() !== "" &&
+      isMileageConfirmRequired(baselineMileage, Number(mileage))
+    ) {
+      pendingSubmitActionRef.current = action;
+      setMileageConfirmOpen(true);
+      return;
+    }
+    await runSubmit(action);
+  }
+
+  async function runSubmit(action: SubmitIntent) {
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
@@ -1950,13 +2015,28 @@ function MultiPointInspectionDialogBody({
   const totalRequired = requiredZones.length;
   const pct = totalRequired ? doneCount / totalRequired : 0;
   const ringDash = 138.2;
+  // Compact "2.4L · I4 · AWD" line for the header card; fall back to the older
+  // engine/trim/chassis label when the richer line isn't populated yet.
+  const vehicleSpecLine =
+    passportData?.vehicle_spec_line ??
+    passportData?.vehicle_spec_label ??
+    null;
 
   const footer = (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <span className="hidden text-[11px] text-primary sm:inline-flex sm:items-center sm:gap-1.5">
         <Camera className="h-3.5 w-3.5" /> Verify a measurement with a photo →
         rating boost
       </span>
+      {process.env.NODE_ENV === "development" ? (
+        <button
+          type="button"
+          onClick={completeCurrentPhaseForDevelopment}
+          className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
+        >
+          Dev: complete {phase}
+        </button>
+      ) : null}
       <div className="flex flex-1 items-center justify-end gap-2">
         <button
           type="button"
@@ -2048,34 +2128,111 @@ function MultiPointInspectionDialogBody({
           </div>
         ) : (
           <div className="space-y-4 pt-4 sm:pt-5">
-            {/* vehicle + odometer bar */}
-            <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-primary/10 bg-primary/[0.03] px-4 py-3">
-              <div>
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Vehicle
+            {/* vehicle summary — identity · current mileage · progress.
+                Transparent (no card fill/border) so it doesn't double-box
+                against the dialog; the column dividers keep it legible. */}
+            <div className="px-0.5">
+              <div className="flex items-center gap-3 sm:gap-4">
+                {/* identity: thumbnail + name + spec line */}
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-primary/10 bg-muted">
+                    {vehicleImg ? (
+                      // Plain <img>: the VDB render is served from an external
+                      // host, so it skips next/image's domain allow-list (same
+                      // as the inspection-photo thumbnails below).
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={vehicleImg}
+                        alt={bookingLabel}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <CarFront className="h-6 w-6 text-muted-foreground/50" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[14px] font-semibold text-foreground">
+                      {bookingLabel}
+                    </div>
+                    {vehicleSpecLine ? (
+                      <div className="truncate text-[12px] text-muted-foreground">
+                        {vehicleSpecLine}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="text-[13px] font-medium text-foreground">
-                  {bookingLabel}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Current odometer
-                </div>
-                <div className="mt-0.5 flex items-baseline gap-1">
-                  <div className="w-24 rounded-lg border border-primary/15 bg-muted/50 px-2 py-1 text-[14px] tabular-nums text-muted-foreground">
+
+                {/* current mileage (read-only baseline / last known) */}
+                <div className="hidden shrink-0 border-l border-primary/10 pl-4 sm:block">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Gauge className="h-3.5 w-3.5" />
+                    Current mileage
+                  </div>
+                  <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-foreground">
                     {typeof baselineMileage === "number"
                       ? baselineMileage.toLocaleString()
                       : "—"}
+                    <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                      mi
+                    </span>
                   </div>
-                  <span className="text-[11px] text-muted-foreground">mi</span>
+                </div>
+
+                {/* progress ring */}
+                <div className="flex shrink-0 items-center gap-3 border-l border-primary/10 pl-3 sm:pl-4">
+                  <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
+                    <circle
+                      cx="29"
+                      cy="29"
+                      r="22"
+                      fill="none"
+                      stroke="currentColor"
+                      className="text-primary/15"
+                      strokeWidth="6"
+                    />
+                    <circle
+                      cx="29"
+                      cy="29"
+                      r="22"
+                      fill="none"
+                      stroke="currentColor"
+                      className="text-primary"
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                      strokeDasharray={ringDash}
+                      strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
+                      transform="rotate(-90 29 29)"
+                    />
+                    <text
+                      x="29"
+                      y="33.5"
+                      textAnchor="middle"
+                      fontSize="13"
+                      fontWeight="600"
+                      className="fill-foreground"
+                    >
+                      {doneCount}/{totalRequired}
+                    </text>
+                  </svg>
+                  <div className="hidden leading-tight sm:block">
+                    <div className="text-[13px] font-semibold text-foreground">
+                      {doneCount} of {totalRequired}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      zones inspected
+                    </div>
+                  </div>
                 </div>
               </div>
+            </div>
+
+            {/* odometer entry + lift status + save state / color legend */}
+            <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
               <label className="block">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
                   New reading <span className="text-red-500">*</span>
                 </div>
-                <div className="mt-0.5 flex items-baseline gap-1">
+                <div className="mt-1 flex items-baseline gap-1.5">
                   <input
                     id="inspection-odometer"
                     aria-invalid={!!mileageError}
@@ -2084,25 +2241,64 @@ function MultiPointInspectionDialogBody({
                     onChange={(e) => {
                       const next = e.target.value.replace(/[^0-9]/g, "");
                       setMileage(next);
-                      // Flag a backwards odometer the instant it's typed, so the
-                      // mechanic fixes it in place instead of hitting a wall at
-                      // submit time.
-                      setMileageError(
-                        odometerBelowBaseline(next)
-                          ? odometerTooLowMessage()
-                          : "",
-                      );
+                      // A lower / far-off reading is no longer an error — it's a
+                      // soft confirm on save (previewed by mileageSoftHint). Just
+                      // clear any stale server error while typing.
+                      if (mileageError) setMileageError("");
                     }}
+                    // Save on blur so the reading lands immediately, not only on
+                    // the 1s autosave debounce.
+                    onBlur={flushPendingSave}
                     placeholder="—"
-                    className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
+                    className="w-36 rounded-lg border-2 border-primary/50 bg-card px-3 py-2 text-[18px] font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
                   />
-                  <span className="text-[11px] text-muted-foreground">mi</span>
+                  <span className="text-[12px] font-medium text-muted-foreground">
+                    mi
+                  </span>
                 </div>
                 {mileageError ? (
                   <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-red-600">
                     {mileageError}
                   </span>
+                ) : mileageSoftHint ? (
+                  <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-amber-600">
+                    {mileageSoftHint}
+                  </span>
                 ) : null}
+                <ConfirmationDialog
+                  open={mileageConfirmOpen}
+                  zIndexClassName="z-[100]"
+                  title={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.title ?? "Confirm odometer"
+                  }
+                  description={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.body
+                  }
+                  onClose={() => {
+                    pendingSubmitActionRef.current = null;
+                    setMileageConfirmOpen(false);
+                  }}
+                  secondaryAction={{
+                    label: "Go back",
+                    variant: "outline",
+                    onAction: () => {
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                    },
+                  }}
+                  primaryAction={{
+                    label: "Save anyway",
+                    variant: "primary",
+                    onAction: () => {
+                      const action = pendingSubmitActionRef.current ?? "close";
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                      void runSubmit(action);
+                    },
+                  }}
+                />
               </label>
               <fieldset className={phase === "mpi" ? undefined : "hidden"}>
                 <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -2129,66 +2325,22 @@ function MultiPointInspectionDialogBody({
                   ))}
                 </div>
               </fieldset>
-            </div>
-
-            {/* progress ring */}
-            <div className="flex items-center gap-4">
-              <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
-                <circle
-                  cx="29"
-                  cy="29"
-                  r="22"
-                  fill="none"
-                  stroke="currentColor"
-                  className="text-primary/15"
-                  strokeWidth="6"
+              <div className="ml-auto flex items-center gap-3 self-center">
+                <SaveStatusIndicator
+                  status={saveStatus}
+                  enabled={!!bookingId && !!onSaveDraft}
                 />
-                <circle
-                  cx="29"
-                  cy="29"
-                  r="22"
-                  fill="none"
-                  stroke="currentColor"
-                  className="text-primary"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  strokeDasharray={ringDash}
-                  strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
-                  transform="rotate(-90 29 29)"
-                />
-                <text
-                  x="29"
-                  y="33.5"
-                  textAnchor="middle"
-                  fontSize="13"
-                  fontWeight="600"
-                  className="fill-foreground"
-                >
-                  {doneCount}/{totalRequired}
-                </text>
-              </svg>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-semibold text-foreground">
-                  {doneCount} of {totalRequired} required zones inspected
+                <div className="hidden items-center gap-3 sm:flex">
+                  {(["g", "y", "r"] as TriValue[]).map((c) => (
+                    <span
+                      key={c}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                    >
+                      <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
+                      {TRI_LABELS[c]}
+                    </span>
+                  ))}
                 </div>
-                <div className="text-[11px] text-muted-foreground">
-                  Tap a part of the car to inspect it
-                </div>
-              </div>
-              <SaveStatusIndicator
-                status={saveStatus}
-                enabled={!!bookingId && !!onSaveDraft}
-              />
-              <div className="hidden items-center gap-3 sm:flex">
-                {(["g", "y", "r"] as TriValue[]).map((c) => (
-                  <span
-                    key={c}
-                    className="flex items-center gap-1 text-[11px] text-muted-foreground"
-                  >
-                    <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
-                    {TRI_LABELS[c]}
-                  </span>
-                ))}
               </div>
             </div>
 
@@ -3329,6 +3481,7 @@ function ZonePanel({
                   : undefined
               }
               prefill={specByKey.get(field.key)}
+              specChecked={specConfirmed || checkedSpecKeys.has(field.key)}
               onSpecEdited={() => markSpecChecked(field.key)}
               onPatch={(patch) => {
                 onFieldSaving(field.key);
@@ -3547,6 +3700,7 @@ function FieldRow({
   required,
   errorMessage,
   prefill,
+  specChecked,
   onSpecEdited,
   onPatch,
   onSharedText,
@@ -3565,7 +3719,10 @@ function FieldRow({
   errorMessage?: string;
   /** Seeded passport value/provenance for this field, when it's a spec field. */
   prefill?: SpecPrefillEntry;
-  /** Called when the mechanic edits a pre-filled spec field (marks reviewed). */
+  /** True once this seeded spec has been reviewed (tapped, edited, or the whole
+   *  zone confirmed) — drives the inline "Confirm spec → Spec confirmed" state. */
+  specChecked?: boolean;
+  /** Called when the mechanic edits or confirms a pre-filled spec (marks reviewed). */
   onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
@@ -3579,6 +3736,16 @@ function FieldRow({
     return statuses;
   };
   const unavailable = !!zs.statuses[field.key];
+  // Inline "Confirm spec" control for passport-seeded fields — the in-place
+  // alternative to tapping the floating rail. Rendered next to the existing
+  // provenance tag in each seeded-field branch below.
+  const specControl =
+    prefill && !unavailable ? (
+      <SpecConfirmControl
+        confirmed={!!specChecked}
+        onConfirm={() => onSpecEdited?.()}
+      />
+    ) : null;
   // NYS safety items (e.g. horn) are mandatory — the mechanic can't mark them
   // unavailable to skip them, so drop the toggle entirely for those fields.
   const skippable = canMarkFieldUnavailable(zoneId, field.key);
@@ -3974,6 +4141,7 @@ function FieldRow({
                   className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
                 />
               ) : null}
+              {specControl}
               {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
             </div>
           </div>
@@ -4014,6 +4182,9 @@ function FieldRow({
               placeholder="Search or select"
               otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
             />
+            {specControl ? (
+              <div className="flex justify-end">{specControl}</div>
+            ) : null}
             {showFluidPrefillTag ? (
               <div className="flex justify-end">
                 <SpecSourceTag source={prefill!.source} />
@@ -4085,6 +4256,7 @@ function FieldRow({
               onChange={(event) => setText(event.target.value)}
               className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
+            {specControl}
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
           {rotorNotConfirmed ? null : unavailableControl}
@@ -4139,6 +4311,9 @@ function FieldRow({
               />
             )
           ) : null}
+          {specControl ? (
+            <div className="flex justify-end">{specControl}</div>
+          ) : null}
           {showPrefillTag ? (
             <div className="flex justify-end">
               <SpecSourceTag source={prefill!.source} />
@@ -4149,6 +4324,41 @@ function FieldRow({
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>
+  );
+}
+
+/**
+ * Inline confirm control for a passport-seeded spec — an in-place alternative to
+ * tapping the field's amber pill in the floating rail. Clicking runs the same
+ * `markSpecChecked(fieldKey)` path (via `onConfirm`), so once every seeded field
+ * in the zone is confirmed the zone auto-confirms, and the copy-to-other-side
+ * flow (which whole-zone-confirms via `markSpecReviewed`) flips these to green
+ * automatically.
+ */
+function SpecConfirmControl({
+  confirmed,
+  onConfirm,
+}: {
+  confirmed: boolean;
+  onConfirm: () => void;
+}) {
+  if (confirmed) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Spec confirmed
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onConfirm}
+      className="inline-flex items-center gap-1 cursor-pointer rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+    >
+      <Check className="h-3.5 w-3.5" />
+      Confirm spec
+    </button>
   );
 }
 
@@ -4947,9 +5157,18 @@ function PartsVerifyRow({
       </div>
 
       {item.current ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          Current guess: {item.current.name} · {item.current.oemNumber} (
-          {Math.round(item.current.confidence * 100)}% confidence)
+        <p className="mb-2 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+          <span>
+            Current guess: {item.current.name}
+            {item.current.oemNumber ? " ·" : ""}
+          </span>
+          {item.current.oemNumber ? (
+            <CopyableOemNumber
+              value={item.current.oemNumber}
+              className="text-[11px] text-muted-foreground"
+            />
+          ) : null}
+          <span>({Math.round(item.current.confidence * 100)}% confidence)</span>
         </p>
       ) : null}
 

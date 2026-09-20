@@ -6,6 +6,7 @@ import { Reveal, Seq, Sequence, serif, serifDisplay } from "@/components/flagshi
 import FooterCta from "@/components/flagship/landing/footer-cta";
 import NetworkMap from "@/components/flagship/landing/network-map";
 import PillNav from "@/components/flagship/pill-nav";
+import { navMenu } from "@/components/flagship/nav-menu";
 import ContactForm from "@/components/flagship/contact-form";
 import { Bezel } from "@/components/flagship/bezel";
 import { Plate } from "@/components/flagship/product/device";
@@ -28,12 +29,8 @@ import { DATA_EMAIL, LEGAL_NAME, LOCALITY, POSTAL_ADDRESS, SUPPORT_EMAIL } from 
  * address appears once in the hero copy and once under the form's button,
  * nowhere else.
  */
-const NAV_LINKS = [
-  { label: "How it works", href: "/how-it-works" },
-  { label: "For shops", href: "/for-shops" },
-  { label: "Coverage", href: "/coverage" },
-  { label: "Partner with us", href: "/partner-with-us" },
-];
+// Same four category triggers (and hover panels) the rest of the site carries.
+const NAV_LINKS = navMenu();
 const NAV_CTA = { label: "Get Oto", href: "/download" };
 
 const LANES = [

@@ -23,6 +23,7 @@ import {
   humanizeStatus,
 } from "@/lib/booking-activity-format";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 
 /* ------------------------------------------------------------------ */
 /*  Friendly, human timeline labels                                     */
@@ -65,6 +66,52 @@ function statusChangeTitle(
   }
 }
 
+/**
+ * Overrun time-extensions are logged as an in_progress → in_progress status row
+ * with reason `overrun_extension_<n>min_<source>`. Pull the minutes back out so
+ * the timeline can say "+30 min" instead of showing a phantom "Job started".
+ */
+function parseOverrunMinutes(reason: string | null | undefined): number | null {
+  if (!reason) return null;
+  const m = /^overrun_extension_(\d+)min/.exec(reason);
+  return m ? Number(m[1]) : null;
+}
+
+/** Money as a clean `$xx.xx` — accepts numbers or loose strings like "22.81". */
+function fmtMoney(v: unknown): string | null {
+  if (v == null || v === "") return null;
+  const n = typeof v === "number" ? v : Number(String(v).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(n)) return null;
+  return `$${n.toFixed(2)}`;
+}
+
+/** "shop" → "Shop". Used to humanize supplier/enum values in the log. */
+function titleCase(v: string | null | undefined): string | null {
+  if (!v) return null;
+  return v.charAt(0).toUpperCase() + v.slice(1);
+}
+
+/**
+ * Added/removed part edits stash a tiny JSON summary (see partSnapshotSummary
+ * in convex/lib/job_actuals.ts) in old/new value. Parse it defensively so a
+ * malformed row degrades to "no detail" rather than dumping raw JSON at the
+ * mechanic.
+ */
+function parsePartSummary(raw: string | null): {
+  oem?: string | null;
+  cost?: string | number | null;
+  quantity?: string | number | null;
+  supplied_by?: string | null;
+} | null {
+  if (!raw) return null;
+  try {
+    const o = JSON.parse(raw);
+    return o && typeof o === "object" ? o : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Actor byline — hidden for system/webhook sentinels and empty labels. */
 function actorByline(label: string | undefined): string | null {
   if (!label) return null;
@@ -104,8 +151,17 @@ function eventVisual(ev: ActivityEvent): {
         title: "Booking requested",
       };
     case "status_change": {
-      const title = statusChangeTitle(ev.data.to, ev.data.reason, ev.data.from);
       const to = ev.data.to;
+      // A job that runs past its estimate logs an in_progress → in_progress row
+      // for each time extension. That's not a restart — surface it as its own
+      // "running long" entry so it doesn't read as a second "Job started".
+      if (to === "in_progress" && ev.data.from === "in_progress") {
+        return {
+          icon: iconWrap("amber", <Clock className="h-3 w-3" strokeWidth={2.5} />),
+          title: "Job running long",
+        };
+      }
+      const title = statusChangeTitle(to, ev.data.reason, ev.data.from);
       if (to === "completed")
         return { icon: iconWrap("emerald", <Check className="h-3 w-3" strokeWidth={3} />), title };
       if (to === "in_progress")
@@ -154,13 +210,20 @@ function eventVisual(ev: ActivityEvent): {
             ? `Extra work added — ${ev.data.name}`
             : `Work added — ${ev.data.name}`,
       };
-    case "part_edit":
+    case "part_edit": {
+      // "not_used" is a toggle — read newValue so the title tells the mechanic
+      // which direction it went instead of always saying "Marked not-used".
+      const label =
+        ev.data.editType === "not_used"
+          ? ev.data.newValue === "true"
+            ? "Part not used"
+            : "Part put back"
+          : formatEditType(ev.data.editType);
       return {
         icon: iconWrap("neutral", <Wrench className="h-3 w-3" strokeWidth={2.5} />),
-        title: `${formatEditType(ev.data.editType)}${
-          ev.data.partName ? ` — ${ev.data.partName}` : ""
-        }`,
+        title: `${label}${ev.data.partName ? ` — ${ev.data.partName}` : ""}`,
       };
+    }
     case "payment_captured":
       return {
         icon: iconWrap("emerald", <Banknote className="h-3.5 w-3.5" />),
@@ -265,10 +328,19 @@ function EventDetail({
           )}
         </div>
       );
-    case "status_change":
+    case "status_change": {
+      const overrunMins = parseOverrunMinutes(ev.data.reason);
+      if (overrunMins != null) {
+        return (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            +{overrunMins} min added to the estimate
+          </p>
+        );
+      }
       return ev.data.reason && !isSystemyReason(ev.data.reason) ? (
         <p className="mt-0.5 text-xs text-muted-foreground">{ev.data.reason}</p>
       ) : null;
+    }
     case "estimate_submitted":
       return (
         <div className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
@@ -307,11 +379,7 @@ function EventDetail({
         </p>
       ) : null;
     case "part_edit":
-      return ev.data.oldValue || ev.data.newValue ? (
-        <p className="mt-0.5 text-[11px] text-muted-foreground">
-          {ev.data.oldValue ?? "—"} → {ev.data.newValue ?? "—"}
-        </p>
-      ) : null;
+      return <PartEditDetail data={ev.data} />;
     case "payment_captured":
       return ev.data.cardBrand || ev.data.last4 ? (
         <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -322,6 +390,109 @@ function EventDetail({
     default:
       return null;
   }
+}
+
+/**
+ * Human-readable detail line for a part edit. The title already names the action
+ * and part ("Added part — Cabin Air Filter"); this fills in the specifics a
+ * mechanic cares about — price, quantity, who's supplying it, part number — and
+ * NEVER the raw JSON snapshot the audit row stores.
+ */
+function PartEditDetail({
+  data,
+}: {
+  data: Extract<ActivityEvent, { type: "part_edit" }>["data"];
+}) {
+  const { editType, oldValue, newValue, oemNumber } = data;
+  const detailCls = "mt-0.5 text-[11px] text-muted-foreground";
+  const arrow = <ArrowRight className="inline h-3 w-3 align-[-1px]" />;
+
+  // Added / removed: unpack the JSON summary into readable chips.
+  if (editType === "added" || editType === "removed") {
+    const summary = parsePartSummary(editType === "added" ? newValue : oldValue);
+    const oem = summary?.oem ?? oemNumber ?? null;
+    const price = fmtMoney(summary?.cost);
+    const qty = Number(summary?.quantity ?? 1);
+    const customerSupplied = (summary?.supplied_by ?? "shop") === "customer";
+
+    const chips: React.ReactNode[] = [];
+    if (price)
+      chips.push(
+        <span key="price" className="font-medium text-foreground">
+          {price}
+        </span>,
+      );
+    if (Number.isFinite(qty) && qty > 1) chips.push(<span key="qty">Qty {qty}</span>);
+    if (customerSupplied) chips.push(<span key="sup">Customer-supplied</span>);
+
+    if (chips.length === 0 && !oem) return null;
+    return (
+      <div className={`${detailCls} flex flex-wrap items-center gap-x-1.5 gap-y-0.5`}>
+        {chips.map((chip, i) => (
+          <span key={i} className="flex items-center gap-x-1.5">
+            {i > 0 && <span className="text-muted-foreground/40">·</span>}
+            {chip}
+          </span>
+        ))}
+        {oem && (
+          <>
+            {chips.length > 0 && <span className="text-muted-foreground/40">·</span>}
+            <CopyableOemNumber value={oem} className="text-[11px] text-muted-foreground" />
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // Swap: old part number → new part number, both copyable.
+  if (editType === "swap") {
+    return (
+      <p className={`${detailCls} flex flex-wrap items-center gap-1.5`}>
+        <CopyableOemNumber value={oldValue} className="text-[11px] text-muted-foreground" />
+        {arrow}
+        <CopyableOemNumber value={newValue} className="text-[11px] text-foreground" />
+      </p>
+    );
+  }
+
+  if (editType === "price") {
+    return (
+      <p className={detailCls}>
+        {fmtMoney(oldValue) ?? "—"} {arrow}{" "}
+        <span className="font-medium text-foreground">{fmtMoney(newValue) ?? "—"}</span>
+      </p>
+    );
+  }
+
+  if (editType === "quantity") {
+    return (
+      <p className={detailCls}>
+        Qty {oldValue ?? "—"} {arrow}{" "}
+        <span className="font-medium text-foreground">{newValue ?? "—"}</span>
+      </p>
+    );
+  }
+
+  if (editType === "supplied_by") {
+    return (
+      <p className={detailCls}>
+        {titleCase(oldValue) ?? "—"} {arrow}{" "}
+        <span className="font-medium text-foreground">{titleCase(newValue) ?? "—"}</span>
+      </p>
+    );
+  }
+
+  if (editType === "not_used") {
+    return (
+      <p className={detailCls}>
+        {newValue === "true"
+          ? "No longer charging for this part"
+          : "Back on the invoice"}
+      </p>
+    );
+  }
+
+  return null;
 }
 
 // System-generated status reasons read as internal jargon in the log

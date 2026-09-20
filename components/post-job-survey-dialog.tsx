@@ -738,6 +738,101 @@ function FluidSelectField({
 }
 
 
+/**
+ * Compact Brand picker for a manual part row. Defaults to the car's make (an
+ * OEM-first nudge — genuine parts carry the make as their brand) and offers an
+ * "Other / custom…" option that reveals a free-text field for aftermarket
+ * brands. Styled to sit in the tight Brand / Part-number grid cell (h-7).
+ *
+ * When the make can't be resolved (no VIN / unknown vehicle) the caller renders
+ * a plain input instead, so brand entry never becomes impossible.
+ */
+function BrandSelectField({
+  value,
+  onChange,
+  oemBrandLabel,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+  oemBrandLabel: string;
+}) {
+  const isOem = value.trim().toLowerCase() === oemBrandLabel.toLowerCase();
+  // Track an explicit "custom" choice so picking Other with an empty/OEM value
+  // still reveals the text field (clearing the value alone would snap back to
+  // the placeholder). A pre-existing non-OEM brand also counts as custom.
+  const [customChosen, setCustomChosen] = useState(false);
+  const showCustom = customChosen || (!!value && !isOem);
+  const selectedKey = showCustom ? OTHER_OPTION_ID : isOem ? "__oem__" : "none";
+  const triggerLabel = showCustom
+    ? "Other / custom"
+    : isOem
+      ? `${oemBrandLabel} · OEM`
+      : "Select brand…";
+
+  return (
+    <>
+      <Select
+        selectedKey={selectedKey}
+        onSelectionChange={(key) => {
+          const k = String(key);
+          if (k === "__oem__") {
+            setCustomChosen(false);
+            onChange(oemBrandLabel);
+          } else if (k === OTHER_OPTION_ID) {
+            setCustomChosen(true);
+            if (isOem) onChange(""); // start the custom field empty
+          } else {
+            setCustomChosen(false);
+            onChange("");
+          }
+        }}
+      >
+        <SelectTrigger className="mt-0.5 h-7 w-full justify-between rounded-md border border-primary/10 bg-background px-2 text-[11px] text-foreground">
+          <SelectValue>{triggerLabel}</SelectValue>
+        </SelectTrigger>
+        <SelectPopover className="rounded-md">
+          <SelectListBox
+            shouldFocusWrap
+            className="max-h-64 overflow-y-auto p-1 text-[12px]"
+          >
+            <SelectItem id="none" textValue="Select brand…" className={fluidSelectItem}>
+              <span className="text-muted-foreground">Select brand…</span>
+            </SelectItem>
+            <SelectItem
+              id="__oem__"
+              textValue={oemBrandLabel}
+              className={fluidSelectItem}
+            >
+              <span className="flex items-center gap-1.5">
+                {oemBrandLabel}
+                <span className="rounded bg-primary/10 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
+                  OEM
+                </span>
+              </span>
+            </SelectItem>
+            <SelectItem
+              id={OTHER_OPTION_ID}
+              textValue="Other / custom"
+              className={fluidSelectItem}
+            >
+              Other / custom…
+            </SelectItem>
+          </SelectListBox>
+        </SelectPopover>
+      </Select>
+      {showCustom ? (
+        <input
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          placeholder="Brand"
+          autoFocus
+          className="mt-1 h-7 w-full rounded-md border border-primary/10 bg-background px-2 text-[11px] outline-none focus:border-primary/30"
+        />
+      ) : null}
+    </>
+  );
+}
+
 function parseOilFilterValue(value: string): { brand: string; code: string } {
   const trimmed = (value ?? "").trim();
   if (!trimmed) return { brand: "", code: "" };
@@ -3921,6 +4016,7 @@ function StepContent(props: {
           actualPartsCost={props.actualPartsCost}
           setActualPartsCost={props.setActualPartsCost}
           partsCostSum={props.partsCostSum}
+          vin={props.vin}
           vehicleLabel={props.vehicleLabel}
           engineCode={props.engineCode}
           cycle={props.cycle}
@@ -4597,6 +4693,7 @@ function PartsStep({
   actualPartsCost,
   setActualPartsCost,
   partsCostSum,
+  vin,
   vehicleLabel,
   engineCode,
   cycle,
@@ -4632,6 +4729,9 @@ function PartsStep({
   actualPartsCost: string;
   setActualPartsCost: (value: string) => void;
   partsCostSum: number;
+  /** Booking vehicle VIN — resolves the make so a new part's Brand defaults to
+   *  the car's make (OEM-first), with an "Other / custom" override. */
+  vin: string | null;
   vehicleLabel: string | null;
   engineCode: string | null;
   // When set, this dialog is in an approval flow (pre/mid/post). Manual
@@ -4667,6 +4767,17 @@ function PartsStep({
   laborRateCents?: number;
   isShopSet?: boolean;
 }) {
+  // Resolve the vehicle's make so a new part's Brand defaults to it (we push
+  // OEM), while the Brand picker still offers an "Other / custom" escape hatch.
+  // Null when the VIN can't be resolved — the Brand field then falls back to a
+  // plain free-text input.
+  const makeData = useQuery(
+    (api as any).fluidCatalog.makeForVin,
+    vin ? { vin } : "skip",
+  ) as { makeLabel: string | null } | undefined;
+  const oemBrandLabel = makeData?.makeLabel ?? null;
+  const defaultBrand = oemBrandLabel ?? "";
+
   const normalizeOem = (n: string) =>
     n.trim().toUpperCase().replace(/\s+/g, "");
   // Tire lines are edited through TirePartsEditor and hidden from the generic
@@ -4974,7 +5085,7 @@ function PartsStep({
       customName: string | null,
     ): PartRowState => ({
       part_name: "",
-      brand: "",
+      brand: defaultBrand,
       oem_number: "",
       cost: "0.00",
       quantity: 1,
@@ -5051,6 +5162,91 @@ function PartsStep({
     const originalCents = lockedQuote?.originalTotalCents ?? null;
     const wasAdjusted =
       originalCents != null && originalCents !== totalCents;
+    const usedPartAmount = (p: PartRowState) =>
+      (p.supplied_by === "customer" ? 0 : Number(p.cost) || 0) *
+      Math.max(1, p.quantity || 1);
+    // Break the locked list apart per booked service so the mechanic reviews
+    // the parts grouped the way the customer approved them — one section per
+    // service / custom job. Group order and labels come from serviceGroups
+    // (the same per-service source the editable cycle uses); a part with no
+    // resolvable service falls into a trailing bucket so nothing is dropped,
+    // and when nothing resolves at all that lone bucket renders header-less
+    // (i.e. the original flat list).
+    type UsedPartGroup = {
+      key: string;
+      label: string | null;
+      parts: PartRowState[];
+    };
+    const usedPartGroups: UsedPartGroup[] = [];
+    const claimedParts = new Set<PartRowState>();
+    for (const group of serviceGroups) {
+      const members = usedParts.filter(
+        (p) => !claimedParts.has(p) && group.belongs(p),
+      );
+      if (members.length === 0) continue;
+      members.forEach((p) => claimedParts.add(p));
+      usedPartGroups.push({
+        key: group.key,
+        label: group.label,
+        parts: members,
+      });
+    }
+    const ungroupedParts = usedParts.filter((p) => !claimedParts.has(p));
+    if (ungroupedParts.length > 0) {
+      usedPartGroups.push({
+        key: "__ungrouped__",
+        // Only title the leftover bucket when real service sections sit above
+        // it; on its own it's just the plain parts list.
+        label: usedPartGroups.length > 0 ? "Other parts" : null,
+        parts: ungroupedParts,
+      });
+    }
+    const renderUsedPartRow = (part: PartRowState, rowKey: string) => {
+      const qty = Math.max(1, part.quantity || 1);
+      const unit =
+        part.supplied_by === "customer" ? 0 : Number(part.cost) || 0;
+      const tierLabel = tierLabelOf(part.part_tier);
+      return (
+        <div
+          key={rowKey}
+          className="rounded-2xl border border-primary/15 bg-muted/20 px-3 py-2.5"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="truncate text-[13px] font-semibold text-foreground">
+                  {part.part_name}
+                </span>
+                {tierLabel ? (
+                  <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
+                    {tierLabel}
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-x-1 font-mono text-[11px] tabular-nums text-muted-foreground">
+                {isTirePartRow(part) ? (
+                  <span className="text-[11px] text-muted-foreground">
+                    {formatPartIdentity(part)}
+                  </span>
+                ) : (
+                  <CopyableOemNumber
+                    value={part.oem_number || ""}
+                    className="text-[11px] text-muted-foreground"
+                  />
+                )}
+                {qty > 1 ? <span>· qty {qty}</span> : null}
+                {part.supplied_by === "customer" ? (
+                  <span>· customer-supplied</span>
+                ) : null}
+              </div>
+            </div>
+            <span className="shrink-0 text-[13px] font-medium tabular-nums text-foreground">
+              ${(unit * qty).toFixed(2)}
+            </span>
+          </div>
+        </div>
+      );
+    };
     return (
       <QuestionScreen
         eyebrow="Confirm"
@@ -5063,52 +5259,28 @@ function PartsStep({
               No parts on this quote.
             </div>
           ) : (
-            usedParts.map((part, index) => {
-              const qty = Math.max(1, part.quantity || 1);
-              const unit =
-                part.supplied_by === "customer" ? 0 : Number(part.cost) || 0;
-              const tierLabel = tierLabelOf(part.part_tier);
-              return (
-                <div
-                  key={index}
-                  className="rounded-2xl border border-primary/15 bg-muted/20 px-3 py-2.5"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-1.5">
-                        <span className="truncate text-[13px] font-semibold text-foreground">
-                          {part.part_name}
-                        </span>
-                        {tierLabel ? (
-                          <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">
-                            {tierLabel}
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1 font-mono text-[11px] tabular-nums text-muted-foreground">
-                        {isTirePartRow(part) ? (
-                          <span className="text-[11px] text-muted-foreground">
-                            {formatPartIdentity(part)}
-                          </span>
-                        ) : (
-                          <CopyableOemNumber
-                            value={part.oem_number || ""}
-                            className="text-[11px] text-muted-foreground"
-                          />
-                        )}
-                        {qty > 1 ? <span>· qty {qty}</span> : null}
-                        {part.supplied_by === "customer" ? (
-                          <span>· customer-supplied</span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <span className="shrink-0 text-[13px] font-medium tabular-nums text-foreground">
-                      ${(unit * qty).toFixed(2)}
+            usedPartGroups.map((grp) => (
+              <div key={grp.key} className="space-y-2">
+                {grp.label ? (
+                  <div className="flex items-center justify-between gap-3 px-1">
+                    <span className="truncate text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
+                      {grp.label}
+                    </span>
+                    <span className="shrink-0 text-[11px] font-medium tabular-nums text-muted-foreground">
+                      $
+                      {grp.parts
+                        .reduce((sum, p) => sum + usedPartAmount(p), 0)
+                        .toFixed(2)}
                     </span>
                   </div>
+                ) : null}
+                <div className="space-y-2">
+                  {grp.parts.map((part, index) =>
+                    renderUsedPartRow(part, `${grp.key}:${index}`),
+                  )}
                 </div>
-              );
-            })
+              </div>
+            ))
           )}
 
           {/* Agreed-quote breakdown: parts → labor → tax/fee → total. */}
@@ -5391,6 +5563,12 @@ function PartsStep({
                           >
                             {part.brand || "—"}
                           </span>
+                        ) : oemBrandLabel ? (
+                          <BrandSelectField
+                            value={part.brand}
+                            onChange={(next) => updatePart(index, { brand: next })}
+                            oemBrandLabel={oemBrandLabel}
+                          />
                         ) : (
                           <input
                             value={part.brand}
@@ -5818,7 +5996,7 @@ function PartsStep({
                     ...current,
                     {
                       part_name: "",
-                      brand: "",
+                      brand: defaultBrand,
                       oem_number: "",
                       cost: "0.00",
                       quantity: 1,
@@ -5845,7 +6023,7 @@ function PartsStep({
                     ...current,
                     {
                       part_name: "",
-                      brand: "",
+                      brand: defaultBrand,
                       oem_number: "",
                       cost: "0.00",
                       quantity: 1,
@@ -5871,7 +6049,7 @@ function PartsStep({
                 ...current,
                 {
                   part_name: "",
-                  brand: "",
+                  brand: defaultBrand,
                   oem_number: "",
                   cost: "0.00",
                   quantity: 1,
@@ -6735,11 +6913,14 @@ function RecommendationsStep({
       ) : null}
 
       {currentWarningLights.length > 0 ? (
-        <div className="mb-4 rounded-xl border border-primary/10 bg-muted/30 px-3 py-2.5">
-          <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
-            Dashboard lights on file for this car
-          </p>
-          <p className="mt-1 text-[11px] text-muted-foreground">
+        <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50/60 px-3 py-2.5">
+          <div className="flex items-center gap-1.5">
+            <Gauge className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+            <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-amber-800">
+              Dashboard lights on file for this car
+            </p>
+          </div>
+          <p className="mt-1 text-[11px] text-amber-700/90">
             Still on? Clear any you resolved this visit.
           </p>
           <ul className="mt-1.5 space-y-1">
@@ -8137,7 +8318,7 @@ function ApprovalStatusPanel({
                 ? "Capture will fall back to the previously approved amount. No further action needed."
                 : cycle === "mid_job"
                   ? "Work continues at the previously approved scope. Found other work? Submit a new request below."
-                  : "You can adjust the price and resend, or release the vehicle."}
+                  : "Revise the estimate and resend, or continue with just the services they originally booked."}
             </p>
             {cycle === "mid_job" ? (
               // A declined added-scope isn't a dead end — the mechanic may have
@@ -8216,28 +8397,47 @@ function ApprovalStatusPanel({
                   </div>
                 </div>
               ) : (
-                <div className="mt-4 flex gap-3">
+                <>
+                  {/* Two forward paths lead. Continuing with the original scope
+                      is the low-friction default (the declined lines were already
+                      reverted server-side, so this proceeds at the original
+                      ceiling), so it takes the filled primary slot; revising sits
+                      just under it. */}
+                  <button
+                    type="button"
+                    onClick={() => void runAction("start", workflow.onStartWork)}
+                    disabled={busyAction === "start"}
+                    className={cn(
+                      drawerPrimaryButtonClassName,
+                      "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                    )}
+                  >
+                    {busyAction === "start" ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : null}
+                    Continue with original services
+                  </button>
                   <button
                     type="button"
                     onClick={onReviseRequested}
                     className={cn(
-                      drawerPrimaryButtonClassName,
-                      "h-10 flex-1 rounded-lg px-5 text-[13px]",
+                      drawerSecondaryButtonClassName,
+                      "mt-2 h-10 w-full rounded-lg px-5 text-[13px]",
                     )}
                   >
                     Revise estimate
                   </button>
+                  {/* Cancelling the whole job is the rare, heavy exit — kept
+                      present but visually recessive so the two forward paths
+                      read as the default. */}
                   <button
                     type="button"
                     onClick={() => setConfirmingRelease(true)}
-                    className={cn(
-                      drawerSecondaryButtonClassName,
-                      "h-10 flex-1 rounded-lg px-5 text-[13px]",
-                    )}
+                    className="mt-3 w-full text-center text-[12px] font-medium text-muted-foreground underline-offset-4 transition-colors hover:text-destructive hover:underline"
                   >
-                    Release vehicle
+                    Release vehicle &amp; cancel job
                   </button>
-                </div>
+                </>
               )
             ) : null}
           </div>

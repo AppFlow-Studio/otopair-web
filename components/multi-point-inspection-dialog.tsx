@@ -447,6 +447,10 @@ export default function MultiPointInspectionDialog(props: {
     inspection: InspectionInputPayload,
   ) => Promise<void>;
 }) {
+  // The inspection holds a local working copy. Unmount it while closed so a
+  // reopened booking always initializes from the latest persisted data.
+  if (!props.open) return null;
+
   return (
     <MultiPointInspectionDialogBody
       key={`${props.passportData?.vin ?? "no-vin"}-${props.bookingId ?? "no-booking"}`}

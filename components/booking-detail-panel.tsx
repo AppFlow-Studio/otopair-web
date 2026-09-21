@@ -2171,6 +2171,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               destructive: true,
                             });
                           }
+                          if (canOpenMpi && !mpiGateOpen) {
+                            overflow.push({
+                              key: "edit-inspection",
+                              label: "Edit inspection",
+                              onSelect: () => setShowPrejobDialog(true),
+                            });
+                          }
                           if (canCancel) {
                             overflow.push({
                               key: "cancel",

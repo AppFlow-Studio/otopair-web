@@ -42,29 +42,70 @@ export async function POST(request: NextRequest) {
 
     const stripe = getStripe();
     let accountId = shop.stripeConnectAccountId;
-    let account;
 
     if (!accountId) {
       const supportEmail = shop.email ?? onboardingData.ownerEmail ?? undefined;
-      account = await stripe.accounts.create({
-        type: "express",
-        country: "US",
-        default_currency: "usd",
-        email: supportEmail,
-        capabilities: {
-          card_payments: { requested: true },
-          transfers: { requested: true },
+      // Accounts v2 (POST /v2/core/accounts). This is the direct equivalent of the
+      // former v1 `type: "express"` account: dashboard=express + both responsibilities
+      // set to `application` (required for an express dashboard and for a recipient
+      // requesting stripe_transfers). These responsibilities are permanent.
+      const created = await stripe.v2.core.accounts.create({
+        contact_email: supportEmail,
+        display_name: shop.name,
+        identity: {
+          country: "us",
+          // entity_type intentionally omitted — Stripe collects the business type
+          // during hosted onboarding.
         },
-        business_profile: {
-          mcc: "7538",
-          name: shop.name,
-          url: getBusinessUrl(shop.website),
-          support_url: getBusinessUrl(shop.website),
-          support_email: supportEmail,
-          support_phone: shop.phone ?? undefined,
-          product_description:
-            "Automotive repair and maintenance services booked through Otopair.",
+        configuration: {
+          // Mirrors the v1 `capabilities: { card_payments, transfers }` request.
+          merchant: {
+            mcc: "7538",
+            capabilities: { card_payments: { requested: true } },
+            support: {
+              email: supportEmail,
+              phone: shop.phone ?? undefined,
+              url: getBusinessUrl(shop.website),
+            },
+          },
+          recipient: {
+            capabilities: {
+              stripe_balance: { stripe_transfers: { requested: true } },
+            },
+          },
         },
+        defaults: {
+          currency: "usd",
+          responsibilities: {
+            fees_collector: "application",
+            losses_collector: "application",
+          },
+        },
+        dashboard: "express",
+        metadata: {
+          otopair_shop_id: String(shop._id),
+          clerk_user_id: userId,
+          onboarded_via: "shop_portal_v2",
+        },
+        include: [
+          "configuration.merchant",
+          "configuration.recipient",
+          "requirements",
+        ],
+      });
+
+      accountId = created.id;
+      await fetchMutation(
+        api.shops.saveStripeConnectAccountId,
+        {
+          stripeConnectAccountId: accountId,
+        },
+        { token }
+      );
+
+      // v2 account creation has no payout-schedule field; re-apply the daily / 2-day
+      // schedule via the interoperable v1 update to preserve prior behavior.
+      await stripe.accounts.update(accountId, {
         settings: {
           payouts: {
             schedule: {
@@ -73,25 +114,14 @@ export async function POST(request: NextRequest) {
             },
           },
         },
-        metadata: {
-          otopair_shop_id: String(shop._id),
-          clerk_user_id: userId,
-          onboarded_via: "shop_portal_v1",
-        },
       });
-
-      accountId = account.id;
-      await fetchMutation(
-        api.shops.saveStripeConnectAccountId,
-        {
-          stripeConnectAccountId: accountId,
-        },
-        { token }
-      );
-    } else {
-      account = await stripe.accounts.retrieve(accountId);
     }
 
+    // Read status via the v1 Account shape for both new and existing accounts. v1
+    // `accounts.retrieve` is interoperable with v2 `acct_…` ids and returns the
+    // charges/payouts/requirements fields `syncMyStripeConnectStatus` expects (the
+    // v2 create response omits them).
+    const account = await stripe.accounts.retrieve(accountId);
     await fetchMutation(
       api.shops.syncMyStripeConnectStatus,
       {

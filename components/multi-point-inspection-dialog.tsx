@@ -2073,7 +2073,7 @@ function MultiPointInspectionDialogBody({
           flushPendingSave();
           onClose();
         }}
-        title="Multi-point inspection"
+        title={phase === "pre" ? "Vehicle pre-check" : "Multi-point inspection"}
         description={bookingSubLabel}
         maxWidthClassName="max-w-2xl"
         mobileFullBleed

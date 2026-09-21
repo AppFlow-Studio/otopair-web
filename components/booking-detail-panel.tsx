@@ -13,6 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { notify } from "@/lib/feedback";
 import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
@@ -848,6 +849,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
+
+    // Success already toasts through each parent's onSuccess handler, but a
+    // failed action only set inline `actionError` before — surface it as a toast
+    // too so every action reacts. The assign-mechanic conflict text is a
+    // pre-click "why blocked" hint (shown inline by the button), not a failure,
+    // so it's excluded here.
+    useEffect(() => {
+      if (actionError && !actionError.startsWith("Cannot assign this mechanic")) {
+        notify.error(actionError);
+      }
+    }, [actionError]);
     const [showDeclineModal, setShowDeclineModal] = useState(false);
     const [activeTab, setActiveTab] = useState<"details" | "timeline">("details");
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -2440,7 +2452,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     sentLabel={holdApproval.relativeSentLabel}
                     slaLabel={holdApproval.slaCountdownLabel}
                     addedServiceNames={pendingAddedServiceNames}
-                    onWithdraw={holdApproval.onWithdraw}
+                    onWithdraw={async () => {
+                      await holdApproval.onWithdraw();
+                      notify.success("Approval request withdrawn");
+                    }}
                   />
                 ) : null}
                 {actionBar}

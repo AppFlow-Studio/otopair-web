@@ -7,6 +7,7 @@ import { jobListTotal } from "@/lib/booking-total";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { runAction } from "@/lib/feedback";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import { Bell, Calendar, Car, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, User, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -553,7 +554,12 @@ export default function BookingsPage() {
                       <div className="mt-4">
                         <button
                           type="button"
-                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
+                          onClick={() =>
+                            void runAction(
+                              () => markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> }),
+                              { success: "Vehicle marked here" },
+                            )
+                          }
                           className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white transition-opacity hover:opacity-90"
                         >
                           Vehicle here
@@ -599,7 +605,12 @@ export default function BookingsPage() {
                       <div className="mt-4">
                         <button
                           type="button"
-                          onClick={() => void markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> })}
+                          onClick={() =>
+                            void runAction(
+                              () => markVehicleAtShop({ bookingId: alert.bookingId as Id<"bookings"> }),
+                              { success: "Vehicle marked here" },
+                            )
+                          }
                           className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground transition-opacity hover:opacity-90"
                         >
                           Vehicle here

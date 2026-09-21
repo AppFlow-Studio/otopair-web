@@ -7,6 +7,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { notify, runAction, errorMessage } from "@/lib/feedback";
 import { ChevronLeft, ChevronRight, Wrench } from "lucide-react";
 import { format, addDays, subDays } from "date-fns";
 import DaySwimLanes from "@/app/(portal)/schedule/day-swim-lanes";
@@ -351,11 +352,11 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
   const handleReject = async (id: Id<"bookings">) => {
     if (!shopId) return;
     setPendingRejectId(String(id));
-    try {
-      await dismissQuoteRequest({ booking_id: id, shop_id: shopId });
-    } finally {
-      setPendingRejectId(null);
-    }
+    await runAction(
+      () => dismissQuoteRequest({ booking_id: id, shop_id: shopId }),
+      { success: "Quote request rejected" },
+    );
+    setPendingRejectId(null);
   };
 
   const handleCancelQuote = async () => {
@@ -363,11 +364,14 @@ export function RotorQuoteRequestsContent({ hideHeader = false }: { hideHeader?:
     try {
       await cancelQuote({ response_id: cancelRequest.quote_response._id });
       setCancelRequest(null);
+      notify.success("Quote cancelled");
     } catch (error) {
       const data = (error as { data?: { code?: string } })?.data;
       if (data?.code === "QUOTE_HELD") {
         setCancelRequest(null);
         setHoldNoticeOpen(true);
+      } else {
+        notify.error(errorMessage(error));
       }
     }
   };
@@ -805,17 +809,21 @@ export function RotorQuoteSubmissionDialog({
     Number(padQuantity) > 0
   );
 
-  const canSubmit =
-    isQuoteBrandReady(rotorBrand) &&
-    perRotorPrice !== "" &&
-    Number(perRotorPrice) > 0 &&
-    laborCost !== "" &&
-    Number(laborCost) >= 0 &&
-    padsValid &&
-    availabilityIsFuture &&
-    mechanicId !== "" &&
-    total !== null &&
-    !submitting;
+  // What's still missing before the quote can be sent — powers the disabled
+  // submit button's tooltip + inline note so a blocked "Submit quote" says why.
+  const missing = useMemo(() => {
+    const m: string[] = [];
+    if (!isQuoteBrandReady(rotorBrand)) m.push("rotor brand");
+    if (perRotorPrice === "" || !(Number(perRotorPrice) > 0)) m.push("per-rotor price");
+    if (laborCost === "" || !(Number(laborCost) >= 0)) m.push("labor cost");
+    if (!padsValid) m.push("pad details");
+    if (!availabilityIsFuture) m.push("a future availability slot");
+    if (mechanicId === "") m.push("a mechanic");
+    return m;
+  }, [rotorBrand, perRotorPrice, laborCost, padsValid, availabilityIsFuture, mechanicId]);
+  const missingReason = missing.length ? `Still needed: ${missing.join(", ")}` : undefined;
+
+  const canSubmit = missing.length === 0 && total !== null && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit || total === null) return;
@@ -846,6 +854,7 @@ export function RotorQuoteSubmissionDialog({
       } else {
         await submit({ booking_id: request._id, shop_id: shopId, ...quote });
       }
+      notify.success(existing ? "Quote updated" : "Quote sent to customer");
       onClose();
     } catch (e) {
       const data = (e as { data?: { code?: string } })?.data;
@@ -1169,7 +1178,12 @@ export function RotorQuoteSubmissionDialog({
               )}
             </div>
 
-            <div className="px-5 py-4 border-t border-border flex gap-2 justify-end shrink-0">
+            <div className="px-5 py-4 border-t border-border flex gap-2 justify-end items-center shrink-0">
+              {missingReason ? (
+                <p className="mr-auto text-xs text-muted-foreground" role="status">
+                  {missingReason}
+                </p>
+              ) : null}
               <button
                 onClick={onClose}
                 disabled={submitting}
@@ -1180,6 +1194,7 @@ export function RotorQuoteSubmissionDialog({
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit}
+                title={missingReason}
                 className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {submitting

@@ -5,6 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { CalendarDays, Car, DollarSign, UserRound, Wrench, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { notify } from "@/lib/feedback";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { TireQuoteSubmissionDialog } from "@/app/(portal)/bookings/tire-quote-requests/page";
 import { RotorQuoteSubmissionDialog } from "@/app/(portal)/bookings/rotor-quote-requests/page";
@@ -139,6 +140,7 @@ export default function QuoteDetailPanel({
         await cancelRotor({ response_id: responseId as Id<"rotor_quote_responses"> });
       }
       setConfirmCancel(false);
+      notify.success("Quote cancelled");
     } catch (caught) {
       const data = (caught as { data?: { code?: string } })?.data;
       if (data?.code === "QUOTE_HELD") {

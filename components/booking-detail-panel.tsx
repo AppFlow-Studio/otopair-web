@@ -77,6 +77,7 @@ import {
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
 import BookingTimeline from "@/components/booking/booking-timeline";
+import BookingPickupPanel from "@/components/pickup/booking-pickup-panel";
 import ElapsedTimer from "@/components/mechanic/elapsed-timer";
 import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
@@ -691,6 +692,13 @@ export interface JobDetailData {
   assignmentPreference?: "any" | "specific_mechanic";
   vehicleArrivedAtMs?: number | null;
   vehicleArrivedByUserId?: Id<"users"> | null;
+  // Pickup ("request to cancel & pick up car") round trip — drives the in-drawer
+  // pickup panel so the request stays actionable after it drops off the board.
+  cancelRequestedAtMs?: number | null;
+  cancelRequestReason?: string | null;
+  pickupResponse?: "acknowledged" | "bringing_out" | "declined" | null;
+  pickupRespondedAtMs?: number | null;
+  pickupRequestResolvedAtMs?: number | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -2510,6 +2518,20 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               />
             ) : (
               <div className="divide-y divide-border">
+                {/* Pickup request — pinned to the top so the mechanic can
+                    always act on it from the booking itself, even after it
+                    drops off the schedule board / dashboard alert. Renders
+                    nothing (no DOM node, so divide-y skips it) unless the car's
+                    here and a pickup was requested — see BookingPickupPanel. */}
+                <BookingPickupPanel
+                  bookingId={job._id as Id<"bookings">}
+                  status={job.status}
+                  cancelRequestedAtMs={job.cancelRequestedAtMs ?? null}
+                  cancelRequestReason={job.cancelRequestReason ?? null}
+                  pickupResponse={job.pickupResponse ?? null}
+                  pickupRespondedAtMs={job.pickupRespondedAtMs ?? null}
+                />
+
                 <VehiclePassportCard
                   job={job}
                   passport={vehiclePassport ?? null}

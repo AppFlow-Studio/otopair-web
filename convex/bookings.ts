@@ -11852,6 +11852,17 @@ export const getJobDetail = query({
       previousMechanicName,
       rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
       invoiceNumber: (booking as any).invoice_number ?? null,
+      // Pickup ("request to cancel & pick up car") round trip, surfaced so the
+      // booking drawer can show + act on it even after the request drops off the
+      // schedule board and the dashboard alert (which filter it once answered /
+      // aged). Active while the car is still vehicle_at_shop; a release routes
+      // through the cancel transition, so the booking leaves that status and the
+      // drawer panel naturally hides.
+      cancelRequestedAtMs: booking.cancel_requested_at_ms ?? null,
+      cancelRequestReason: booking.cancel_request_reason ?? null,
+      pickupResponse: booking.pickup_response ?? null,
+      pickupRespondedAtMs: booking.pickup_responded_at_ms ?? null,
+      pickupRequestResolvedAtMs: booking.pickup_request_resolved_at_ms ?? null,
       customerLateMonitor: lateMonitor && lateMonitor.status === "active" ? {
         pushEnqueuedAtMs: lateMonitor.push_enqueued_at_ms ?? null,
         smsEnqueuedAtMs: lateMonitor.sms_enqueued_at_ms ?? null,

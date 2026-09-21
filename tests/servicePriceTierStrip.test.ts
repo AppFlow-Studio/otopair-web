@@ -108,4 +108,18 @@ describe("service pricing editor presentation", () => {
     expect(source).not.toContain('placeholder="Minimum"');
     expect(source).not.toContain('placeholder="Maximum"');
   });
+
+  it("uses the compact neutral pricing-card treatment", () => {
+    const source = readFileSync(
+      resolve(process.cwd(), "components/shop/service-price-tier-strip.tsx"),
+      "utf8",
+    );
+
+    expect(source).toContain(
+      'rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 sm:p-4',
+    );
+    expect(source).toContain(
+      'text-[10px] font-semibold uppercase tracking-wide text-slate-400',
+    );
+  });
 });

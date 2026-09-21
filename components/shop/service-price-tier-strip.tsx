@@ -196,9 +196,9 @@ export default function ServicePriceTierStrip({
   }
 
   return (
-    <div className="border-t border-blue-100 bg-[#f8fbff] p-3 sm:p-4">
+    <div className="border-t border-slate-200 bg-white p-3 sm:p-4">
       <div
-        className="mb-4 inline-flex rounded-lg border border-blue-200 bg-white p-1 shadow-sm"
+        className="mb-3 inline-flex rounded-[10px] bg-slate-100 p-[3px]"
         aria-label="Pricing method"
       >
         {(["fixed", "range"] as const).map((mode) => (
@@ -207,10 +207,10 @@ export default function ServicePriceTierStrip({
             type="button"
             aria-pressed={draft.mode === mode}
             onClick={() => onChange({ ...draft, mode })}
-            className={`cursor-pointer rounded-md px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
+            className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/50 ${
               draft.mode === mode
                 ? "bg-blue-600 text-white shadow-sm"
-                : "text-blue-700 hover:bg-blue-50 hover:text-blue-900"
+                : "text-slate-500 hover:bg-white hover:text-slate-800"
             }`}
           >
             {mode === "fixed" ? "Fixed price" : "Price range"}
@@ -218,15 +218,18 @@ export default function ServicePriceTierStrip({
         ))}
       </div>
 
-      <p className="mb-3 max-w-4xl text-[11px] leading-relaxed text-slate-600">
-        {draft.mode === "fixed"
-          ? "Set one labor-and-parts total per vehicle group."
-          : "Set the expected minimum and maximum labor-and-parts total per vehicle group."}{" "}
-        Leave a group blank to use the standard estimate. Tax and fees are
-        added at checkout; booking still places only the standard $20 hold.
-      </p>
+      <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 sm:p-4">
+        <p className="mb-4 max-w-4xl text-[13px] leading-[1.55] text-slate-500">
+          <span className="font-semibold text-slate-700">
+            {draft.mode === "fixed"
+              ? "Set one labor-and-parts total per vehicle group."
+              : "Set the expected minimum and maximum labor-and-parts total per vehicle group."}
+          </span>{" "}
+          Leave a group blank to use the standard estimate. Tax and fees are
+          added at checkout; booking still places only the standard $20 hold.
+        </p>
 
-      <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-2 gap-4">
         {FIXED_PRICE_GROUPS.map((group) => {
           const tier = group.tiers[0];
           const declined = group.tiers.every((item) => declinedTiers.has(item));
@@ -234,8 +237,8 @@ export default function ServicePriceTierStrip({
           if (declined) {
             return (
               <div key={group.id}>
-                <p className="mb-1 text-xs font-semibold text-slate-800">{group.name}</p>
-                <div className="flex h-10 items-center rounded-lg border border-slate-200 bg-slate-100 px-3 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+                <p className="mb-1.5 text-[13px] font-semibold text-slate-800">{group.name}</p>
+                <div className="flex h-11 items-center rounded-[10px] border border-slate-200 bg-slate-100 px-3 text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                   Not serviced
                 </div>
               </div>
@@ -244,7 +247,7 @@ export default function ServicePriceTierStrip({
 
           return (
             <fieldset key={group.id} className="min-w-0">
-              <legend className="mb-1 text-xs font-semibold text-slate-800">
+              <legend className="mb-1.5 text-[13px] font-semibold text-slate-800">
                 {group.name}
               </legend>
               {draft.mode === "fixed" ? (
@@ -256,7 +259,7 @@ export default function ServicePriceTierStrip({
                   onChange={(value) => setFixed(group, value)}
                 />
               ) : (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-2 gap-3">
                   <MoneyInput
                     id={`${id}-minimum`}
                     label={`Minimum price for ${group.name}`}
@@ -278,6 +281,7 @@ export default function ServicePriceTierStrip({
             </fieldset>
           );
         })}
+        </div>
       </div>
     </div>
   );
@@ -301,15 +305,18 @@ function MoneyInput({
   return (
     <div>
       {visibleLabel ? (
-        <label htmlFor={id} className="mb-1 block text-[10px] font-semibold text-blue-800">
+        <label
+          htmlFor={id}
+          className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-slate-400"
+        >
           {visibleLabel}
         </label>
       ) : null}
       <label
         htmlFor={id}
-        className="flex h-10 items-center rounded-lg border border-blue-200 bg-white transition-colors focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/15"
+        className="flex h-11 items-center rounded-[10px] border border-slate-200 bg-white transition-colors focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-500/15"
       >
-        <span className="pl-3 pr-1 text-xs text-slate-500">$</span>
+        <span className="pl-3 pr-1 text-[13px] font-medium text-slate-400">$</span>
         {visibleLabel ? null : <span className="sr-only">{label}</span>}
         <FixedCentCurrencyInput
           id={id}
@@ -318,7 +325,7 @@ function MoneyInput({
           allowEmpty
           placeholder={placeholder}
           aria-label={label}
-          className="h-full w-full min-w-0 bg-transparent pr-2 text-xs text-slate-900 outline-none placeholder:text-slate-400"
+          className="h-full w-full min-w-0 bg-transparent pr-2 text-[13px] text-slate-900 outline-none placeholder:text-slate-400"
         />
       </label>
     </div>

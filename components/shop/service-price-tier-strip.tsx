@@ -226,7 +226,7 @@ export default function ServicePriceTierStrip({
         added at checkout; booking still places only the standard $20 hold.
       </p>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3">
         {FIXED_PRICE_GROUPS.map((group) => {
           const tier = group.tiers[0];
           const declined = group.tiers.every((item) => declinedTiers.has(item));

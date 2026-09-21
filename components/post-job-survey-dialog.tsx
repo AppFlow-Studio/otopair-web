@@ -8110,22 +8110,27 @@ function ApprovalStatusPanel({
     ? `$${(workflow.mechanicSetPriceCents / 100).toFixed(2)}`
     : null;
   const [confirmingRelease, setConfirmingRelease] = useState(false);
-  const [busyAction, setBusyAction] = useState<null | "start" | "release" | "withdraw">(null);
+  const [busyAction, setBusyAction] = useState<
+    null | "start" | "release" | "withdraw" | "continue"
+  >(null);
   const [actionError, setActionError] = useState<string | null>(null);
   // No auto-dismiss: every state requires an explicit mechanic action
-  // (Start work, Withdraw, Revise, Release). Auto-closing the dialog would
-  // strand the booking at live_stage=inspection_complete with no obvious
+  // (Confirm, Withdraw, Revise, Release, Continue). Auto-closing the dialog
+  // would strand the booking at live_stage=inspection_complete with no obvious
   // path forward on the dashboard.
 
   async function runAction(
-    kind: "start" | "release" | "withdraw",
+    kind: "start" | "release" | "withdraw" | "continue",
     fn: () => Promise<void>,
   ) {
     setActionError(null);
     setBusyAction(kind);
     try {
       await fn();
-      if (kind === "start" || kind === "release") {
+      if (kind === "start" || kind === "release" || kind === "continue") {
+        // "continue" resolves the declined estimate to a startable state, so
+        // like a confirm/release it has nothing left to show — close and let
+        // the booking's dedicated Start Job button take it from here.
         onDismiss();
       } else if (kind === "withdraw") {
         // Withdraw reverts the booking to a no-open-approval state, so this
@@ -8190,6 +8195,9 @@ function ApprovalStatusPanel({
             </div>
             <p className="mt-1 text-[13px] text-emerald-900/80">
               The customer&apos;s hold has been updated{setPrice ? ` to ${setPrice}` : ""}.
+              {cycle !== "mid_job" && workflow.carIsAtShop
+                ? " Start the job from the booking whenever you're ready."
+                : ""}
             </p>
             {cycle === "mid_job" ? (
               <button
@@ -8201,6 +8209,20 @@ function ApprovalStatusPanel({
                 )}
               >
                 Continue
+              </button>
+            ) : workflow.carIsAtShop ? (
+              // The car is here and the price is confirmed — confirming here does
+              // NOT start the job. The mechanic begins it from the dedicated
+              // Start Job button on the booking. So this just closes.
+              <button
+                type="button"
+                onClick={onDismiss}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                )}
+              >
+                Done
               </button>
             ) : (
               <button
@@ -8215,7 +8237,7 @@ function ApprovalStatusPanel({
                 {busyAction === "start" ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
+                Confirm booking →
               </button>
             )}
           </div>
@@ -8271,25 +8293,40 @@ function ApprovalStatusPanel({
                 ? `Final billing confirmed${setPrice ? ` · ${setPrice}` : ""}. Capture is processing.`
                 : cycle === "mid_job"
                   ? `Added scope confirmed${setPrice ? ` · ${setPrice}` : ""}.`
-                  : workflow.startWorkBeginsJob
-                    ? `You're cleared to start work${setPrice ? ` · ${setPrice}` : ""}.`
+                  : workflow.carIsAtShop
+                    ? `Confirmed${setPrice ? ` · ${setPrice}` : ""}. Start the job from the booking whenever you're ready.`
                     : `Price locked in${setPrice ? ` · ${setPrice}` : ""}. Confirm the booking — you can start work once the vehicle is here.`}
             </p>
             {cycle === "pre_job" ? (
-              <button
-                type="button"
-                onClick={() => void runAction("start", workflow.onStartWork)}
-                disabled={busyAction === "start"}
-                className={cn(
-                  drawerPrimaryButtonClassName,
-                  "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
-                )}
-              >
-                {busyAction === "start" ? (
-                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                ) : null}
-                {workflow.startWorkBeginsJob ? "Start work →" : "Confirm booking →"}
-              </button>
+              workflow.carIsAtShop ? (
+                // Confirmed + car here: this panel confirms only. Starting the
+                // job is the dedicated Start Job button on the booking.
+                <button
+                  type="button"
+                  onClick={onDismiss}
+                  className={cn(
+                    drawerPrimaryButtonClassName,
+                    "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                  )}
+                >
+                  Done
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => void runAction("start", workflow.onStartWork)}
+                  disabled={busyAction === "start"}
+                  className={cn(
+                    drawerPrimaryButtonClassName,
+                    "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
+                  )}
+                >
+                  {busyAction === "start" ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  Confirm booking →
+                </button>
+              )
             ) : (
               <button
                 type="button"
@@ -8400,19 +8437,23 @@ function ApprovalStatusPanel({
                 <>
                   {/* Two forward paths lead. Continuing with the original scope
                       is the low-friction default (the declined lines were already
-                      reverted server-side, so this proceeds at the original
-                      ceiling), so it takes the filled primary slot; revising sits
+                      reverted server-side); it lifts the booking out of the
+                      declined dead-end into a startable state, then closes — the
+                      mechanic begins from the booking's dedicated Start Job
+                      button. It takes the filled primary slot; revising sits
                       just under it. */}
                   <button
                     type="button"
-                    onClick={() => void runAction("start", workflow.onStartWork)}
-                    disabled={busyAction === "start"}
+                    onClick={() =>
+                      void runAction("continue", workflow.onContinueOriginalScope)
+                    }
+                    disabled={busyAction === "continue"}
                     className={cn(
                       drawerPrimaryButtonClassName,
                       "mt-4 h-10 w-full rounded-lg px-5 text-[13px]",
                     )}
                   >
-                    {busyAction === "start" ? (
+                    {busyAction === "continue" ? (
                       <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                     ) : null}
                     Continue with original services

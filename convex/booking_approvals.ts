@@ -1109,6 +1109,53 @@ export const applyApprovalDecision = mutation({
 });
 
 /**
+ * "Continue with original services" — the shop's answer to a DECLINED pre/mid-job
+ * estimate when it wants to proceed with just the originally-booked scope instead
+ * of revising or releasing the vehicle.
+ *
+ * applyApprovalDecision's declined branch already reverted the added lines this
+ * cycle introduced (kept as `declined` custom_jobs for audit, stripped from the
+ * price). All that's left is to lift the booking out of the dead-end `*_declined`
+ * payment state so it can start/continue at the original scope: roll the price
+ * back to the standing approved ceiling — or the customer's pre-authorized
+ * disclosed budget when there's no prior approval — and restore a startable
+ * approval state. This mirrors `_revertToPriorCeilingAfterExpiry`, which does
+ * exactly this for an estimate the customer let lapse.
+ *
+ * Shop-staff gated. Idempotent: a booking that isn't sitting on a declined
+ * estimate is returned untouched, so a double-tap can never clobber a live
+ * approval.
+ */
+export const continueAtOriginalScope = mutation({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const { booking } = await requireShopStaffForBooking(ctx, args.bookingId);
+    const pas = booking.payment_approval_state as string | undefined;
+    const DECLINED = new Set(["pre_job_declined", "mid_job_declined"]);
+    if (!pas || !DECLINED.has(pas)) {
+      // Not on a declined estimate — nothing to resolve. Report the live state
+      // so the caller can proceed straight to starting the job.
+      return { ok: true, state: pas ?? "none" };
+    }
+    const ceiling =
+      (booking.running_approved_ceiling_cents as number | undefined) ??
+      (booking.disclosed_range_high_cents as number | undefined);
+    const now = Date.now();
+    const patch: any = {
+      // Both targets clear the in_progress guard in applyBookingStatusTransition;
+      // "none" is the legacy fallback for a booking that never had a ceiling.
+      payment_approval_state: ceiling != null ? "pre_job_approved" : "none",
+      updated_at: now,
+    };
+    // Capture at completion honors min(ceiling, actuals), so pinning the set
+    // price to the ceiling can only ever cap — never inflate — what's charged.
+    if (ceiling != null) patch.mechanic_set_price_cents = ceiling;
+    await ctx.db.patch(args.bookingId, patch);
+    return { ok: true, state: patch.payment_approval_state as string };
+  },
+});
+
+/**
  * Records an approved pre/mid-job over-range estimate and parks the booking in
  * `reauth_required` so the customer confirms the new hold on their CHOSEN
  * payment method next. Unlike `applyApprovalDecision`, it does NOT schedule the

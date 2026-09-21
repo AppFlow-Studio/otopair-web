@@ -3052,6 +3052,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
           layoverNotes={[
+            // Diagnostic worksheet findings seed the post-job findings step so a
+            // diagnostic wrapping up here doesn't retype what the mechanic already
+            // wrote on the checklist.
+            (job as any)?.diagnosticFindingsNote ?? "",
             job?.jobActuals?.inProgressNotes ?? "",
             // The "why the added scope / why this adjustment" reasons the
             // mechanic already gave for agreed changes — folded in so they seed

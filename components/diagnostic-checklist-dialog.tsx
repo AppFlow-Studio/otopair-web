@@ -5,7 +5,6 @@ import { useMutation, useQuery } from "convex/react";
 import {
   ArrowRight,
   Check,
-  CheckCircle2,
   ClipboardCheck,
   Loader2,
   PauseCircle,
@@ -171,7 +170,6 @@ export default function DiagnosticChecklistDialog({
   const attachRecommendation = useMutation(api.bookings.attachRecommendedService);
   const parkForInfo = useMutation(api.bookings.parkDiagnosticForInfo);
   const resumeFollowUp = useMutation(api.bookings.resumeDiagnosticFollowUp);
-  const completeDiagnostic = useMutation(api.bookings.completeDiagnosticBooking);
   const shopServices = useQuery(api.schedule.getShopServicesWithCategories);
 
   const accent = SYSTEM_ACCENT[system] ?? SYSTEM_ACCENT.not_sure;
@@ -225,9 +223,9 @@ export default function DiagnosticChecklistDialog({
     return { checked, pending, total: checklist.length };
   }, [checklist]);
 
-  // Every item resolved (nothing left "pending"). Matches the server gate in
-  // `completeDiagnosticBooking`, so the terminal action stays disabled until the
-  // mutation would accept it.
+  // Every item resolved (nothing left "pending"). Gates the wrap-up button so the
+  // mechanic resolves every checklist item before handing off to the post-job
+  // survey.
   const allResolved = useMemo(
     () => checklist.length > 0 && checklist.every((i) => i.status !== "pending"),
     [checklist],
@@ -326,26 +324,26 @@ export default function DiagnosticChecklistDialog({
     }
   }
 
-  // Terminal wrap-up. Diagnostic-only bookings complete right here; combined
-  // bookings hand off to the post-job survey so the other services get billed.
+  // Terminal wrap-up. Every diagnostic — solo or combined — now hands off to the
+  // shared post-job survey (findings recap → confirm price → collect payment), so
+  // the charge settles the same way as any other job instead of a one-tap finish
+  // that only ever captured the $20 deposit. Persist any unsaved findings first so
+  // they seed the survey's findings step.
   async function handleWrapUp() {
     if (!allResolved) return;
-    if (!isDiagnosticOnly) {
+    if (!bookingId) {
       onContinueToPostJob?.();
       return;
     }
-    if (!bookingId) return;
     setIsWrapping(true);
     try {
-      // Persist any unsaved findings before the booking flips to completed.
       if (findingsDraft !== (findingsNote ?? "")) {
         await updateFindings({ bookingId, note: findingsDraft });
       }
-      await completeDiagnostic({ bookingId });
-      onCompleted("Diagnostic completed");
+      onContinueToPostJob?.();
     } catch (err) {
       onError?.(
-        err instanceof Error ? err.message : "Could not complete diagnostic.",
+        err instanceof Error ? err.message : "Could not save findings.",
       );
     } finally {
       setIsWrapping(false);
@@ -708,7 +706,7 @@ export default function DiagnosticChecklistDialog({
                     Check off every item to finish
                     {counts.pending > 0 ? ` — ${counts.pending} left` : ""}.
                   </p>
-                ) : !isDiagnosticOnly && additionalServiceNames.length > 0 ? (
+                ) : additionalServiceNames.length > 0 ? (
                   <p className="mb-2 text-[12px] font-medium text-muted-foreground">
                     Next: capture{" "}
                     <span className="font-semibold text-foreground">
@@ -716,25 +714,23 @@ export default function DiagnosticChecklistDialog({
                     </span>{" "}
                     in the post-job survey.
                   </p>
-                ) : null}
+                ) : (
+                  <p className="mb-2 text-[12px] font-medium text-muted-foreground">
+                    Next: wrap up and collect payment in the post-job survey.
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={handleWrapUp}
                   disabled={!allResolved || isWrapping}
-                  className={`inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                    isDiagnosticOnly ? accent.solid : "bg-foreground hover:bg-foreground/90"
-                  }`}
+                  className="inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-foreground/90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {isWrapping ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : isDiagnosticOnly ? (
-                    <CheckCircle2 className="h-4 w-4" />
                   ) : (
                     <ArrowRight className="h-4 w-4" />
                   )}
-                  {isDiagnosticOnly
-                    ? "Complete diagnostic"
-                    : "Continue to post-job survey"}
+                  Continue to post-job survey
                 </button>
               </div>
             </div>

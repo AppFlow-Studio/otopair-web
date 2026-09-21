@@ -423,26 +423,7 @@ export default function MechanicDashboard() {
     if (!dashboard) return [];
     const items: NeedItem[] = [];
 
-    // 1) In progress — finish what's on the lift.
-    for (const job of dashboard.todaysJobs) {
-      if (job.status !== "in_progress") continue;
-      const id = String(job._id);
-      const isDiag = !!(job as any).diagnosticSystem;
-      items.push({
-        key: `active-${id}`,
-        kind: "active",
-        dot: "success",
-        primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
-        meta: "in progress",
-        action: {
-          label: isDiag ? "Diagnostic" : "Complete",
-          tone: isDiag ? "warning" : "primary",
-          run: () => openWorkflowDialog(id, "postjob"),
-        },
-        onOpen: () => openWorkflowDialog(id, "postjob"),
-      });
-    }
+    // 1) In progress — shown only in "In the bay," never as awaiting work.
 
     // 2) Ready to start — the vehicle is here.
     for (const job of dashboard.todaysJobs) {
@@ -477,6 +458,7 @@ export default function MechanicDashboard() {
 
     // 3) Diagnostics needing follow-up.
     for (const job of diagnosticsNeedingFollowUp ?? []) {
+      if (job.status === "in_progress") continue;
       const id = String(job._id);
       items.push({
         key: `diag-${id}`,

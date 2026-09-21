@@ -19,6 +19,7 @@ import {
   Check,
   ChevronDown,
   ChevronRight,
+  Copy,
   Info,
   Loader2,
   Lock,
@@ -1161,6 +1162,40 @@ export default function PostJobSurveyDialog({
       shopSetBaseDefaultCents={shopSetBaseDefaultCents ?? null}
       bookingServiceLines={bookingServiceLines ?? null}
     />
+  );
+}
+
+// Pill-styled button that copies the vehicle-config block (YMMT · engine/spec ·
+// VIN) so the mechanic can paste it straight into a parts-sourcing lookup —
+// mirrors the "Copy config" affordance on the booking drawer's passport card.
+function ConfigCopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async (e) => {
+        e.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(text);
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1500);
+        } catch {
+          /* clipboard unavailable — ignore */
+        }
+      }}
+      className="inline-flex shrink-0 items-center gap-1 rounded-full border border-primary/15 bg-background/70 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.08em] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+      title="Copy vehicle config"
+    >
+      {copied ? (
+        <>
+          <Check className="h-3 w-3 text-emerald-600" aria-hidden="true" /> Copied
+        </>
+      ) : (
+        <>
+          <Copy className="h-3 w-3" aria-hidden="true" /> Copy config
+        </>
+      )}
+    </button>
   );
 }
 
@@ -3209,6 +3244,20 @@ function PostJobSurveyDialogBody({
     );
   }
 
+  // Copyable vehicle-config block for the header pill — YMMT · engine/spec ·
+  // VIN — so the mechanic can paste it straight into a parts-sourcing lookup.
+  const configCopyText = passportData
+    ? [
+        passportData.vehicle_label,
+        ...(passportData.vehicle_spec_label
+          ? [passportData.vehicle_spec_label]
+          : []),
+        ...(passportData.vin ? [`VIN: ${passportData.vin}`] : []),
+      ]
+        .filter(Boolean)
+        .join("\n")
+    : "";
+
   return (
     <SurveyDialogShell
       open={open}
@@ -3223,7 +3272,9 @@ function PostJobSurveyDialogBody({
         {stepHeader}
 
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-5 py-6 sm:px-10 sm:py-10">
-          {passportData?.vehicle_spec_label || prefillData?.serviceName ? (
+          {passportData?.vehicle_spec_label ||
+          prefillData?.serviceName ||
+          configCopyText ? (
             <div className="mx-auto mb-7 flex w-full max-w-xl flex-wrap items-center justify-center gap-x-2.5 gap-y-1 rounded-full border border-primary/10 bg-muted/40 px-4 py-2">
               {prefillData?.serviceName ? (
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-primary">
@@ -3238,6 +3289,15 @@ function PostJobSurveyDialogBody({
                 <span className="truncate text-[12px] font-medium text-foreground/70">
                   {passportData.vehicle_spec_label}
                 </span>
+              ) : null}
+              {configCopyText ? (
+                <>
+                  {prefillData?.serviceName ||
+                  passportData?.vehicle_spec_label ? (
+                    <span className="h-3 w-px bg-primary/15" aria-hidden />
+                  ) : null}
+                  <ConfigCopyButton text={configCopyText} />
+                </>
               ) : null}
             </div>
           ) : null}

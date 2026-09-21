@@ -124,6 +124,25 @@ export type ActivityEvent =
         amountCents: number;
         cardBrand: string | null;
         last4: string | null;
+        /** "cancellation_fee" = the pickup / late-cancel forfeit ($20 deposit),
+         *  not a service charge. Mirror of the server union in
+         *  convex/booking_activity.ts — keep the two in lockstep. */
+        kind: "service" | "cancellation_fee";
+      };
+    }
+  | {
+      type: "pickup_requested";
+      at: number;
+      actor: ActivityActor;
+      data: { reason: string | null };
+    }
+  | {
+      type: "pickup_response";
+      at: number;
+      actor: ActivityActor;
+      data: {
+        response: "acknowledged" | "bringing_out" | "declined";
+        note: string | null;
       };
     };
 
@@ -188,6 +207,26 @@ export function formatEditType(editType: string): string {
 
 export function isForcedDelayReason(reason?: string | null): boolean {
   return reason?.startsWith("forced_delay_") ?? false;
+}
+
+/** Timeline title for the shop's answer to a "pick up my car" request. */
+export function formatPickupResponse(response: string): string {
+  switch (response) {
+    case "acknowledged":
+      return "Shop acknowledged pickup";
+    case "bringing_out":
+      return "Bringing the car out";
+    case "declined":
+      return "Pickup declined";
+    default:
+      return "Pickup response";
+  }
+}
+
+/** Friendly title for the shop releasing a car for pickup. `waived` drops the
+ *  fee; the reason is the status_history reason on the release transition. */
+export function isPickupReleaseReason(reason?: string | null): boolean {
+  return reason === "shop_released_pickup" || reason === "shop_released_fee_waived";
 }
 
 export function humanizeStatus(

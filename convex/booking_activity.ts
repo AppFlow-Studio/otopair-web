@@ -136,9 +136,12 @@ type ActivityEvent =
       };
     }
   | {
-      /* The customer's card was charged at completion. Synthesized from the
-         payments row (there's no status_history / notification for capture), so
-         it also covers rows captured before this event existed. */
+      /* The customer's card was charged. Synthesized from the payments row
+         (there's no status_history / notification for capture), so it also
+         covers rows captured before this event existed. `kind` disambiguates a
+         normal service charge from a pickup / late-cancel fee — the latter is
+         the $20 deposit captured when a car is released for pickup, and reads
+         as a fee, not a service payment. */
       type: "payment_captured";
       at: number;
       actor: Actor;
@@ -146,6 +149,28 @@ type ActivityEvent =
         amountCents: number;
         cardBrand: string | null;
         last4: string | null;
+        kind: "service" | "cancellation_fee";
+      };
+    }
+  | {
+      /* Customer tapped "Request to cancel & pick up car" while the vehicle was
+         at the shop. Synthesized from the booking's own fields (single latest
+         round — the booking stores only one request/response pair), so the
+         pickup lifecycle is visible, not just the eventual "Cancelled". */
+      type: "pickup_requested";
+      at: number;
+      actor: Actor;
+      data: { reason: string | null };
+    }
+  | {
+      /* Shop's answer to the pickup request (acknowledge / bringing out /
+         decline). Synthesized from the booking's pickup_response fields. */
+      type: "pickup_response";
+      at: number;
+      actor: Actor;
+      data: {
+        response: "acknowledged" | "bringing_out" | "declined";
+        note: string | null;
       };
     };
 
@@ -425,6 +450,11 @@ export const getBookingActivityLog = query({
     // updated_at for rows captured before that field existed.
     const pay = payment as any;
     if (pay && typeof pay.captured_amount_cents === "number" && pay.captured_amount_cents > 0) {
+      // A capture on a cancelled / no-show booking is the pickup / late-cancel
+      // fee (the $20 deposit), never a service charge — label it as such so the
+      // timeline doesn't read a forfeit fee as "Payment collected" for work.
+      const isCancellationCapture =
+        booking.status === "cancelled" || booking.status === "no_show";
       events.push({
         type: "payment_captured",
         at: pay.captured_at_ms ?? pay.updated_at ?? createdAt,
@@ -433,6 +463,36 @@ export const getBookingActivityLog = query({
           amountCents: pay.captured_amount_cents,
           cardBrand: pay.card_brand ?? null,
           last4: pay.card_last4 ?? null,
+          kind: isCancellationCapture ? "cancellation_fee" : "service",
+        },
+      });
+    }
+
+    // ── 7. Pickup / cancel-at-shop request round trip ───────────────────
+    // Customer "request to cancel & pick up car" + the shop's answer live only
+    // as fields on the booking (latest round). Synthesize them so the lifecycle
+    // — request → shop response → release — is visible, not just the final
+    // status flip. The release itself is the status_change to "cancelled" with
+    // reason shop_released_*, and the fee (if any) is the payment_captured above.
+    if (typeof booking.cancel_requested_at_ms === "number") {
+      events.push({
+        type: "pickup_requested",
+        at: booking.cancel_requested_at_ms,
+        actor: await resolveActor(booking.user_id ?? null),
+        data: { reason: booking.cancel_request_reason ?? null },
+      });
+    }
+    if (
+      booking.pickup_response != null &&
+      typeof booking.pickup_responded_at_ms === "number"
+    ) {
+      events.push({
+        type: "pickup_response",
+        at: booking.pickup_responded_at_ms,
+        actor: await resolveActor(booking.pickup_response_by ?? null),
+        data: {
+          response: booking.pickup_response,
+          note: booking.pickup_response_note ?? null,
         },
       });
     }

@@ -2968,6 +2968,12 @@ export default defineSchema({
     pickup_responded_at_ms: v.optional(v.number()),
     pickup_response_by: v.optional(v.id("users")),
     pickup_response_note: v.optional(v.string()),
+    // Set when the shop parks a pickup request without releasing the car (a
+    // "Decline"): the request drops out of the live pending queues but the
+    // booking stays at the shop. A release routes through the cancel
+    // transition instead (booking leaves vehicle_at_shop, so it drops
+    // naturally); a fresh customer re-request clears this back to undefined.
+    pickup_request_resolved_at_ms: v.optional(v.number()),
     reschedule_count: v.optional(v.number()),
     // Off-catalog work on this booking. The mechanic's typed name plus how long
     // they expect it to take.

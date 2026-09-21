@@ -847,6 +847,9 @@ export const requestCancellationAtShop = mutation({
       pickup_responded_at_ms: undefined,
       pickup_response_by: undefined,
       pickup_response_note: undefined,
+      // A prior "Decline" may have parked the request — clear it so this fresh
+      // request re-enters the pending queues.
+      pickup_request_resolved_at_ms: undefined,
       updated_at: now,
     } as any);
 
@@ -921,6 +924,25 @@ const PICKUP_RESPONSE_PUSH_COPY: Record<
   },
 };
 
+// Customer push when the shop actually releases the car (the terminal step).
+// Copy varies with whether a cancellation fee was charged or waived.
+function pickupReleasePushCopy(
+  feeCents: number,
+  waived: boolean,
+): { title: string; body: string } {
+  if (waived || feeCents <= 0) {
+    return {
+      title: "Your car's been released",
+      body: "The shop released your vehicle and closed out this booking — no cancellation fee.",
+    };
+  }
+  const fee = `$${(feeCents / 100).toFixed(2)}`;
+  return {
+    title: "Your car's been released",
+    body: `The shop released your vehicle and closed out this booking. A ${fee} cancellation fee was charged.`,
+  };
+}
+
 /**
  * Shop/mechanic answer to a customer's "request pickup" (the vehicle_at_shop
  * path above). Records the response on the booking — which the customer's
@@ -953,18 +975,33 @@ export const respondToPickupRequest = mutation({
       throw new Error("The customer hasn't requested pickup for this booking.");
     }
 
+    // Decline is the definitive "we can't release yet" answer, so it must carry
+    // a reason (surfaced to the customer) and it parks the request — the car
+    // stays at the shop but the live alert clears. Acknowledge / bringing_out
+    // are heads-ups that keep the request open until an explicit release.
+    const note = args.note?.trim() || undefined;
+    if (args.response === "declined" && !note) {
+      throw new Error("Please add a short reason so the customer knows why.");
+    }
+
     const now = Date.now();
     await ctx.db.patch(args.bookingId, {
       pickup_response: args.response,
       pickup_responded_at_ms: now,
       pickup_response_by: user._id,
-      pickup_response_note: args.note,
+      pickup_response_note: note,
+      pickup_request_resolved_at_ms:
+        args.response === "declined" ? now : booking.pickup_request_resolved_at_ms,
       updated_at: now,
     } as any);
 
     // Fresh outbox row per distinct response so a follow-up (e.g. "bringing_out"
     // after "acknowledged") pushes again — the response is baked into the key.
     const copy = PICKUP_RESPONSE_PUSH_COPY[args.response];
+    // Fold the shop's reason into the decline body so the customer sees the
+    // "why" in the notification itself, not just on the card.
+    const body =
+      args.response === "declined" && note ? `${copy.body} (${note})` : copy.body;
     await enqueueNotificationOutbox(ctx, {
       userId: booking.user_id,
       bookingId: booking._id,
@@ -974,9 +1011,9 @@ export const respondToPickupRequest = mutation({
       dedupeKey: `pickup-response:${String(booking._id)}:${args.response}`,
       payload: {
         title: copy.title,
-        body: copy.body,
+        body,
         response: args.response,
-        note: args.note ?? null,
+        note: note ?? null,
         data: {
           deepLink: `otopair://booking/${String(booking._id)}`,
           bookingId: String(booking._id),
@@ -985,6 +1022,174 @@ export const respondToPickupRequest = mutation({
     });
 
     return { responded: true };
+  },
+});
+
+/**
+ * QUERY: getPickupReleasePreview
+ * Shop-facing fee disclosure for releasing a car after a pickup request. The
+ * release dialog reads this reactively so it always shows the live
+ * cancellation fee (it can rise as the appointment window passes). Mirrors the
+ * fee math in cancelBooking / markNoShow. Returns null when the caller isn't
+ * shop staff or the booking isn't releasable.
+ */
+export const getPickupReleasePreview = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking || booking.status !== "vehicle_at_shop") return null;
+    try {
+      await requireShopStaff(ctx, user._id, booking.shop_id);
+    } catch {
+      return null;
+    }
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: Date.now(),
+      policy: resolvePolicy(shop),
+      intent: "cancel",
+    });
+    const customer = booking.user_id ? await ctx.db.get(booking.user_id) : null;
+    const vehicle = booking.vin ? await resolveVehicleLabel(ctx, booking.vin) : null;
+    return {
+      feeCents,
+      kind,
+      customerName: customer ? formatCustomerName(customer) : null,
+      vehicle: vehicle?.short ?? vehicle?.full ?? null,
+    };
+  },
+});
+
+/**
+ * MUTATION: releaseVehicleForPickup — the terminal step of the pickup flow.
+ * The shop hands the car back, which closes the booking out as a cancellation:
+ * status → cancelled with the computed fee captured (or voided when waived).
+ * Routes through applyBookingStatusTransition so settlement, timeline logging,
+ * slot release, and alert cleanup all run centrally (see markNoShow for the
+ * same pattern). Shop-staff only.
+ */
+export const releaseVehicleForPickup = mutation({
+  args: {
+    bookingId: v.id("bookings"),
+    /** Waive the cancellation fee (void the hold instead of capturing). */
+    waiveFee: v.optional(v.boolean()),
+    /** The fee staff were shown before confirming; server recomputes and
+     *  rejects if the real fee is now higher so the dialog re-discloses. */
+    feeAcknowledgedCents: v.optional(v.number()),
+    /** Optional free-form note recorded with the release. */
+    note: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ released: boolean; feeCents: number; kind: string; waived: boolean }> => {
+    const user = await getCurrentUser(ctx);
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    await requireShopStaff(ctx, user._id, booking.shop_id);
+    if (booking.status !== "vehicle_at_shop") {
+      throw new Error("This car isn't at the shop, so there's nothing to release.");
+    }
+
+    const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+    const appointmentStartMs =
+      booking.scheduled_date && booking.scheduled_time
+        ? toBookingDateTimeMs(
+            booking.scheduled_date,
+            booking.scheduled_time,
+            await getShopTimezone(ctx, booking.shop_id),
+          )
+        : null;
+    const { feeCents, kind } = computeCancellationFee({
+      appointmentStartMs,
+      nowMs: Date.now(),
+      policy: resolvePolicy(shop),
+      intent: "cancel",
+    });
+
+    // Stale-fee guard: if the fee rose past what staff were shown (e.g. the
+    // appointment window elapsed mid-flow), reject so the dialog re-discloses.
+    if (
+      typeof args.feeAcknowledgedCents === "number" &&
+      args.feeAcknowledgedCents < feeCents
+    ) {
+      throw new Error(
+        "The cancellation fee changed. Please review the updated amount and try again.",
+      );
+    }
+
+    const waived = args.waiveFee === true;
+    const chargeCents = waived ? 0 : feeCents;
+
+    // Route into the shared cancel transition — it partial-captures the fee (or
+    // voids the whole hold when 0), writes booking_status_history, releases the
+    // slot, and resolves stale alerts. Leaving vehicle_at_shop also drops this
+    // booking from every pickup queue, so the live alert clears.
+    await applyBookingStatusTransition(ctx, {
+      booking,
+      newStatus: "cancelled",
+      changedBy: user._id,
+      reason: waived ? "shop_released_fee_waived" : "shop_released_pickup",
+      cancellationFeeCents: chargeCents,
+      cancellationKind: waived ? "waived" : kind,
+    });
+
+    // Settle the open front-desk request row so the desk feed clears too
+    // (applyBookingStatusTransition only sweeps customer_late* rows).
+    const requestRows = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+      .collect();
+    const settleNow = Date.now();
+    for (const row of requestRows) {
+      if (
+        row.category === "customer_cancel_pickup_request" &&
+        row.resolved_at == null
+      ) {
+        await ctx.db.patch(row._id, { resolved_at: settleNow });
+      }
+    }
+
+    // Tell the customer their car's out and the booking's closed.
+    const copy = pickupReleasePushCopy(chargeCents, waived);
+    await enqueueNotificationOutbox(ctx, {
+      userId: booking.user_id,
+      bookingId: booking._id,
+      shopId: booking.shop_id,
+      channel: "push",
+      category: "pickup_released",
+      dedupeKey: `pickup-released:${String(booking._id)}`,
+      payload: {
+        title: copy.title,
+        body: copy.body,
+        feeCents: chargeCents,
+        waived,
+        note: args.note?.trim() || null,
+        data: {
+          deepLink: `otopair://booking/${String(booking._id)}`,
+          bookingId: String(booking._id),
+        },
+      },
+    });
+
+    return {
+      released: true,
+      feeCents: chargeCents,
+      kind: waived ? "waived" : kind,
+      waived,
+    };
   },
 });
 
@@ -1015,7 +1220,9 @@ export const getPendingPickupRequests = query({
 
     const forShop = atShop.filter(
       (b: any) =>
-        String(b.shop_id) === String(primary.shopId) && b.cancel_requested_at_ms,
+        String(b.shop_id) === String(primary.shopId) &&
+        b.cancel_requested_at_ms &&
+        !b.pickup_request_resolved_at_ms,
     );
 
     return await Promise.all(
@@ -15491,7 +15698,12 @@ export const getOpenPickupRequests = query({
       .collect();
 
     const open = bookings
-      .filter((b: any) => !!b.cancel_requested_at_ms && !b.pickup_response)
+      .filter(
+        (b: any) =>
+          !!b.cancel_requested_at_ms &&
+          !b.pickup_response &&
+          !b.pickup_request_resolved_at_ms,
+      )
       .sort(
         (a: any, b: any) =>
           (a.cancel_requested_at_ms ?? 0) - (b.cancel_requested_at_ms ?? 0),

@@ -1235,6 +1235,7 @@ function PostJobSurveyDialogBody({
     cycle,
   });
   const [submittedForApproval, setSubmittedForApproval] = useState(false);
+  const [awaitingHoldConfirmation, setAwaitingHoldConfirmation] = useState(false);
   // When the mechanic clicks "Revise estimate" on a declined / SLA-expired
   // status panel we drop them back to the form. The booking row is still in a
   // terminal *_declined / sla_expired state, so without this guard the
@@ -1255,8 +1256,23 @@ function PostJobSurveyDialogBody({
     } else {
       manualReviseRef.current = false;
       setSubmittedForApproval(false);
+      setAwaitingHoldConfirmation(false);
     }
   }, [open]);
+  // Keep the review screen and its submit button visible while the deferred
+  // card-hold update runs. Switching to the status panel before its query sees
+  // a settled state briefly rendered the generic "Nothing to confirm" view.
+  useEffect(() => {
+    if (
+      !awaitingHoldConfirmation ||
+      workflow.state === "none" ||
+      workflow.state === "hold_processing"
+    ) {
+      return;
+    }
+    setAwaitingHoldConfirmation(false);
+    setSubmittedForApproval(true);
+  }, [awaitingHoldConfirmation, workflow.state]);
   // Re-entry: if the dialog opens on a booking that already has an in-flight
   // approval for *this* cycle, jump straight to the status panel.
   // A mid-job dialog opened on a booking still at pre_job_approved /
@@ -2660,6 +2676,7 @@ function PostJobSurveyDialogBody({
     // The customer-side approval state then drives further UI (live
     // status banner inside this dialog after submit).
     if (cycle && bookingId) {
+      setAwaitingHoldConfirmation(true);
       const partsForApproval = normalizedParts.map((p) => ({
         part_name: p.part_name,
         brand: p.brand ?? undefined,
@@ -2800,12 +2817,13 @@ function PostJobSurveyDialogBody({
           onApprovalSubmitted?.(result as any);
           // Fixed-price bookings now run the SAME confirm-hold flow as any
           // estimate (the base is pinned, added scope is priced on top), so
-          // there's no longer a silent "audit-only" close path — every submit
-          // returns a real approval state and routes to the status panel.
-          setSubmittedForApproval(true);
+          // there's no longer a silent "audit-only" close path. The status
+          // panel waits for the card-hold result so the submit button owns the
+          // loading state instead of a transient empty panel.
         }
         return;
       } catch (err: any) {
+        setAwaitingHoldConfirmation(false);
         setError(err?.message ?? "Could not submit estimate. Try again.");
         return;
       }
@@ -3446,16 +3464,18 @@ function PostJobSurveyDialogBody({
               <button
                 type="button"
                 onClick={() => void handleFinalSubmit()}
-                disabled={isSubmitting}
+                disabled={isSubmitting || awaitingHoldConfirmation}
                 className={cn(
                   drawerPrimaryButtonClassName,
                   "h-10 rounded-lg px-5 text-[13px]"
                 )}
               >
-                {isSubmitting ? (
+                {isSubmitting || awaitingHoldConfirmation ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                {cycle
+                {awaitingHoldConfirmation
+                  ? "Confirming card hold…"
+                  : cycle
                   ? cycle === "post_job_reapproval"
                     ? "Confirm final"
                     : isEstimateCycle && isShopSet && fixedTotals

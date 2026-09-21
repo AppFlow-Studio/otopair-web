@@ -518,7 +518,12 @@ export default function MechanicDashboard() {
   const inProgressCount =
     dashboard?.todaysJobs.filter((job: any) => job.status === "in_progress").length ?? 0;
   const readyCount =
-    dashboard?.todaysJobs.filter((job: any) => job.status === "vehicle_at_shop").length ?? 0;
+    dashboard?.todaysJobs.filter(
+      (job: any) =>
+        job.status === "vehicle_at_shop" &&
+        job.hasDisclosedRange &&
+        ["in_range", "pre_job_approved"].includes(job.paymentApprovalState),
+    ).length ?? 0;
 
   if (dashboard === undefined) {
     return (

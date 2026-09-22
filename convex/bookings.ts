@@ -574,6 +574,37 @@ export const getByUserIdWithDetails = query({
           }
         }
 
+        // History-list classification so the consumer app can tell a real
+        // completed service from a cancelled-with-pickup booking that only
+        // captured the $20 forfeit fee (which today renders as e.g. a "$20
+        // Diagnostic Scan"). `historyAmountCents` is the amount to show on the
+        // row: the captured service total when completed, else the cancellation
+        // fee (0 when waived). Null outcome = non-terminal (not history yet).
+        const cancellationFeeCents =
+          typeof booking.cancellation_fee_cents === "number"
+            ? booking.cancellation_fee_cents
+            : null;
+        let historyOutcome:
+          | "completed"
+          | "cancelled_pickup"
+          | "cancelled"
+          | "no_show"
+          | null = null;
+        let historyAmountCents: number | null = null;
+        if (booking.status === "completed") {
+          historyOutcome = "completed";
+          historyAmountCents = booking.final_capture_amount_cents ?? null;
+        } else if (booking.status === "no_show") {
+          historyOutcome = "no_show";
+          historyAmountCents = cancellationFeeCents ?? 0;
+        } else if (booking.status === "cancelled") {
+          historyOutcome =
+            booking.cancel_requested_at_ms != null
+              ? "cancelled_pickup"
+              : "cancelled";
+          historyAmountCents = cancellationFeeCents ?? 0;
+        }
+
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -620,6 +651,14 @@ export const getByUserIdWithDetails = query({
           disclosed_range_high_cents: booking.disclosed_range_high_cents,
           payment_approval_state: booking.payment_approval_state,
           final_capture_amount_cents: booking.final_capture_amount_cents,
+          // Cancellation / pickup-fee context so the History tab can label a
+          // released-for-pickup booking as "Cancelled — pickup fee $20" (or
+          // "No fee" when waived) instead of a normal service. Raw fields for
+          // the fee amount + kind; derived helpers for the row itself.
+          cancellation_fee_cents: booking.cancellation_fee_cents ?? null,
+          cancellation_kind: booking.cancellation_kind ?? null,
+          historyOutcome,
+          historyAmountCents,
           // Shop-assigned invoice / work-order number — surfaced inline on
           // the booking card so the customer can quote it on support.
           invoice_number: booking.invoice_number,
@@ -1143,7 +1182,11 @@ export const releaseVehicleForPickup = mutation({
       changedBy: user._id,
       reason: waived ? "shop_released_fee_waived" : "shop_released_pickup",
       cancellationFeeCents: chargeCents,
-      cancellationKind: waived ? "waived" : kind,
+      // A waived release charges $0 — record it as "free" (the schema's
+      // cancellation_kind union is free|late_cancel|no_show and does NOT accept
+      // "waived", which would throw on the patch). The "shop_released_fee_waived"
+      // reason above is what marks it a waiver in the status-history audit.
+      cancellationKind: waived ? "free" : kind,
     });
 
     // Settle the open front-desk request row so the desk feed clears too
@@ -11675,6 +11718,14 @@ export const getJobDetail = query({
         );
       }
     }
+    // Single-service bookings can pre-fill each line with the labor the CUSTOMER
+    // WAS QUOTED (the booking's stamped `effectiveEstimatedLaborMinutes`), which
+    // is authoritative for what they agreed to. It reflects the mobile quote,
+    // which may have used a client labor value the backend resolvers don't
+    // reproduce — e.g. a diagnostic quoted at 1 hr while the catalog default is
+    // 0.5 hr and the tier estimate is 0.85 hr. Multi-service bookings have no
+    // per-service booked breakdown, so those keep the recompute chain below.
+    const singleService = (booking.service_ids ?? []).length === 1;
     const bookingServiceLines = (booking.service_ids ?? []).map((sid) => {
       const key = String(sid);
       const shopLine = shopSetLineById.get(key);
@@ -11690,9 +11741,11 @@ export const getJobDetail = query({
         all_in_low_cents: shopLine?.all_in_low_cents ?? null,
         all_in_high_cents: shopLine?.all_in_high_cents ?? null,
         all_in_default_cents: shopLine?.all_in_default_cents ?? null,
-        // Engine projection wins; else the vehicle/catalog labor-time fallback
-        // so shop-priced rows pre-fill with how long the service takes.
+        // The booked labor (single-service) wins so the estimate opens at the
+        // agreed time; else the engine projection, else the vehicle/catalog
+        // labor-time fallback so shop-priced rows pre-fill how long it takes.
         est_labor_minutes:
+          (singleService ? effectiveEstimatedLaborMinutes : null) ??
           estLaborMinutesById.get(key) ??
           fallbackLaborMinutesById.get(key) ??
           null,
@@ -11799,6 +11852,17 @@ export const getJobDetail = query({
       previousMechanicName,
       rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
       invoiceNumber: (booking as any).invoice_number ?? null,
+      // Pickup ("request to cancel & pick up car") round trip, surfaced so the
+      // booking drawer can show + act on it even after the request drops off the
+      // schedule board and the dashboard alert (which filter it once answered /
+      // aged). Active while the car is still vehicle_at_shop; a release routes
+      // through the cancel transition, so the booking leaves that status and the
+      // drawer panel naturally hides.
+      cancelRequestedAtMs: booking.cancel_requested_at_ms ?? null,
+      cancelRequestReason: booking.cancel_request_reason ?? null,
+      pickupResponse: booking.pickup_response ?? null,
+      pickupRespondedAtMs: booking.pickup_responded_at_ms ?? null,
+      pickupRequestResolvedAtMs: booking.pickup_request_resolved_at_ms ?? null,
       customerLateMonitor: lateMonitor && lateMonitor.status === "active" ? {
         pushEnqueuedAtMs: lateMonitor.push_enqueued_at_ms ?? null,
         smsEnqueuedAtMs: lateMonitor.sms_enqueued_at_ms ?? null,

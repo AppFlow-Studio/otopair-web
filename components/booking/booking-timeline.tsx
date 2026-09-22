@@ -20,7 +20,9 @@ import {
   formatCycleLabel,
   formatDecisionLabel,
   formatEditType,
+  formatPickupResponse,
   humanizeStatus,
+  isPickupReleaseReason,
 } from "@/lib/booking-activity-format";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
@@ -60,6 +62,9 @@ function statusChangeTitle(
     case "no_show":
       return "Marked no-show";
     case "cancelled":
+      // Released back to the customer after a pickup request reads very
+      // differently from a plain cancellation — name it for what it is.
+      if (isPickupReleaseReason(reason)) return "Vehicle released for pickup";
       return from && from.startsWith("pending") ? "Declined" : "Cancelled";
     default:
       return humanizeStatus(to, reason, from);
@@ -224,11 +229,35 @@ function eventVisual(ev: ActivityEvent): {
         title: `${label}${ev.data.partName ? ` — ${ev.data.partName}` : ""}`,
       };
     }
-    case "payment_captured":
+    case "payment_captured": {
+      const amount = `$${(ev.data.amountCents / 100).toFixed(2)}`;
+      // A capture on a cancelled/no-show booking is the forfeit fee, not a
+      // service payment. "Cancellation fee" is the domain term (covers pickup
+      // releases, late cancels, and no-shows alike); the neighbouring "Vehicle
+      // released for pickup" entry supplies the pickup-specific context.
+      const title =
+        ev.data.kind === "cancellation_fee"
+          ? `Cancellation fee collected — ${amount}`
+          : `Payment collected — ${amount}`;
       return {
         icon: iconWrap("emerald", <Banknote className="h-3.5 w-3.5" />),
-        title: `Payment collected — $${(ev.data.amountCents / 100).toFixed(2)}`,
+        title,
       };
+    }
+    case "pickup_requested":
+      return {
+        icon: iconWrap("amber", <Flag className="h-3 w-3" strokeWidth={2.5} />),
+        title: "Pickup requested",
+      };
+    case "pickup_response": {
+      const declined = ev.data.response === "declined";
+      return {
+        icon: declined
+          ? iconWrap("rose", <X className="h-3 w-3" />)
+          : iconWrap("emerald", <Check className="h-3 w-3" strokeWidth={3} />),
+        title: formatPickupResponse(ev.data.response),
+      };
+    }
     default:
       return {
         icon: iconWrap("neutral", <RotateCcw className="h-3 w-3" />),
@@ -337,10 +366,41 @@ function EventDetail({
           </p>
         );
       }
+      // Pickup release: spell out the fee outcome. When charged, the amount
+      // rides its own "Pickup fee collected" entry, so here we only note the
+      // handoff; when waived, there's no payment entry so say so explicitly.
+      if (ev.data.reason === "shop_released_fee_waived") {
+        return (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Pickup fee waived — no charge
+          </p>
+        );
+      }
+      if (ev.data.reason === "shop_released_pickup") {
+        return (
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Car handed back to the customer
+          </p>
+        );
+      }
       return ev.data.reason && !isSystemyReason(ev.data.reason) ? (
         <p className="mt-0.5 text-xs text-muted-foreground">{ev.data.reason}</p>
       ) : null;
     }
+    case "pickup_requested":
+      return ev.data.reason ? (
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          “{ev.data.reason}”
+        </p>
+      ) : (
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Customer asked to cancel and pick up the car
+        </p>
+      );
+    case "pickup_response":
+      return ev.data.note ? (
+        <p className="mt-0.5 text-xs text-muted-foreground">“{ev.data.note}”</p>
+      ) : null;
     case "estimate_submitted":
       return (
         <div className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">

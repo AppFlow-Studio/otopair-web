@@ -919,6 +919,10 @@ export default function MechanicDashboard() {
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
         layoverNotes={[
+          // Diagnostic worksheet findings seed the post-job findings step so a
+          // diagnostic wrapping up here doesn't retype what the mechanic already
+          // wrote on the checklist.
+          (selectedWorkflowBooking as any)?.diagnosticFindingsNote ?? "",
           (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? "",
           // "Why the added scope / why this adjustment" reasons for agreed
           // changes — folded in so they seed the findings and appear in the

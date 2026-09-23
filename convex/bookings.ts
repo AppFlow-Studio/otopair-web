@@ -102,6 +102,7 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { assertPriceWithinCap } from "./lib/priceCap";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   minorRecordTypeForServiceSlug,
@@ -122,7 +123,9 @@ import {
   roundDownToFiveMinutes,
 } from "./lib/schedule_overlap";
 import {
+  assertBookingWindowAgainstHoursAndBlocks,
   assertMechanicAvailableForWindow,
+  checkBookingWindowAgainstHoursAndBlocks,
   getActiveMechanicsForShop,
   resolveAvailableMechanicForWindow,
   syncMechanicDayAvailability,
@@ -284,7 +287,7 @@ async function assertBookingWithinShopHours(
   const openMinutes = hhmmToMinutes(hours.open_time);
   const closeMinutes = hhmmToMinutes(hours.close_time);
 
-  if (startMinutes < openMinutes || startMinutes > closeMinutes) {
+  if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
     throw new Error("The requested start time is outside the shop's operating hours.");
   }
   if (endMinutes > closeMinutes && !allowAfterClose) {
@@ -3685,7 +3688,7 @@ export const markNoShow = mutation({
       policy: resolvePolicy(noShowShop),
       intent: "no_show",
     });
-    return await applyBookingStatusTransition(ctx, {
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
@@ -12494,6 +12497,10 @@ export async function ensureWalkInCashPayment(
 
   const laborDollars =
     laborRate != null ? (laborMinutes / 60) * laborRate : 0;
+  // Cap the walk-in labor charge (minutes × rate) at the same $10,000 per-line
+  // ceiling — this is the one direct-bill path that never passes through the
+  // estimate approval flow (performSubmission), so it needs its own guard.
+  assertPriceWithinCap(laborDollars, "Labor");
   const totalDollars =
     Math.round((Number(partsDollars || 0) + laborDollars) * 100) / 100;
 
@@ -13030,40 +13037,22 @@ export const attachRecommendedService = mutation({
     if (!note) throw new Error("Add a short note explaining the finding.");
     assertFlaggedItemsHaveNotes(booking);
 
-    // Validate proposed slot against blocked time on the mechanic's lane.
-    if (
-      args.scheduledDate &&
-      args.scheduledTime &&
-      booking.mechanic_id
-    ) {
-      const durationMin = Math.round(
-        ((service as any).default_labor_hours ?? 1) * 60,
-      );
-      const blocks = (
-        await getManualBlockedSlotsForShop(
-          ctx,
-          booking.shop_id,
-          args.scheduledDate,
-        )
-      ).filter(
-        (s: any) => String(s.mechanic_id) === String(booking.mechanic_id),
-      );
-      const toMin = (hhmm: string) => {
-        const [h, m] = hhmm.split(":").map(Number);
-        return h * 60 + m;
-      };
-      const ps = toMin(args.scheduledTime);
-      const pe = ps + durationMin;
-      const blocked = (blocks as any[]).some((blk) => {
-        const bs = toMin(blk.start_time);
-        const be = toMin(blk.end_time);
-        return bs < pe && be > ps;
-      });
-      if (blocked) {
-        throw new Error(
-          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
-        );
+    // Validate the proposed slot against shop hours AND blocked time — the
+    // same check the customer-decision step re-runs before confirming.
+    if (args.scheduledDate || args.scheduledTime) {
+      if (!args.scheduledDate || !args.scheduledTime) {
+        throw new Error("Pick both a date and a time for the recommended service.");
       }
+      await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+        shopId: booking.shop_id,
+        date: args.scheduledDate,
+        startTime: args.scheduledTime,
+        durationMinutes: Math.round(
+          ((service as any).default_labor_hours ?? 1) * 60,
+        ),
+        mechanicId: booking.mechanic_id,
+        action: "Pick a different slot:",
+      });
     }
 
     const now = Date.now();
@@ -13174,27 +13163,24 @@ export const customerDecideRecommendation = mutation({
           booking.estimated_labor_minutes ?? 0,
         );
 
-    // For schedule-for-later, hard-reject if the proposed slot overlaps a
-    // mechanic break / blocked window. For right-after, silently advance past
-    // any blocks so the follow-up lands on the first clear gap.
-    if (scheduledForLater) {
-      const proposalStart = toMinutes(rawFollowUpStart);
-      const proposalEnd = proposalStart + followUpMinutes;
-      const blocked = (blocksForDay as any[]).some((blk) => {
-        const bs = toMinutes(blk.start_time);
-        const be = toMinutes(blk.end_time);
-        return bs < proposalEnd && be > proposalStart;
-      });
-      if (blocked) {
-        throw new Error(
-          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
-        );
-      }
-    }
-
+    // For right-after, advance past any blocks so the follow-up lands on the
+    // first clear gap. Either way the final window must sit inside shop hours
+    // and clear of blocked time — re-checked here because hours/blocks can
+    // change between the shop proposing and the customer deciding.
     const followUpStart = scheduledForLater
       ? rawFollowUpStart
       : advancePastBlocks(rawFollowUpStart, followUpMinutes);
+
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: followUpDate ?? "",
+      startTime: followUpStart,
+      durationMinutes: followUpMinutes,
+      mechanicId: booking.mechanic_id,
+      action: scheduledForLater
+        ? "The proposed time is no longer available — pick a different slot."
+        : "There's no room left today — schedule the follow-up for later.",
+    });
 
     const followUpId = await ctx.db.insert("bookings", {
       user_id: booking.user_id,
@@ -13244,11 +13230,18 @@ export const customerDecideRecommendation = mutation({
             toMinutes(a.scheduled_time) - toMinutes(b.scheduled_time),
         );
 
+      const dayHours = await getShopHoursForDate(ctx, booking.shop_id, followUpDate ?? "");
+      const closeMinutes = dayHours?.close_time
+        ? toMinutes(dayHours.close_time)
+        : Number.POSITIVE_INFINITY;
       let cursor = addMinutesToHHMM(followUpStart, followUpMinutes);
       for (const b of laneBookings) {
         const duration = b.estimated_labor_minutes ?? 60;
         const safeCursor = advancePastBlocks(cursor, duration);
         if (toMinutes(b.scheduled_time ?? "") >= toMinutes(safeCursor)) break;
+        // Never push a booking past closing. Leave it where it is — the lane
+        // overlap surfaces for the shop to reschedule by hand.
+        if (toMinutes(safeCursor) + duration > closeMinutes) break;
         await ctx.db.patch(b._id, {
           scheduled_time: safeCursor,
           updated_at: now,
@@ -14817,11 +14810,51 @@ export const accept = mutation({
       );
     }
 
+    // Hours or blocked time may have changed since the request came in (or the
+    // request slipped past a check). Never confirm a window the shop is closed
+    // for — the shop proposes a new time instead.
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes: booking.estimated_labor_minutes ?? 60,
+      mechanicId: booking.mechanic_id,
+      action: "Can't accept — propose a new time instead.",
+    });
+
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "confirmed",
       changedBy: user._id,
       reason: "accepted_by_shop",
+    });
+  },
+});
+
+/**
+ * Why `accept` would refuse this booking's window (closed / past close /
+ * blocked), or null. Lets the drawer warn and disable Accept up front; the
+ * mutation re-runs the same check.
+ */
+export const getAcceptWindowIssue = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (!["pending", "pending_shop_acceptance"].includes(booking.status)) return null;
+    try {
+      await requireShopStaff(ctx, user._id, booking.shop_id);
+    } catch {
+      return null;
+    }
+    return await checkBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes: booking.estimated_labor_minutes ?? 60,
+      mechanicId: booking.mechanic_id,
     });
   },
 });
@@ -15280,6 +15313,15 @@ export const customerApproveReschedule = mutation({
     const originalMechanicId = booking.previous_mechanic_id ?? currentMechanicId;
     const isManualReschedule = getScheduleChangeMode(booking) === "manual_reschedule";
     const now = Date.now();
+
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes,
+      mechanicId: currentMechanicId,
+      action: "This time is no longer available — ask the shop for another time.",
+    });
 
     if (isManualReschedule) {
       await resetVisitForAcceptedManualReschedule(ctx, booking, now);
@@ -18938,8 +18980,20 @@ export const getReceipt = query({
         total_cents: a.mechanic_set_price_cents,
       }));
 
+    // Two identifiers, shown as two labelled lines on the receipt:
+    //  - booking_number: the stable OTP-<last8> order code the customer may have
+    //    referenced before capture; always present.
+    //  - invoice_number: the real billing number (INV-YYYY-NNNNNN, allocated in
+    //    invoices.ts, matches the web receipt); null until the job is captured.
+    const bookingNumber = `OTP-${booking._id.slice(-8).toUpperCase()}`;
+
     return {
-      receipt_number: `OTP-${booking._id.slice(-8).toUpperCase()}`,
+      booking_number: bookingNumber,
+      invoice_number: payment?.invoice_number ?? null,
+      // Back-compat: the single field the receipt renders today. Prefer the
+      // invoice number, fall back to the booking code — so nothing breaks until
+      // the app renders the two fields above as "Booking #" / "Invoice #".
+      receipt_number: payment?.invoice_number ?? bookingNumber,
       service_date: booking.scheduled_date ?? null,
       completed_at: jobActual?.completed_at_ms ?? booking.completed_at_ms ?? null,
       shop: shop
@@ -19037,15 +19091,41 @@ export const getReceipt = query({
       payment: payment
         ? {
             method: (payment as any).payment_method ?? null,
-            card_last4: null, // not stored; populate from Stripe payload if needed
+            card_brand: (payment as any).card_brand ?? null,
+            card_last4: (payment as any).card_last4 ?? null,
             amount: (payment as any).amount,
             status: (payment as any).status,
             stripe_intent_id:
               (payment as any).stripe_payment_intent_id ?? null,
             charged_at: (payment as any).updated_at ?? (payment as any).created_at ?? null,
             invoice_storage_id: (payment as any).invoice_storage_id ?? null,
+            // Cumulative refunded total in CENTS. shopPaymentRefunds recomputes
+            // this as SUM(payment_refunds) on every settle, so it's authoritative
+            // and never double-counts our own write vs. the inbound webhook.
+            refunded_amount_cents: (payment as any).refunded_amount_cents ?? 0,
+            last_refunded_at_ms: (payment as any).last_refunded_at_ms ?? null,
           }
         : null,
+      // Refund summary for the Past Services receipt — null until money has been
+      // returned on this booking. `is_full` drives the "Refunded" vs "Partially
+      // refunded" label; `net_paid_cents` is what the customer ultimately paid.
+      refund:
+        payment && ((payment as any).refunded_amount_cents ?? 0) > 0
+          ? (() => {
+              const refunded = (payment as any).refunded_amount_cents as number;
+              const captured = (payment as any).captured_amount_cents ?? null;
+              const isFull =
+                (payment as any).status === "refunded" ||
+                (captured != null && refunded >= captured);
+              return {
+                amount_cents: refunded,
+                refunded_at_ms: (payment as any).last_refunded_at_ms ?? null,
+                is_full: isFull,
+                net_paid_cents:
+                  captured != null ? Math.max(0, captured - refunded) : null,
+              };
+            })()
+          : null,
     };
   },
 });

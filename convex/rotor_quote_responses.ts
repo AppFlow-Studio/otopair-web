@@ -11,10 +11,14 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import {
-  assertMechanicAvailableForWindow,
   isMechanicAvailableForWindow,
 } from "./lib/timeSlotAvailability";
 import { notifyCustomerQuoteReceived } from "./lib/quoteNotifications";
+import { assertPriceWithinCap } from "./lib/priceCap";
+import {
+  assertQuoteSlotAvailable,
+  consumeQuoteSlotHold,
+} from "./lib/quoteSlotHold";
 import {
   QUOTE_HOLD_DURATION_MS,
   assertQuoteNotHeldForCheckout,
@@ -47,6 +51,10 @@ export const create = mutation({
       time: v.string(),
     }),
     estimated_duration_minutes: v.optional(v.number()),
+    /** Shop-side 15-min slot hold taken when the slot was picked in the quote
+     *  dialog (slotHolds.holdSlot). Consumed here; see lib/quoteSlotHold.ts. */
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
     // Pad line items — supplied when the original request had
     // include_pads=true. acceptRotorQuote sums (pad_price × pad_quantity)
     // into parts_cost; RotorQuoteCard renders the "Pads (Brand) — $price"
@@ -57,6 +65,10 @@ export const create = mutation({
     pad_quantity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    assertPriceWithinCap(args.per_rotor_price, "Per-rotor price");
+    assertPriceWithinCap(args.pad_price, "Per-pad price");
+    assertPriceWithinCap(args.labor_cost, "Labor cost");
+
     const booking = await ctx.db.get(args.booking_id);
     if (!booking) {
       throw new Error("We couldn't find that quote request. It may have been withdrawn.");
@@ -79,12 +91,14 @@ export const create = mutation({
       throw new Error("Pick a mechanic before submitting a rotor quote.");
     }
 
-    await assertMechanicAvailableForWindow(ctx, {
+    const { consumeHoldId } = await assertQuoteSlotAvailable(ctx, {
       shopId: args.shop_id,
       mechanicId: args.mechanic_id,
       date: args.availability.date,
       startTime: args.availability.time,
       durationMinutes: args.estimated_duration_minutes ?? 30,
+      holdId: args.hold_id,
+      sessionId: args.session_id,
     });
 
     const now = Date.now();
@@ -108,6 +122,8 @@ export const create = mutation({
       expires_at: now + QUOTE_HOLD_DURATION_MS,
       revision: 1,
     });
+    // The response is now the quote hold — drop the draft slot hold atomically.
+    await consumeQuoteSlotHold(ctx, consumeHoldId);
 
     // First response flips pending_quote → quotes_ready so the Quotes tab
     // picks it up. Idempotent for subsequent responses.
@@ -187,12 +203,20 @@ export const requote = mutation({
     total: v.number(),
     availability: v.object({ date: v.string(), time: v.string() }),
     estimated_duration_minutes: v.optional(v.number()),
+    /** Shop-side 15-min slot hold taken when the slot was picked in the quote
+     *  dialog (slotHolds.holdSlot). Consumed here; see lib/quoteSlotHold.ts. */
+    hold_id: v.optional(v.id("slot_holds")),
+    session_id: v.optional(v.string()),
     pad_brand: v.optional(v.string()),
     pad_type: v.optional(v.string()),
     pad_price: v.optional(v.number()),
     pad_quantity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    assertPriceWithinCap(args.per_rotor_price, "Per-rotor price");
+    assertPriceWithinCap(args.pad_price, "Per-pad price");
+    assertPriceWithinCap(args.labor_cost, "Labor cost");
+
     const response = await ctx.db.get(args.response_id);
     if (!response) throw new Error("Quote not found.");
     await requireQuoteShopAccess(ctx, response.shop_id);
@@ -200,13 +224,15 @@ export const requote = mutation({
     if (!availability.available) throwQuoteUnavailable(availability.reason);
     const revision = getQuoteRevision(response);
     await assertQuoteNotHeldForCheckout(ctx, "rotor", response._id, revision);
-    await assertMechanicAvailableForWindow(ctx, {
+    const { consumeHoldId } = await assertQuoteSlotAvailable(ctx, {
       shopId: response.shop_id,
       mechanicId: args.mechanic_id,
       date: args.availability.date,
       startTime: args.availability.time,
       durationMinutes: args.estimated_duration_minutes ?? 30,
       excludeRotorQuoteResponseId: String(response._id),
+      holdId: args.hold_id,
+      sessionId: args.session_id,
     });
     const now = Date.now();
     await ctx.db.patch(response._id, {
@@ -226,6 +252,7 @@ export const requote = mutation({
       revision: revision + 1,
       modified_at: now,
     });
+    await consumeQuoteSlotHold(ctx, consumeHoldId);
     return response._id;
   },
 });

@@ -1006,6 +1006,7 @@ export default function MechanicDashboard() {
           open={actualsBookingId !== null}
         mode={actualsDialogMode}
         estimatedLaborMinutes={selectedBooking?.estimatedLaborMinutes ?? null}
+        laborRateCents={(selectedBooking as any)?.shopLaborRateCents ?? null}
         jobActuals={selectedBooking?.jobActuals ?? null}
         prefillData={actualsPrefill ?? null}
         onClose={closeActualsDialog}

@@ -217,7 +217,7 @@ export const BOOKABLE_SERVICE_SEEDS: ServiceSeed[] = [
     description: "Timing belt kit replacement including tensioner and idler pulleys",
     display_order: 9,
     category: "Scheduled Service",
-    default_labor_hours: 5.0,
+    default_labor_hours: 3.0,
     is_labor_only: false,
     has_options: false,
     requires_parts: true,

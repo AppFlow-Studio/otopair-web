@@ -29,6 +29,10 @@ const isPublicRoute = createRouteMatcher([
   "/privacy-choices",
   "/delete-account",
   "/contact",
+  // Public, no-login customer support / charge-dispute intake (marketing page +
+  // its submit endpoint). Feeds the director "Disputes" inbox.
+  "/support(.*)",
+  "/api/support(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/accept-invite(.*)",

@@ -39,6 +39,11 @@ import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveShopSetForBooking } from "./booking_quotes";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import {
+  assertPriceCentsWithinCap,
+  assertPriceWithinCap,
+} from "./lib/priceCap";
+import { ABSOLUTE_MAX_RATE } from "./lib/vehicleTiers";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   buildCustomerInspectionSnapshot,
@@ -362,6 +367,55 @@ async function performSubmission(
 }> {
   const booking: any = await ctx.db.get(args.bookingId);
   if (!booking) throw new Error("Booking not found.");
+
+  // Hard $10,000-per-line ceiling on any mechanic-entered price. Reject over-cap
+  // part unit prices and shop-set service prices before they can reach the
+  // customer's authorized charge (the UI clamps too, but it can be bypassed).
+  for (const part of args.parts) {
+    assertPriceWithinCap(part.cost, `Part price for "${part.part_name}"`);
+  }
+  if (args.shopSetBaseCents != null) {
+    assertPriceCentsWithinCap(args.shopSetBaseCents, "Set price");
+  }
+
+  // Labor: re-assert the shop rate rail server-side (the client sends the rate
+  // verbatim; only Settings enforces $50–$900 otherwise) and cap each labor
+  // LINE at the same $10,000 ceiling — hours × rate, per line, mirroring the
+  // parts rule. A booking's TOTAL labor across many service lines can still
+  // exceed $10k, exactly as the parts total can.
+  if (args.laborRateCents != null && args.laborRateCents > 0) {
+    const rate = args.laborRateCents;
+    if (rate / 100 > ABSOLUTE_MAX_RATE) {
+      throw new Error(
+        `Labor rate $${(rate / 100).toLocaleString()}/hr exceeds the ` +
+          `$${ABSOLUTE_MAX_RATE.toLocaleString()}/hr maximum.`,
+      );
+    }
+    // Base labor, per service line (falls back to the scalar total when the
+    // client didn't send a per-line breakdown).
+    const baseLines =
+      args.laborAllocations && args.laborAllocations.length > 0
+        ? args.laborAllocations.map((a) => ({
+            hours: a.hours,
+            label: a.label ?? a.line_key,
+          }))
+        : args.laborHours != null
+          ? [{ hours: args.laborHours, label: "labor" }]
+          : [];
+    for (const line of baseLines) {
+      assertPriceCentsWithinCap(
+        Math.round(line.hours * rate),
+        `Labor for "${line.label}"`,
+      );
+    }
+    // Added off-catalog (mid-job) scope labor is its own line.
+    if (args.addedLaborHours != null && args.addedLaborHours > 0) {
+      assertPriceCentsWithinCap(
+        Math.round(args.addedLaborHours * rate),
+        "Added labor",
+      );
+    }
+  }
 
   // ADDED lines the shop flat-prices (a catalog service with a
   // shop_service_fixed_prices row at the vehicle's tier) are billed at their

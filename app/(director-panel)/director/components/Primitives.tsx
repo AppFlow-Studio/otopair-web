@@ -318,6 +318,17 @@ export const auditMeta = (a: string) => {
     tier_change:      { tone:'purple', label:'Tier change',      Icon: IconSettings },
     shop_created:     { tone:'slate',  label:'Shop created',     Icon: IconShop },
     login_failed:     { tone:'red',    label:'Login failed',     Icon: IconBolt },
+    // Dispute lifecycle (support_requests / booking_disputes / payment_disputes).
+    created:            { tone:'blue',   label:'Submitted',          Icon: IconMessage },
+    filed:              { tone:'blue',   label:'Filed',              Icon: IconMessage },
+    status_changed:     { tone:'blue',   label:'Status change',      Icon: IconRefresh },
+    assigned:           { tone:'indigo', label:'Assigned',           Icon: IconUsers },
+    linked_to_booking:  { tone:'slate',  label:'Linked to booking',  Icon: IconExternal },
+    resolved_no_refund: { tone:'slate',  label:'Resolved — no refund', Icon: IconCheck },
+    dispute_refund:     { tone:'orange', label:'Refund issued',      Icon: IconCard },
+    chargeback_opened:  { tone:'orange', label:'Chargeback opened',  Icon: IconBolt },
+    chargeback_closed:  { tone:'slate',  label:'Chargeback closed',  Icon: IconCheck },
+    evidence_due:       { tone:'yellow', label:'Evidence due',       Icon: IconClock },
   }
   return m[a] || { tone:'slate' as Tone, label:a, Icon: IconClock }
 }

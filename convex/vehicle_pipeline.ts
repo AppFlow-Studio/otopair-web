@@ -26,6 +26,7 @@ import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
 import { buildEngineKey, buildNhtsaVinKey } from "./vehicleEnrichment/types";
 import {
   contradictsDecodedEngine,
+  engineCodePinnedDisplacement,
   isSyntheticEngineCode,
   lookupKnownEngineCode,
 } from "./vehicleEnrichment/utils/engineLookup";
@@ -56,6 +57,8 @@ type ProcessVinResult = {
   transmissionId: Id<"transmissions"> | null;
   make: string;
   model: string;
+  /** Family nameplate for display ("5 Series" while `model` is the halo "M5"). */
+  displayModel?: string;
   year: number;
   trim: string;
   engineCode: string;
@@ -184,6 +187,8 @@ export const processVin = internalAction({
         displacementL: getValue(nhtsaData, "DisplacementL"),
         engineConfig: getValue(nhtsaData, "EngineConfiguration"),
         fuelType: getValue(nhtsaData, "FuelTypePrimary"),
+        fuelTypeSecondary: getValue(nhtsaData, "FuelTypeSecondary"),
+        electrificationLevel: getValue(nhtsaData, "ElectrificationLevel"),
         turbo: getValue(nhtsaData, "Turbo"),
         valveTrain: getValue(nhtsaData, "ValveTrainDesign"),
         fuelInjection: getValue(nhtsaData, "FuelInjectionType"),
@@ -278,22 +283,36 @@ export const processVin = internalAction({
         // one, prefer NHTSA's (the regulatory decode over the aggregator).
         trim: (() => {
           const vdbTrim = vdb?.trim ?? "";
-          const nhtsaEvidence = [nhtsa.trim, nhtsa.series, nhtsa.trim2, nhtsa.series2]
+          // A drivetrain word alone ("quattro", "xDrive", "4MATIC") is not a
+          // trim: vPIC decodes every AWD R8 as Trim "quattro", which used to
+          // out-rank the provider's real "performance" and then matched no
+          // catalog trim at all.
+          const nhtsaTrim = isDrivetrainOnlyTrim(nhtsa.trim) ? "" : nhtsa.trim;
+          const nhtsaTrim2 = isDrivetrainOnlyTrim(nhtsa.trim2) ? "" : nhtsa.trim2;
+          const nhtsaEvidence = [nhtsaTrim, nhtsa.series, nhtsaTrim2, nhtsa.series2]
             .filter(Boolean)
             .join(" ")
             .toLowerCase();
+          // vPIC files BMW M cars as Model "M5" + Series "5-Series" with no
+          // trim, so the model is the only place the provider's "M5" trim is
+          // corroborated.
+          const nhtsaModelEvidence = (nhtsa.model ?? "").toLowerCase();
           if (trustVdbYmmt && vdbTrim && nhtsaEvidence) {
             const vdbTokens = vdbTrim.toLowerCase().split(/[\s/_-]+/).filter((t: string) => t.length >= 2);
-            const overlaps = vdbTokens.some((t: string) => nhtsaEvidence.includes(t));
-            if (!overlaps && (nhtsa.trim || nhtsa.series)) {
-              const preferred = nhtsa.trim || nhtsa.series;
+            const overlaps = vdbTokens.some(
+              (t: string) => nhtsaEvidence.includes(t) || nhtsaModelEvidence.split(/[\s/_-]+/).includes(t),
+            );
+            if (!overlaps && (nhtsaTrim || nhtsa.series)) {
+              const preferred = nhtsaTrim || nhtsa.series;
               console.warn(
                 `[decode] TRIM PRECEDENCE — VDB trim "${vdbTrim}" shares no token with NHTSA evidence "${nhtsaEvidence}"; using NHTSA "${preferred}"`,
               );
               return preferred;
             }
           }
-          return trustVdbYmmt ? (vdbTrim || nhtsa.trim || "Base") : (nhtsa.trim || "Base");
+          return trustVdbYmmt
+            ? (vdbTrim || nhtsaTrim || nhtsa.trim || "Base")
+            : (nhtsaTrim || nhtsa.trim || "Base");
         })(),
         trim2: nhtsa.trim2 || "",
         series: nhtsa.series || "",
@@ -339,7 +358,11 @@ export const processVin = internalAction({
           return nhtsaCyl ?? vdbCyl ?? 0;
         })(),
         displacement: (vdb?.displacement ? String(vdb.displacement) : "") || nhtsa.displacementL || "",
-        fuelType: vdb?.fuelType || nhtsa.fuelType || "Gasoline",
+        fuelType: resolveDisplayFuelType(
+          vdb?.fuelType || nhtsa.fuelType || "Gasoline",
+          nhtsa.fuelTypeSecondary,
+          nhtsa.electrificationLevel,
+        ),
         turbo: nhtsa.turbo === "Yes",
         engineConfiguration: vdb?.blockType || nhtsa.engineConfig || null,
         fuelInjection: nhtsa.fuelInjection || null,
@@ -520,8 +543,34 @@ export const processVin = internalAction({
         displacementL: merged.displacement,
         cylinders: merged.cylinders,
       };
+      let displacementCorrectedFrom: string | null = null;
       const gateEngineCode = (code: string, source: string): string => {
         if (!code) return "";
+        // A known single-displacement code whose CYLINDER count matches the
+        // decode but whose litres don't is a decoder displacement error, not
+        // a wrong engine: vPIC gives the 2021 AMG GT 63 4-door EngineModel
+        // M177 + 8 cylinders + DisplacementL "3". Rejecting M177 there left
+        // the car with a "3l_8cyl" descriptor and a 3.0L spec card. Keep the
+        // code and correct the litres from it. A cylinder mismatch (the
+        // Macan EA839-vs-4-cyl case) still rejects below.
+        const pinned = engineCodePinnedDisplacement(code);
+        const decodedCyl = Math.round(Number(merged.cylinders) || 0);
+        const decodedDisp = parseFloat(merged.displacement || "");
+        if (
+          pinned &&
+          pinned.cylinders !== undefined &&
+          decodedCyl === pinned.cylinders &&
+          decodedDisp > 0 &&
+          Math.abs(decodedDisp - pinned.displacementL) > 0.15
+        ) {
+          console.warn(
+            `[decode] DISPLACEMENT CORRECTED (${source}) — code "${code}" is ${pinned.displacementL}L ${pinned.cylinders}-cyl and matches the decoded cylinder count; decoded ${decodedDisp}L replaced`,
+          );
+          displacementCorrectedFrom = merged.displacement;
+          merged.displacement = pinned.displacementL.toFixed(1);
+          decodedEngine.displacementL = merged.displacement;
+          return code;
+        }
         const verdict = contradictsDecodedEngine(code, decodedEngine);
         if (verdict.known && verdict.contradicts) {
           console.warn(`[decode] ENGINE SPEC GATE (${source}) — ${verdict.reason}; rejected`);
@@ -625,6 +674,34 @@ export const processVin = internalAction({
       // lookups hit the right rows. Data-driven — extend the table to cover a
       // new halo without touching this file.
       // ────────────────────────────────────────────────────────────────────
+      // BMW M cars: vPIC decodes Model "M5" + Series "5-Series" and no trim.
+      // Once the normalizer restructures that into model "5 Series", the "M5"
+      // survives nowhere unless the trim carries it — and a trim of "Base"
+      // then defaulted the picker to the alphabetically-first "530i". Seed
+      // the variant into the trim ("Competition" → "M5 Competition").
+      {
+        const variant = bmwMVariantFromModel(merged.make, nhtsa.model) ??
+          bmwMVariantFromModel(merged.make, vdb?.model);
+        if (variant && !new RegExp(`\\b${variant}\\b`, "i").test(finalTrim)) {
+          const rest = /^(base|\d-series)$/i.test(finalTrim.trim()) ? "" : finalTrim.trim();
+          const seeded = `${variant} ${rest}`.trim();
+          console.log(`[decode] BMW M variant seeded into trim: "${finalTrim}" → "${seeded}"`);
+          finalTrim = seeded;
+        }
+      }
+
+      // The family nameplate shown to users ("5 Series" · trim "M5"). The
+      // halo promotion below rewrites `finalModel` to the catalog model line
+      // ("M5", "CLE-Class AMG") that config keys and enrichment use; the
+      // review screen titles the car with this instead.
+      let displayModel = finalModel;
+      {
+        const series = (nhtsa.series ?? "").match(/^([1-8])[-\s]?series$/i);
+        if (series && bmwMVariantFromModel(merged.make, displayModel)) {
+          displayModel = `${series[1]} Series`;
+        }
+      }
+
       const halo = findHaloVariant(merged.make, finalModel, finalTrim);
       if (halo && halo.promotedModel.toLowerCase() !== finalModel.toLowerCase()) {
         console.log(
@@ -817,7 +894,11 @@ export const processVin = internalAction({
         horsepower:
           vdb?.horsepower ??
           (nhtsa.engineHP ? parseFloat(nhtsa.engineHP) : null),
-        engineDisplacementLiters: vdb?.engineDisplacementLiters ?? null,
+        // A code-corrected displacement (see gateEngineCode) beats the
+        // provider's copy of the same wrong vPIC value.
+        engineDisplacementLiters: displacementCorrectedFrom != null
+          ? parseFloat(merged.displacement)
+          : (vdb?.engineDisplacementLiters ?? null),
         cylindersConfiguration:
           vdb?.cylindersConfiguration ?? nhtsa.engineConfig ?? null,
         mpgCity: vdb?.mpgCity ?? null,
@@ -905,6 +986,10 @@ export const processVin = internalAction({
       return {
         makeId, modelId, trimId, engineId, transmissionId,
         make: merged.make, model: finalModel, year: merged.year, trim: finalTrim,
+        displayModel,
+        // May be the synthetic "5.2l_10cyl" descriptor — confirmVehicleForUser
+        // keys the config on it, so it is passed through unchanged and the
+        // review screen hides it instead.
         engineCode: finalEngineCode,
         variantFingerprint,
         cylinders: merged.cylinders, displacement: merged.displacement,
@@ -1533,6 +1618,7 @@ type DecodeVinResult =
       engineId: Id<"engines">;
       make: string;
       model: string;
+      displayModel?: string;
       year: number;
       trim: string;
       engineCode: string;
@@ -1599,6 +1685,7 @@ export const decodeVin = action({
       engineId: result.engineId,
       make: result.make,
       model: result.model,
+      displayModel: result.displayModel,
       year: result.year,
       trim: result.trim,
       engineCode: result.engineCode,
@@ -2131,6 +2218,47 @@ async function resolveModelFromVin(
  * Call Claude to normalize NHTSA model/trim/drivetrain/engine_code into canonical OEM naming.
  * Returns null on failure or missing key; otherwise { model?, trim?, drivetrain_type?, engine_code? }.
  */
+/** "M5" for a BMW model string that names an M car (M2–M8, incl. CS), else null. */
+function bmwMVariantFromModel(make: string | null | undefined, model: string | null | undefined): string | null {
+  if (!/^bmw$/i.test((make ?? "").trim())) return null;
+  const m = (model ?? "").trim().match(/^(M[2-8])(\s+CS)?$/i);
+  return m ? m[1].toUpperCase() + (m[2] ? " CS" : "") : null;
+}
+
+/**
+ * True when a decoded trim is only a drivetrain marketing word — "quattro",
+ * "xDrive", "4MATIC", "AWD" — which names no trim in any catalog.
+ */
+function isDrivetrainOnlyTrim(trim: string | null | undefined): boolean {
+  const t = (trim ?? "").trim().toLowerCase();
+  if (!t) return false;
+  return /^(quattro|xdrive|sdrive|4matic\+?|4motion|sh-awd|awd|fwd|rwd|4wd|4x4|2wd|all[- ]wheel drive)$/.test(t);
+}
+
+/**
+ * The fuel type shown to users and stamped on the engine. vPIC files a
+ * plug-in hybrid as FuelTypePrimary "Electric" + FuelTypeSecondary "Gasoline"
+ * + ElectrificationLevel "PHEV …" — reading only the primary field made the
+ * 2025 M5 a 4.4L "Electric" car, and "Electric" is what applicability rules
+ * read as a BEV (no oil change, no spark plugs).
+ */
+function resolveDisplayFuelType(
+  primary: string,
+  secondary: string | null | undefined,
+  electrificationLevel: string | null | undefined,
+): string {
+  const level = (electrificationLevel ?? "").toLowerCase();
+  if (level.includes("phev") || level.includes("plug-in")) return "Plug-in Hybrid";
+  const p = (primary ?? "").toLowerCase();
+  const sec = (secondary ?? "").toLowerCase();
+  const combustsToo = /gasoline|diesel|flex|ethanol/.test(sec);
+  // A 48V mild hybrid (MHEV) is a gasoline car for every purpose we have.
+  if (level.includes("mhev") || level.includes("mild")) return primary;
+  if (level.includes("hev") || level.includes("hybrid")) return "Hybrid";
+  if (p.includes("electric") && combustsToo) return "Hybrid";
+  return primary;
+}
+
 async function normalizeNhtsaWithClaude(
   anthropicKey: string,
   nhtsa: {
@@ -2172,6 +2300,8 @@ Rules:
 - model = the model line (e.g. "5 Series"), not the trim (e.g. "M550i").
 - trim = the trim/submodel name; if NHTSA put drivetrain in Trim (e.g. "xdrive"), use the actual trim from NHTSA Model or infer (e.g. "M550i").
 - drivetrain_type: infer from Trim/DriveType (xDrive, sDrive, 4matic, quattro → awd/rwd). Use only fwd, rwd, awd, 4wd or "".
+- BMW M cars (NHTSA Model "M2"–"M8"): model = the series ("5 Series"), trim = the M designation plus any package ("M5", "M5 Competition"). Never drop the M designation from the trim.
+- Mercedes-AMG: keep the AMG badge in the trim ("AMG GT 63", "AMG CLE 53").
 - engine_code: fill if you know the OEM code and NHTSA is empty/wrong; otherwise "".
 - If a field is truly unknown, use "".
 - Output ONLY the JSON object.`;

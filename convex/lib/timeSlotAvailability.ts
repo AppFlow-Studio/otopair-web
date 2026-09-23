@@ -538,6 +538,103 @@ export async function isMechanicAvailableForWindow(
   }
 }
 
+function formatClock(hhmm: string) {
+  const total = hhmmToMinutes(hhmm);
+  const h24 = Math.floor(total / 60) % 24;
+  const m = total % 60;
+  const suffix = h24 >= 12 ? "PM" : "AM";
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
+}
+
+/**
+ * Hours + blocked-time check for a booking window, WITHOUT the booking/hold
+ * overlap checks. Used on paths that confirm an already-placed booking
+ * (accept, approve-reschedule, recommendation follow-ups) — those must never
+ * confirm a window the shop is closed for or has blocked off, but re-running
+ * booking/hold overlap there would trip on the booking's own leftovers.
+ *
+ * With no mechanic assigned, the window is blocked only when EVERY active
+ * mechanic (plus any shop-wide row) has it blocked.
+ *
+ * Returns a shop-friendly reason, or null when the window is fine.
+ */
+export async function checkBookingWindowAgainstHoursAndBlocks(
+  ctx: any,
+  {
+    shopId,
+    date,
+    startTime,
+    durationMinutes,
+    mechanicId,
+  }: {
+    shopId: any;
+    date: string;
+    startTime: string;
+    durationMinutes: number;
+    mechanicId?: any;
+  },
+): Promise<string | null> {
+  if (!date || !/^\d{1,2}:\d{2}$/.test(startTime ?? "")) {
+    return "This booking has no valid scheduled time.";
+  }
+  const [hours, activeMechanics, blockedRows] = await Promise.all([
+    getShopHoursForDate(ctx, shopId, date),
+    getActiveMechanicsForShop(ctx, shopId),
+    getManualBlockedSlotsForShopDate(ctx, shopId, date),
+  ]);
+  const endTime = getBookingEndTime(startTime, durationMinutes);
+  const window = `${formatClock(startTime)}–${formatClock(endTime)}`;
+  if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
+    return `The shop is closed on ${date}.`;
+  }
+  const start = hhmmToMinutes(startTime);
+  const end = hhmmToMinutes(endTime);
+  const open = hhmmToMinutes(hours.open_time);
+  const close = hhmmToMinutes(hours.close_time);
+  if (start < open) {
+    return `${window} starts before the shop opens (${formatClock(hours.open_time)}).`;
+  }
+  if (start >= close || end > close) {
+    return `${window} runs past closing (${formatClock(hours.close_time)}).`;
+  }
+
+  const blocked = toBlockedIntervals(blockedRows);
+  const isBlockedFor = (id: string) =>
+    overlapsBlockedSlot(id, date, startTime, endTime, blocked);
+  const shopWideBlocked = blocked.some(
+    (slot) =>
+      slot.mechanicId === null &&
+      slot.date === date &&
+      hhmmToMinutes(slot.startTime) < end &&
+      hhmmToMinutes(slot.endTime) > start,
+  );
+  if (shopWideBlocked) return `${window} overlaps the shop's blocked time.`;
+  if (mechanicId) {
+    if (isBlockedFor(String(mechanicId))) {
+      return `${window} overlaps the mechanic's blocked time.`;
+    }
+    return null;
+  }
+  if (activeMechanics.length > 0 && activeMechanics.every((m: any) => isBlockedFor(String(m._id)))) {
+    return `${window} overlaps the shop's blocked time.`;
+  }
+  return null;
+}
+
+export async function assertBookingWindowAgainstHoursAndBlocks(
+  ctx: any,
+  args: Parameters<typeof checkBookingWindowAgainstHoursAndBlocks>[1] & {
+    /** Prefix shown before the reason, e.g. "Can't accept:". */
+    action?: string;
+  },
+) {
+  const reason = await checkBookingWindowAgainstHoursAndBlocks(ctx, args);
+  if (reason) {
+    throw new Error(args.action ? `${args.action} ${reason}` : reason);
+  }
+}
+
 export async function resolveAvailableMechanicForWindow(
   ctx: any,
   {

@@ -5,7 +5,7 @@ import { IconSearch, IconSettings, Avatar } from './Primitives'
 import { NAV_GROUPS } from './navConfig'
 
 type Counts = { bugs?: number; feedback?: number; otoFeedback?: number; stripe?: number; mechanicEdits?: number
-  deletionQueue?: number; reviews?: number; systemHealth?: number; settlement?: number }
+  deletionQueue?: number; reviews?: number; systemHealth?: number; settlement?: number; disputes?: number }
 type CurrentUser = { name: string; role: string }
 
 export const Sidebar = ({ active, onNavigate, counts, currentUser, onLogout, onOpenSearch }: {

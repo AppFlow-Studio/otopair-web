@@ -187,6 +187,50 @@ function firstOf(arr: any): any {
   return arr ?? null;
 }
 
+/**
+ * The trim object a VIN decode actually pins. CarAPI's `/vin` response lists
+ * every catalog trim the VIN pattern could be (a 2023 R8 quattro VIN returns
+ * GT RWD, performance RWD and performance AWD). Reading fields off the FIRST
+ * one leaked the GT's identity into an AWD car; narrow by the decoded drive
+ * type and door count, and return null unless exactly one trim survives.
+ */
+export function pickCarApiVinTrim(vinRaw: any): any | null {
+  const list: any[] = Array.isArray(vinRaw?.trims)
+    ? vinRaw.trims
+    : Array.isArray(vinRaw?.trims?.data)
+      ? vinRaw.trims.data
+      : [];
+  if (list.length <= 1) return list[0] ?? null;
+  const drive = String(vinRaw?.specs?.drive_type ?? "").toLowerCase();
+  const wantAwd = /awd|4wd|all|4x4/.test(drive) ? true : /rwd|fwd|rear|front|2wd/.test(drive) ? false : null;
+  const doors = parseInt(String(vinRaw?.specs?.doors ?? ""), 10) || null;
+  const survivors = list.filter((t) => {
+    const d = String(t?.description ?? "");
+    const hasAwd = /\b(AWD|4WD|4x4)\b/i.test(d);
+    if (wantAwd === true && !hasAwd) return false;
+    if (wantAwd === false && hasAwd) return false;
+    const dr = d.match(/\b(\d)dr\b/i);
+    if (doors && dr && parseInt(dr[1], 10) !== doors) return false;
+    return true;
+  });
+  return survivors.length === 1 ? survivors[0] : null;
+}
+
+/** "M5 Sedan" → "M5", "performance" → "Performance". Null when nothing is left. */
+function cleanVinTrimName(t: any): string | null {
+  const raw = String(t?.name ?? t?.submodel ?? "").trim();
+  if (!raw) return null;
+  const cleaned = raw
+    .replace(/\s+\b(sedan|coupe|hatchback|wagon|suv|convertible|roadster|touring sedan)\b\s*$/i, "")
+    .trim();
+  if (!cleaned) return null;
+  return cleaned === cleaned.toLowerCase()
+    ? cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
+    : cleaned;
+}
+
+const DRIVETRAIN_ONLY_TRIM = /^(quattro|xdrive|sdrive|4matic\+?|4motion|sh-awd|awd|fwd|rwd|4wd|4x4|2wd)$/i;
+
 /** Collect the candidate source objects CarAPI spreads fields across. */
 function sources(res: CarApiResult): any[] {
   const v = res.vin ?? {};
@@ -196,7 +240,7 @@ function sources(res: CarApiResult): any[] {
     v.engine,
     v.body,
     v.attributes,
-    firstOf(v.trims),
+    pickCarApiVinTrim(v),
     firstOf(v.engines),
     firstOf(v.bodies),
     firstOf(res.trims),
@@ -323,10 +367,17 @@ export function extractCarApiFields(vinRaw: any): ReturnType<typeof extractVDBFi
   // a model/engine code ("AXVA70L/GSV70L/AXVH70L") that would match NHTSA's
   // Series field in the merge gate and wrongly win; never top-level `vin.trim`
   // either (a bare sub-code like "3" on some makes).
-  const cleanTrim =
+  const specsTrim =
     typeof vinRaw?.specs?.trim === "string" && vinRaw.specs.trim.trim()
       ? vinRaw.specs.trim.trim()
       : null;
+  // specs.trim is blank on a 2025 M5 and only a drivetrain word ("quattro")
+  // on an AWD R8; the narrowed VIN trim ("M5 Sedan" → "M5", "performance")
+  // is the better identity in both cases.
+  const cleanTrim =
+    specsTrim && !DRIVETRAIN_ONLY_TRIM.test(specsTrim)
+      ? specsTrim
+      : cleanVinTrimName(pickCarApiVinTrim(vinRaw)) ?? specsTrim;
   return {
     year: p.num("year"),
     make: p.str("make"),

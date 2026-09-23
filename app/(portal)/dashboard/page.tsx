@@ -894,6 +894,7 @@ function OwnerDashboardPage({
             open={actualsBookingId !== null}
           mode="edit"
           estimatedLaborMinutes={actualsJob?.estimatedLaborMinutes ?? null}
+          laborRateCents={(actualsJob as any)?.shopLaborRateCents ?? null}
           jobActuals={actualsJob?.jobActuals ?? null}
           prefillData={actualsPrefill ?? null}
           onClose={handleCloseActualsDialog}

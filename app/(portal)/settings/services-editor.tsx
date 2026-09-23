@@ -15,6 +15,7 @@ import ServicePriceTierStrip, {
   type ServicePricingDraft,
 } from "@/components/shop/service-price-tier-strip";
 import Tooltip from "@/components/ui/tooltip";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { useRegisterSaveable } from "@/components/settings/save-manager";
 import ShopShortcutsManager from "@/components/settings/shop-shortcuts-manager";
 
@@ -81,7 +82,7 @@ export default function ServicesEditor() {
     if (!search.trim()) return categories;
     const q = search.toLowerCase();
     return categories
-      .map((c) => ({ ...c, services: c.services.filter((s) => s.name.toLowerCase().includes(q)) }))
+      .map((c) => ({ ...c, services: c.services.filter((s) => formatServiceDisplayName(s.name).toLowerCase().includes(q)) }))
       .filter((c) => c.services.length > 0);
   }, [categories, search]);
 
@@ -300,12 +301,12 @@ export default function ServicesEditor() {
                                 checked={isSelected}
                                 onChange={() => toggleService(s._id)}
                                 className="mt-1 w-4 h-4 rounded text-primary"
-                                aria-label={`Offer ${s.name}`}
+                                aria-label={`Offer ${formatServiceDisplayName(s.name)}`}
                               />
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center gap-2 flex-wrap">
                                   <p className="text-sm font-medium text-foreground">
-                                    {s.name}
+                                    {formatServiceDisplayName(s.name)}
                                   </p>
                                   <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[10px] text-muted-foreground">
                                     {s.defaultLaborHours} hr
@@ -321,7 +322,7 @@ export default function ServicesEditor() {
                                 </div>
                                 {s.description && (
                                   <p className="mt-0.5 text-xs text-muted-foreground leading-5">
-                                    {s.description}
+                                    {formatServiceDisplayName(s.description)}
                                   </p>
                                 )}
                               </div>

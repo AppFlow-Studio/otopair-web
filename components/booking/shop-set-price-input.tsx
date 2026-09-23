@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Lock } from "lucide-react";
 import FixedCentCurrencyInput from "@/components/ui/fixed-cent-currency-input";
 import { fixedCentCurrencyCents } from "@/lib/fixed-cent-currency";
+import { MAX_PRICE_CENTS } from "@/lib/price-cap";
 import { cn } from "@/lib/utils";
 
 const fmt = (cents: number) => `$${(Math.max(0, cents) / 100).toFixed(2)}`;
@@ -101,6 +102,7 @@ export default function ShopSetPriceInput({
           value={text}
           onValueChange={commit}
           onBlur={clampOnBlur}
+          maxCents={MAX_PRICE_CENTS}
           className="w-full bg-transparent text-[15px] font-semibold tabular-nums text-foreground outline-none"
           aria-label={label}
         />

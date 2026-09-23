@@ -38,6 +38,7 @@ export const NAV_GROUPS: NavGroup[] = [
     { id:'stripe',       label:'Stripe',       Icon:IconStripe,  badge:'stripe', keywords:['payments','connect','payouts','money'] },
     { id:'transactions', label:'Transactions', Icon:IconCard,     keywords:['charges','payments','ledger'] },
     { id:'settlement',   label:'Settlement',   Icon:IconClock,   badge:'settlement', keywords:['payouts','escrow','settle','capture'] },
+    { id:'disputes',     label:'Disputes',     Icon:IconMessage, badge:'disputes', keywords:['disputes','chargebacks','refund requests','charge dispute','support','claims','complaints'] },
   ] },
   { section:'Catalog', items: [
     { id:'cars',         label:'Cars',            Icon:IconCar,      keywords:['vehicles','vins','makes','models'] },

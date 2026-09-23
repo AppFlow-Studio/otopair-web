@@ -1083,6 +1083,53 @@ export async function sendContactSupportEmail(data: ContactSupportEmailData) {
 }
 
 // ----------------------------------------------------------------------------
+// Public /support form — customer-facing receipt. Confirms we received their
+// support / charge-dispute request and sets the "we'll be in touch" expectation.
+// The internal alert to the ops inbox reuses sendContactSupportEmail above.
+// ----------------------------------------------------------------------------
+export interface SupportRequestReceiptData {
+  customerEmail: string;
+  customerName?: string;
+  /** Human-readable category label (e.g. "Charge dispute"). */
+  categoryLabel: string;
+  subject: string;
+}
+
+export async function sendSupportRequestReceiptEmail(
+  data: SupportRequestReceiptData,
+) {
+  try {
+    const first = escapeHtml(
+      (data.customerName ?? "").trim().split(/\s+/)[0] || "there",
+    );
+    const body = `
+      <p style="margin:0 0 8px;">Hi ${first},</p>
+      <p style="margin:0 0 20px;">Thanks for reaching out to Otopair support. We've received
+      your request and our team will review it and get back to you at
+      <strong>${escapeHtml(data.customerEmail)}</strong>.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 20px;background:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
+        <tr><td style="padding:16px 20px;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Your request</p>
+          <p style="margin:8px 0 0;color:#111827;font-size:14px;font-weight:600;">${escapeHtml(data.categoryLabel)}</p>
+          <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">${escapeHtml(data.subject)}</p>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 8px;color:#6b7280;font-size:14px;">
+        No action needed right now — just reply to this email if you have anything to add.</p>`;
+    const result = await resend.emails.send({
+      from: "Otopair Support <support@otopair.com>",
+      to: data.customerEmail,
+      subject: "We received your Otopair support request",
+      html: brandedShell("Request received", body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending support request receipt email:", error);
+    return { success: false, error };
+  }
+}
+
+// ----------------------------------------------------------------------------
 // App feedback ("Give Us Feedback" modal). Emails the note to
 // support@otopair.com; reply-to the user's email when we have it.
 // ----------------------------------------------------------------------------

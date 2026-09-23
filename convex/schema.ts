@@ -2655,6 +2655,62 @@ export default defineSchema({
     .index("by_email", ["email"])
     .index("by_status", ["status"]),
 
+  // Public customer support / charge-dispute intake (web, no login). The public
+  // /support form → /api/support/submit → supportRequests.submit writes a "new"
+  // row here; the director "Disputes" tab (directorDisputes.listUnifiedDisputes)
+  // triages it alongside booking_disputes (mobile) and payment_disputes (Stripe).
+  // Everything the customer supplies is UNTRUSTED free text — order_reference and
+  // shop_name_text are hints only, never ids. The director resolves the free-text
+  // order into a real booking via supportRequests.linkToBooking, which derives
+  // linked_user_id/linked_shop_id server-side from the booking (never the client).
+  support_requests: defineTable({
+    // --- Customer-supplied (public form; UNTRUSTED) ---
+    customer_email: v.string(), // stored trimmed + lowercased
+    customer_name: v.string(),
+    customer_phone: v.optional(v.string()), // digits-normalized in the route
+    category: v.string(), // "charge_dispute" | "service_quality" | "other"
+    subject: v.string(),
+    description: v.string(),
+    order_reference: v.optional(v.string()), // free text: invoice #, order #, last-6 of id
+    shop_name_text: v.optional(v.string()), // free-text shop name; not an id
+
+    // --- Lifecycle ---
+    status: v.string(), // "new" | "in_review" | "resolved" | "closed"
+
+    // --- Director triage (set post-intake) ---
+    linked_booking_id: v.optional(v.id("bookings")), // enables the refund seam
+    linked_user_id: v.optional(v.id("users")), // derived from the booking on link
+    linked_shop_id: v.optional(v.id("shops")), // derived from the booking on link
+    assigned_to_id: v.optional(v.id("director_users")),
+    assigned_to_name: v.optional(v.string()),
+    internal_notes: v.optional(
+      v.array(
+        v.object({
+          text: v.string(),
+          author: v.string(),
+          at: v.number(),
+        }),
+      ),
+    ),
+    resolution: v.optional(v.string()), // "no_refund" | "partial_refund" | "full_refund" | "info_only"
+    resolution_notes: v.optional(v.string()),
+    resolution_refund_cents: v.optional(v.number()), // written by the refund seam only
+    resolved_at: v.optional(v.number()),
+    // Director actor name (reviewers are director_users, not app users). audit_log
+    // has the full trail. Mirrors shop_applications.reviewed_by_name.
+    reviewed_by_name: v.optional(v.string()),
+
+    // --- Provenance / audit ---
+    source: v.optional(v.string()), // "support-web"
+    user_agent: v.optional(v.string()),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_status", ["status"]) // director queue, per-status
+    .index("by_customer_email", ["customer_email"]) // group a customer's tickets; light dedupe
+    .index("by_linked_booking_id", ["linked_booking_id"]) // "does this booking already have a web ticket?"
+    .index("by_created_at", ["created_at"]), // newest-first inbox
+
   // [U-D] Block time types for shop scheduling
   block_time_types: defineTable({
     shop_id: v.id("shops"),
@@ -3687,7 +3743,10 @@ export default defineSchema({
     .index("by_payment_id", ["payment_id"])
     .index("by_booking_id", ["booking_id"])
     .index("by_shop_id", ["shop_id"])
-    .index("by_stripe_dispute_id", ["stripe_dispute_id"]),
+    .index("by_stripe_dispute_id", ["stripe_dispute_id"])
+    // Director "Disputes" inbox reads open chargebacks by status without an
+    // unbounded scan (directorDisputes.listUnifiedDisputes).
+    .index("by_status", ["status"]),
 
   // [I]
   transactions: defineTable({

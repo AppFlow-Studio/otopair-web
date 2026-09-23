@@ -2,7 +2,7 @@
 // Suppress this file; runtime types are validated by the Convex deployment.
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -15,6 +15,7 @@ import type { CalendarEvent } from "@/app/(portal)/schedule/day-swim-lanes";
 import { getBookingEndTime } from "@/lib/schedule-overlap";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
 import { formatHoursValue } from "@/lib/labor-units";
+import { MAX_PRICE_DOLLARS, clampPriceDollarsInput } from "@/lib/price-cap";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { shouldShowShopQuoteRequest } from "@/lib/quoteRequestVisibility";
 import {
@@ -34,6 +35,13 @@ import {
 } from "@/components/ui/select";
 import { QuoteVehiclePanel, type QuoteSpecItem } from "@/components/quote/quote-vehicle-panel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import { useSlotHold, type SlotHoldLostReason, type SlotHoldSelection } from "@/lib/use-slot-hold";
+import {
+  SlotHoldChip,
+  SlotLostNotice,
+  buildSlotLostNotice,
+  type SlotLostNoticeState,
+} from "@/components/booking/slot-hold-notice";
 
 // Customer-facing tier vocabulary (from the tire-spec picker) is
 // premium / plus / standard, but the tire_brands catalog is keyed
@@ -520,6 +528,38 @@ export function TireQuoteSubmissionDialog({
   const [mechanicId, setMechanicId] = useState<string>(existing?.mechanic_id ? String(existing.mechanic_id) : "");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [slotNotice, setSlotNotice] = useState<SlotLostNoticeState | null>(null);
+
+  const clearSlot = useCallback(() => {
+    setAvailabilityDate("");
+    setAvailabilityTime("");
+    setMechanicId("");
+  }, []);
+
+  // The picked slot was booked out from under us, or our hold ran out:
+  // deselect it and explain, instead of letting submit fail with a raw error.
+  // The lanes are reactive, so the booking that took it is already on screen.
+  const handleSlotLost = useCallback(
+    (reason: SlotHoldLostReason, selection: SlotHoldSelection) => {
+      const name = shopMechanics.find((m) => String(m._id) === selection.mechanicId)?.name;
+      setSlotNotice(buildSlotLostNotice(reason, selection, name));
+      setError(null);
+      clearSlot();
+    },
+    [shopMechanics, clearSlot],
+  );
+
+  // 15-min (director-tunable) hold on the picked mechanic+window so a customer
+  // can't book it from the app while this form is being filled out.
+  const slotHold = useSlotHold({
+    shopId,
+    date: availabilityDate,
+    time: availabilityTime,
+    mechanicId,
+    durationMinutes,
+    requoteOf: existing ? { quote_type: "tire", response_id: existing._id } : undefined,
+    onLost: handleSlotLost,
+  });
 
   // Schedule lane state
   const [laneDate, setLaneDate] = useState<Date | null>(existing ? dateStringToDate(existing.availability.date) : null);
@@ -541,6 +581,14 @@ export function TireQuoteSubmissionDialog({
   const blockedSlots = useQuery(
     api.schedule.getBlockedSlots,
     laneDate ? { dateFrom: laneDateStr, dateTo: laneDateStr } : "skip",
+  );
+  // Other checkouts' in-flight slot holds (customers mid-booking, other staff)
+  // — shown as non-clickable "On hold" blocks. Our own hold is excluded.
+  const activeSlotHolds = useQuery(
+    api.schedule.getActiveSlotHolds,
+    laneDate
+      ? { dateFrom: laneDateStr, dateTo: laneDateStr, sessionId: slotHold.sessionId }
+      : "skip",
   );
   const initialLookaheadBookings = useQuery(api.schedule.getBookingsForRange, {
     dateFrom: initialLookaheadRange.dateFrom,
@@ -645,8 +693,64 @@ export function TireQuoteSubmissionDialog({
       };
     });
 
-    return [...bookingEvents, ...blockedEvents];
-  }, [scheduleBookings, blockedSlots, nowTimestamp]);
+    const holdEvents: CalendarEvent[] = (activeSlotHolds ?? [])
+      .filter((h: any) => h.expiresAt > nowTimestamp)
+      .map((h: any) => {
+        const [sh, sm] = h.startTime.split(":").map(Number);
+        const [eh, em] = h.endTime.split(":").map(Number);
+        const start = new Date(h.date + "T00:00:00");
+        start.setHours(sh, sm, 0, 0);
+        const end = new Date(h.date + "T00:00:00");
+        end.setHours(eh, em, 0, 0);
+        return {
+          id: `hold-${h._id}`,
+          title: "On hold",
+          start,
+          end,
+          resourceId: h.mechanicId ?? undefined,
+          type: "blocked" as const,
+          status: "blocked",
+          blockTitle: "On hold",
+          isHold: true,
+        };
+      });
+
+    return [...bookingEvents, ...blockedEvents, ...holdEvents];
+  }, [scheduleBookings, blockedSlots, activeSlotHolds, nowTimestamp]);
+
+  // Safety net when holds are switched off (director flag): if a booking lands
+  // on the picked window while the form is open, deselect it right away rather
+  // than letting submit fail. With holds on, holdSlot already guards this.
+  useEffect(() => {
+    if (slotHold.status !== "disabled") return;
+    if (!availabilityDate || !availabilityTime || !mechanicId) return;
+    const start = new Date(`${availabilityDate}T${availabilityTime}`);
+    const end = new Date(start.getTime() + durationMinutes * 60 * 1000);
+    const ownQuoteEventId = existing ? `tq_${existing._id}` : null;
+    const conflict = laneEvents.some(
+      (ev) =>
+        String(ev.resourceId ?? "") === mechanicId &&
+        ev.id !== ownQuoteEventId &&
+        ev.start < end &&
+        ev.end > start,
+    );
+    if (conflict) {
+      handleSlotLost("taken", {
+        date: availabilityDate,
+        time: availabilityTime,
+        mechanicId,
+      });
+    }
+  }, [
+    slotHold.status,
+    laneEvents,
+    availabilityDate,
+    availabilityTime,
+    mechanicId,
+    durationMinutes,
+    existing,
+    handleSlotLost,
+  ]);
 
   const laneDayHours = useMemo(() => {
     if (!laneDate) return null;
@@ -726,7 +830,20 @@ export function TireQuoteSubmissionDialog({
   }, [tireBrand, perTirePrice, laborCost, availabilityIsFuture, mechanicId]);
   const missingReason = missing.length ? `Still needed: ${missing.join(", ")}` : undefined;
 
-  const canSubmit = missing.length === 0 && total !== null && !submitting;
+  // Per-field values over the $10,000 ceiling — the inputs clamp on edit, but a
+  // legacy quote loaded above the cap (or a pasted value) can still sit here.
+  // Blocks submit and drives a live inline warning under the offending field.
+  const overCapPerTire = Number(perTirePrice) > MAX_PRICE_DOLLARS;
+  const overCapLabor = Number(laborCost) > MAX_PRICE_DOLLARS;
+  const overCap: string[] = [];
+  if (overCapPerTire) overCap.push("per-tire price");
+  if (overCapLabor) overCap.push("labor cost");
+  const overCapReason = overCap.length
+    ? `Over the $${MAX_PRICE_DOLLARS.toLocaleString()} max: ${overCap.join(", ")}`
+    : undefined;
+
+  const canSubmit =
+    missing.length === 0 && overCap.length === 0 && total !== null && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit || total === null) return;
@@ -744,10 +861,13 @@ export function TireQuoteSubmissionDialog({
         estimated_duration_minutes: durationMinutes,
         mechanic_id: mechanicId as Id<"mechanics">,
       };
+      const holdArgs = slotHold.holdId
+        ? { hold_id: slotHold.holdId, session_id: slotHold.sessionId }
+        : {};
       if (existing) {
-        await requote({ response_id: existing._id, ...quote });
+        await requote({ response_id: existing._id, ...holdArgs, ...quote });
       } else {
-        await submit({ booking_id: request._id, shop_id: shopId, ...quote });
+        await submit({ booking_id: request._id, shop_id: shopId, ...holdArgs, ...quote });
       }
       notify.success(existing ? "Quote updated" : "Quote sent to customer");
       onClose();
@@ -757,7 +877,15 @@ export function TireQuoteSubmissionDialog({
         onHeld?.();
         return;
       }
-      setError(e instanceof Error ? e.message : "Couldn't submit your quote. Please try again.");
+      if (data?.code === "SLOT_UNAVAILABLE") {
+        handleSlotLost("taken", {
+          date: availabilityDate,
+          time: availabilityTime,
+          mechanicId,
+        });
+        return;
+      }
+      setError(errorMessage(e, "Couldn't submit your quote. Please try again."));
     } finally {
       setSubmitting(false);
     }
@@ -818,6 +946,9 @@ export function TireQuoteSubmissionDialog({
                 </span>
               )}
             </div>
+            {slotNotice && (
+              <SlotLostNotice notice={slotNotice} onDismiss={() => setSlotNotice(null)} />
+            )}
             {laneDayHours?.isClosed && (
               <div className="px-4 py-2.5 bg-muted/50 border-b border-border text-xs text-muted-foreground text-center">
                 Shop is closed on this day — pick another date.
@@ -848,6 +979,7 @@ export function TireQuoteSubmissionDialog({
                       : null
                   }
                   onSelectEmptyCell={laneDayHours?.isClosed ? undefined : (info) => {
+                    setSlotNotice(null);
                     setLaneDate(dateStringToDate(info.date));
                     setAvailabilityDate(info.date);
                     setAvailabilityTime(info.startTime);
@@ -916,12 +1048,18 @@ export function TireQuoteSubmissionDialog({
                   <input
                     type="number"
                     min="0"
+                    max={MAX_PRICE_DOLLARS}
                     step="0.01"
                     value={perTirePrice}
-                    onChange={(e) => setPerTirePrice(e.target.value)}
+                    onChange={(e) => setPerTirePrice(clampPriceDollarsInput(e.target.value))}
                     placeholder="0.00"
                     className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                   />
+                  {overCapPerTire ? (
+                    <p className="mt-1 text-[11px] font-medium text-amber-700">
+                      Over the ${MAX_PRICE_DOLLARS.toLocaleString()} max — lower this price.
+                    </p>
+                  ) : null}
                 </Field>
                 <Field label="Quantity">
                   <input
@@ -937,12 +1075,18 @@ export function TireQuoteSubmissionDialog({
                 <input
                   type="number"
                   min="0"
+                  max={MAX_PRICE_DOLLARS}
                   step="0.01"
                   value={laborCost}
-                  onChange={(e) => setLaborCost(e.target.value)}
+                  onChange={(e) => setLaborCost(clampPriceDollarsInput(e.target.value))}
                   placeholder="0.00"
                   className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
                 />
+                {overCapLabor ? (
+                  <p className="mt-1 text-[11px] font-medium text-amber-700">
+                    Over the ${MAX_PRICE_DOLLARS.toLocaleString()} max — lower this cost.
+                  </p>
+                ) : null}
               </Field>
 
               <Field label="Total ($)">
@@ -980,11 +1124,18 @@ export function TireQuoteSubmissionDialog({
                 {availabilityDate && availabilityTime && mechanicId ? (
                   <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
                     <p className="font-medium text-foreground">{availabilityFormatted}</p>
+                    <div className="mt-1">
+                      <SlotHoldChip
+                        status={slotHold.status}
+                        countdownLabel={slotHold.countdownLabel}
+                        remainingMs={slotHold.remainingMs}
+                      />
+                    </div>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       {shopMechanics.find((m) => String(m._id) === mechanicId)?.name ?? ""}
                     </p>
                     <button
-                      onClick={() => { setAvailabilityDate(""); setAvailabilityTime(""); setMechanicId(""); }}
+                      onClick={clearSlot}
                       className="mt-1.5 text-xs text-muted-foreground hover:text-foreground underline"
                     >
                       Clear
@@ -1009,7 +1160,11 @@ export function TireQuoteSubmissionDialog({
 
             {/* Footer */}
             <div className="px-5 py-4 border-t border-border flex gap-2 justify-end items-center shrink-0">
-              {missingReason ? (
+              {overCapReason ? (
+                <p className="mr-auto text-xs font-medium text-amber-700" role="status">
+                  {overCapReason}
+                </p>
+              ) : missingReason ? (
                 <p className="mr-auto text-xs text-muted-foreground" role="status">
                   {missingReason}
                 </p>
@@ -1024,7 +1179,7 @@ export function TireQuoteSubmissionDialog({
               <button
                 onClick={handleSubmit}
                 disabled={!canSubmit}
-                title={missingReason}
+                title={overCapReason ?? missingReason}
                 className="px-3 py-2 text-sm rounded-lg bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-50"
               >
                 {submitting

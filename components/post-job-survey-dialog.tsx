@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -94,6 +95,7 @@ import ServiceSuggestions from "@/components/booking/service-suggestions";
 import { cn } from "@/lib/utils";
 import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import { MAX_PRICE_CENTS, MAX_PRICE_DOLLARS } from "@/lib/price-cap";
 import {
   BRAKE_PAD_BRAND_OPTIONS,
   TIRE_BRAND_OPTIONS,
@@ -2252,6 +2254,23 @@ function PostJobSurveyDialogBody({
     return 12500;
   }, [laborRateCents, laborCostDollars, estimatedLaborMinutes]);
 
+  // Any labor LINE (hours × rate) over the $10,000 ceiling — mechanic-entered
+  // hours in either the estimate cycle's per-service inputs (serviceLaborHours)
+  // or the standalone Labor step (laborAllocations). Blocks Continue so the
+  // over-cap line is fixed here, not rejected server-side at submit.
+  const hasLaborLineOverCap = useMemo(() => {
+    const rate = effectiveLaborRateCents;
+    if (!(rate > 0)) return false;
+    const overCap = (hoursStr: string) => {
+      const hours = Number(hoursStr);
+      return Number.isFinite(hours) && Math.round(hours * rate) > MAX_PRICE_CENTS;
+    };
+    return (
+      Object.values(serviceLaborHours).some(overCap) ||
+      Object.values(laborAllocations).some(overCap)
+    );
+  }, [effectiveLaborRateCents, serviceLaborHours, laborAllocations]);
+
   const liveTotals = useMemo(() => {
     if (!isEstimateCycle) return null;
     return computeEstimateTotals({
@@ -3667,6 +3686,7 @@ function PostJobSurveyDialogBody({
                         ).length,
                   recommendations,
                   laborStepValid,
+                  laborOverCap: hasLaborLineOverCap,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -3701,11 +3721,14 @@ function canAdvance(
     unpricedBlockingCount: number;
     recommendations: RecRowState[];
     laborStepValid: boolean;
+    // Any labor line (hours × rate) over the $10,000 per-line ceiling. Blocks
+    // both the standalone Labor step and the estimate cycle's merged parts step.
+    laborOverCap: boolean;
   }
 ) {
   if (step === "labor") {
-    // Can't leave labor with any line at 0 — that would quote free labor.
-    return state.laborStepValid;
+    // Can't leave labor with any line at 0 (free labor) or over the $10k cap.
+    return state.laborStepValid && !state.laborOverCap;
   }
   if (step === "recommendations") {
     // Every rec for a has_options service must carry a pick.
@@ -3735,6 +3758,9 @@ function canAdvance(
     // Every billable shop part must carry a price. An unpriced row has to be
     // priced, swapped, marked Not used, or removed before continuing.
     if (state.unpricedBlockingCount > 0) return false;
+    // In the estimate cycle this step also holds per-service labor — a line
+    // over the $10k ceiling must be lowered before continuing.
+    if (state.laborOverCap) return false;
     return true;
   }
   if (step === "parts_accuracy") {
@@ -4646,6 +4672,15 @@ function ServicePartsGroup({
   // the schedule, never added to the total.
   const showScheduleLabor =
     !!priced && !!group.laborKey && group.laborBills !== true;
+  // Live per-line labor guard: this billing input's hours × rate can't exceed
+  // the $10,000 ceiling. Scheduling-only labor (showScheduleLabor) never bills,
+  // so it's exempt.
+  const laborLineDollars =
+    showLabor && group.laborKey
+      ? (Number(laborInputValue(group.laborKey)) || 0) *
+        (Number(laborRatePerHourDollars) || 0)
+      : 0;
+  const laborOverCap = laborLineDollars > MAX_PRICE_DOLLARS;
   return (
     <div className="overflow-hidden rounded-2xl border border-primary/12 bg-card">
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -4710,6 +4745,16 @@ function ServicePartsGroup({
           </div>
         ) : null}
       </div>
+      {laborOverCap ? (
+        <div className="border-t border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
+          Labor for {group.label} is $
+          {laborLineDollars.toLocaleString("en-US", {
+            maximumFractionDigits: 2,
+          })}{" "}
+          — over the ${MAX_PRICE_DOLLARS.toLocaleString()} max. Lower the hours to
+          continue.
+        </div>
+      ) : null}
       {open ? (
         <div className="space-y-2 border-t border-primary/10 px-3 py-3">
           {showScheduleLabor && group.laborKey ? (
@@ -5736,6 +5781,7 @@ function PartsStep({
                               </span>
                               <FixedCentCurrencyInput
                                 value={part.cost}
+                                maxCents={MAX_PRICE_CENTS}
                                 onValueChange={(value) =>
                                   updatePart(index, {
                                     cost: value,
@@ -8827,11 +8873,10 @@ function LaborStep({
             // or an editable input (that would imply the mechanic's time moves
             // the price — it doesn't).
             const baseLocked = isFixedPrice && line.key === "base";
+            const lineOverCap = !baseLocked && lineDollars > MAX_PRICE_DOLLARS;
             return (
-              <div
-                key={line.key}
-                className="flex items-center justify-between gap-3 rounded-xl border border-primary/10 bg-card px-4 py-3"
-              >
+              <Fragment key={line.key}>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/10 bg-card px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-[13px] font-medium text-foreground">
                     {line.label}
@@ -8860,7 +8905,18 @@ function LaborStep({
                     <span className="text-[11px] text-muted-foreground">hr</span>
                   </div>
                 )}
-              </div>
+                </div>
+                {lineOverCap ? (
+                  <p className="px-1 text-[11px] font-medium text-amber-700">
+                    {line.label} labor is $
+                    {lineDollars.toLocaleString("en-US", {
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    — over the ${MAX_PRICE_DOLLARS.toLocaleString()} max. Lower the
+                    hours to continue.
+                  </p>
+                ) : null}
+              </Fragment>
             );
           })}
         </div>

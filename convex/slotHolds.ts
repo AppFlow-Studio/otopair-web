@@ -24,6 +24,7 @@ import {
   quoteHoldContextValidator,
   getAuthenticatedQuoteUser,
   resolveOwnedQuoteHoldExclusion,
+  requireQuoteShopAccess,
 } from "./lib/quoteHoldOwnership";
 
 const SLOT_HOLD_DEFAULTS = { enabled: true, ttlMs: 15 * 60 * 1000 };
@@ -71,6 +72,10 @@ export const holdSlot = mutation({
     session_id: v.string(),
     held_by: v.optional(v.id("users")),
     quote_context: v.optional(quoteHoldContextValidator),
+    // Shop-side requote: the quote being revised already holds its current
+    // window, so ignore it here (shop staff only) — otherwise moving a quote
+    // to an overlapping time would self-conflict.
+    requote_of: v.optional(quoteHoldContextValidator),
   },
   handler: async (ctx, args) => {
     const cfg = await getSlotHoldConfig(ctx);
@@ -81,6 +86,17 @@ export const holdSlot = mutation({
 
     const duration = args.duration_minutes > 0 ? args.duration_minutes : 60;
     const quoteExclusion = await resolveOwnedQuoteHoldExclusion(ctx, args.quote_context);
+    if (args.requote_of) {
+      const own: any = await ctx.db.get(args.requote_of.response_id);
+      if (own && String(own.shop_id) === String(args.shop_id)) {
+        await requireQuoteShopAccess(ctx, own.shop_id);
+        if (args.requote_of.quote_type === "tire") {
+          quoteExclusion.excludeTireQuoteResponseId = String(own._id);
+        } else {
+          quoteExclusion.excludeRotorQuoteResponseId = String(own._id);
+        }
+      }
+    }
     const quoteOwner = args.quote_context
       ? await getAuthenticatedQuoteUser(ctx)
       : null;

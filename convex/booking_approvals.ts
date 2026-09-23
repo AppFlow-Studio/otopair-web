@@ -621,7 +621,9 @@ async function performSubmission(
   }
 
   const newState = inRange
-    ? "in_range"
+    ? args.cycle === "post_job"
+      ? "in_range"
+      : "hold_processing"
     : args.cycle === "pre_job"
       ? "pre_job_pending"
       : args.cycle === "mid_job"
@@ -675,7 +677,10 @@ async function performSubmission(
       await ctx.scheduler.runAfter(
         0,
         internal.payments_stripe.adjustAuthorization,
-        { bookingId: args.bookingId },
+        {
+          bookingId: args.bookingId,
+          stateAfterHold: args.cycle === "post_job" ? undefined : "in_range",
+        },
       );
     }
     // No confirmation needed either way — the price sits inside (or under) what
@@ -963,13 +968,15 @@ export const applyApprovalDecision = mutation({
         decided_by_user_id: user._id,
         ceiling_after_decision_cents: newCeiling,
       });
+      const stateAfterHold =
+        cycle === "pre_job"
+          ? "pre_job_approved"
+          : cycle === "mid_job"
+            ? "mid_job_approved"
+            : "post_job_approved";
       const approvedPatch: any = {
         payment_approval_state:
-          cycle === "pre_job"
-            ? "pre_job_approved"
-            : cycle === "mid_job"
-              ? "mid_job_approved"
-              : "post_job_approved",
+          cycle === "post_job" ? stateAfterHold : "hold_processing",
         running_approved_ceiling_cents: newCeiling,
         estimate_approved_at_ms: now,
         estimate_decided_by_user_id: user._id,
@@ -1004,7 +1011,10 @@ export const applyApprovalDecision = mutation({
         await ctx.scheduler.runAfter(
           0,
           internal.payments_stripe.adjustAuthorization,
-          { bookingId: args.bookingId },
+          {
+            bookingId: args.bookingId,
+            stateAfterHold: cycle === "post_job" ? undefined : stateAfterHold,
+          },
         );
         if (cycle === "post_job") {
           // Final actuals already > approved ceiling. Approved → finalize

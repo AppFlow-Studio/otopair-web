@@ -39,6 +39,7 @@ import { PortalSidebarContext } from "./portal-context";
 import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
 import MechanicPickupAlert from "@/components/mechanic/pickup-alert";
+import { PortalAuthBoundary } from "@/components/portal/portal-auth-boundary";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -273,6 +274,21 @@ export default function PortalLayout({
 }: {
   children: React.ReactNode;
 }) {
+  const pathname = usePathname();
+  const { isLoaded, isSignedIn } = useUser();
+
+  return (
+    <PortalAuthBoundary
+      isLoaded={isLoaded}
+      isSignedIn={isSignedIn}
+      allowSignedOut={pathname.startsWith("/accept-invite")}
+    >
+      <AuthenticatedPortalLayout>{children}</AuthenticatedPortalLayout>
+    </PortalAuthBoundary>
+  );
+}
+
+function AuthenticatedPortalLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user } = useUser();

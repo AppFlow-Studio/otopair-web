@@ -1122,7 +1122,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       markNotificationsRead({ bookingId: jobId }).catch(() => {});
     }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Sync assign dropdown with job's current mechanic
+    // Reset booking-scoped UI only when navigating to a different booking.
     useEffect(() => {
       if (!jobId) return;
       setActionError("");
@@ -1131,7 +1131,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowEarlyArrivalDialog(false);
       setShowEndCurrentJobDialog(false);
       setRaceConflictBookingId(null);
-      setAssigningMechanicId(currentAssignmentKey);
       setIsEditingActuals(false);
       setActiveTab("details");
       setCopiedField(null);
@@ -1139,6 +1138,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         window.clearTimeout(copyEmailTimeoutRef.current);
         copyEmailTimeoutRef.current = null;
       }
+    }, [jobId]);
+
+    // A live reassignment updates the selector but must not close an active
+    // workflow: its BookingWorkflowGuard needs to show any acknowledgement.
+    useEffect(() => {
+      if (!jobId) return;
+      setAssigningMechanicId(currentAssignmentKey);
     }, [jobId, currentAssignmentKey]);
 
     // Spec v2 §2 step 3: once the job is running, the on-lift half opens by
@@ -2274,6 +2280,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               label: "Mark no-show",
                               onSelect: () => handlePostThresholdNoShow(),
                               destructive: true,
+                            });
+                          }
+                          if (canOpenMpi && !mpiGateOpen) {
+                            overflow.push({
+                              key: "edit-inspection",
+                              label: "Edit inspection",
+                              onSelect: () => setShowPrejobDialog(true),
                             });
                           }
                           if (canCancel) {

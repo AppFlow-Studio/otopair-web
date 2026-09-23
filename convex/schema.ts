@@ -3221,7 +3221,7 @@ export default defineSchema({
     ),
 
     // Orthogonal sub-state alongside `status`. Enum values (string-stored,
-    // validated in mutation code): "none" | "in_range" | "pre_job_pending"
+    // validated in mutation code): "none" | "hold_processing" | "in_range" | "pre_job_pending"
     // | "pre_job_approved" | "pre_job_declined" | "mid_job_pending"
     // | "mid_job_approved" | "mid_job_declined" | "post_job_pending"
     // | "post_job_approved" | "post_job_declined" | "captured"

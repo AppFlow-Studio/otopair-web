@@ -16,4 +16,12 @@ describe("booking workflow guard integration", () => {
       expect(read(file)).toContain("BookingWorkflowGuard");
     }
   });
+
+  test("offers completed MPI inspection editing from the overflow menu", () => {
+    const source = read("components/booking-detail-panel.tsx");
+
+    expect(source).toMatch(
+      /if \(canOpenMpi && !mpiGateOpen\) \{[\s\S]*?key: "edit-inspection",[\s\S]*?label: "Edit inspection",[\s\S]*?setShowPrejobDialog\(true\)/,
+    );
+  });
 });

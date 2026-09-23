@@ -900,6 +900,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     >(null);
     const [isEditingActuals, setIsEditingActuals] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    // Cancel + decline are two-step: pick a reason, then an explicit "are you
+    // sure" summary. Only one of the two dialogs is ever open, so they share it.
+    const [endBookingStep, setEndBookingStep] = useState<"reason" | "confirm">("reason");
+    useEffect(() => {
+      if (!showCancelConfirm && !showDeclineModal) setEndBookingStep("reason");
+    }, [showCancelConfirm, showDeclineModal]);
     const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
@@ -1074,6 +1080,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     // we know the conflicting id immediately. Fetch its summary directly so
     // the dialog renders accurate copy without waiting for the reactive
     // `activeJobConflict` query to catch up.
+    // Server-side reason Accept would refuse (closed / past close / blocked).
+    const acceptWindowIssue = useQuery(
+      api.bookings.getAcceptWindowIssue,
+      job?._id &&
+        (job.status === "pending" || job.status === "pending_shop_acceptance")
+        ? { bookingId: job._id }
+        : "skip"
+    );
     const raceConflictSummary = useQuery(
       api.bookings.getActiveJobSummaryById,
       raceConflictBookingId ? { bookingId: raceConflictBookingId } : "skip"
@@ -1206,6 +1220,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         );
         return;
       }
+      if (acceptWindowIssue) {
+        setActionError(`Can't accept — ${acceptWindowIssue} Propose a new time instead.`);
+        return;
+      }
       setActionError("");
       setIsActioning(true);
       try {
@@ -1235,7 +1253,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowDeclineModal(false);
         setDeclineReason(DECLINE_REASONS[0]);
         setDeclineOtherText("");
-        onSuccess?.("Booking declined");
+        onSuccess?.(
+          !isWalkIn
+            ? "Booking declined — the customer has been notified"
+            : "Booking declined",
+        );
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not decline booking.",
@@ -1269,7 +1291,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowCancelConfirm(false);
         const shouldOpenNew = createNewAfterCancel;
         setCreateNewAfterCancel(false);
-        onSuccess?.(isNoShow ? "Booking marked no-show" : "Booking cancelled");
+        onSuccess?.(
+          isNoShow
+            ? "Booking marked no-show"
+            : !isWalkIn
+              ? "Booking cancelled — the customer has been notified"
+              : "Booking cancelled",
+        );
         if (shouldOpenNew && onRequestNewBookingAfterCancel) {
           onRequestNewBookingAfterCancel({
             mechanicId: job.mechanicId ?? null,
@@ -1287,6 +1315,42 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       } finally {
         setIsActioning(false);
       }
+    }
+
+    // Step-2 "are you sure" body for the cancel / decline dialogs: restates
+    // exactly which booking ends, why, and what the customer will see.
+    function endBookingSummary(
+      kind: "cancelled" | "declined" | "no_show",
+      reason: string,
+    ) {
+      if (!job) return null;
+      const services = job.serviceNames.map(formatServiceDisplayName).join(", ");
+      const consequence =
+        kind === "no_show"
+          ? "The booking closes as a no-show and any no-show fee in your policy is charged."
+          : isWalkIn
+            ? "The booking is removed from your schedule and the time slot is freed."
+            : `${job.customerName || "The customer"} gets a push notification that the booking was ${kind}, and their card hold is released.`;
+      return (
+        <div className="mb-2 space-y-3">
+          <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+            <p className="font-medium text-foreground">
+              {services || "Booking"}
+              {job.customerName ? ` · ${job.customerName}` : ""}
+            </p>
+            <p className="mt-0.5 text-muted-foreground">
+              {job.vehicle ? `${job.vehicle} · ` : ""}
+              {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Reason: <span className="text-foreground">{reason}</span>
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {consequence} This can&apos;t be undone.
+          </p>
+        </div>
+      );
     }
 
     async function handleCancelReschedule() {
@@ -1821,10 +1885,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             return true;
           }
           if (e.key === "d" || e.key === "Enter") {
-            handleDecline();
+            // Enter/d only advances one step — a single keypress never declines.
+            if (endBookingStep === "reason") setEndBookingStep("confirm");
+            else handleDecline();
             return true;
           }
-          if (e.key === "c") {
+          if (e.key === "Backspace" && endBookingStep === "confirm") {
+            setEndBookingStep("reason");
+            return true;
+          }
+          if (e.key === "k") {
             setShowDeclineModal(false);
             return true;
           }
@@ -1854,7 +1924,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             return true;
           }
           if (e.key === "c" || e.key === "Enter") {
-            handleCancelJob();
+            // Enter/c only advances one step — a single keypress never cancels.
+            if (endBookingStep === "reason") setEndBookingStep("confirm");
+            else handleCancelJob();
+            return true;
+          }
+          if (e.key === "Backspace" && endBookingStep === "confirm") {
+            setEndBookingStep("reason");
             return true;
           }
           if (e.key === "e") {
@@ -2008,13 +2084,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           fixed price in the shop&apos;s service catalog.
                         </div>
                       ) : null}
+                      {canAccept && acceptWindowIssue ? (
+                        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-900">
+                          <span className="font-semibold">Outside available hours.</span>{" "}
+                          {acceptWindowIssue} Propose a new time instead of accepting.
+                        </div>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2">
                         {canAccept && (
                           <button
                             onClick={() =>
                               handleStatusAction("accept")
                             }
-                            disabled={isActioning}
+                            disabled={isActioning || !!acceptWindowIssue}
                             className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
                           >
                             {isActioning && (
@@ -3198,23 +3280,53 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <ConfirmationDialog
           open={showDeclineModal}
-          title="Decline this booking?"
-          description="Select a reason for declining:"
+          title={endBookingStep === "confirm" ? "Are you sure you want to decline?" : "Decline this booking?"}
+          description={
+            endBookingStep === "confirm"
+              ? undefined
+              : "Select a reason for declining:"
+          }
           onClose={() => setShowDeclineModal(false)}
           enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
-            onAction: () => setShowDeclineModal(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Declining..." : <ShortcutLabel text="Confirm decline" shortcutKey="d" />,
-            onAction: handleDecline,
-            disabled: isActioning,
-            variant: "destructive",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
+          secondaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: "Go back",
+                  onAction: () => setEndBookingStep("reason"),
+                  disabled: isActioning,
+                }
+              : {
+                  label: <ShortcutLabel text="Keep booking" shortcutKey="k" />,
+                  onAction: () => setShowDeclineModal(false),
+                  disabled: isActioning,
+                }
+          }
+          primaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: isActioning ? "Declining..." : <ShortcutLabel text="Yes, decline booking" shortcutKey="d" />,
+                  onAction: handleDecline,
+                  disabled: isActioning,
+                  variant: "destructive",
+                  leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+                }
+              : {
+                  label: <ShortcutLabel text="Continue" shortcutKey="d" />,
+                  onAction: () => setEndBookingStep("confirm"),
+                  disabled: isActioning,
+                  variant: "destructive",
+                }
+          }
         >
+          {endBookingStep === "confirm" ? (
+            endBookingSummary(
+              "declined",
+              declineReason === "Other"
+                ? declineOtherText.trim() || "Other"
+                : declineReason,
+            )
+          ) : (
+          <>
           <div className="space-y-2.5 mb-4">
             {DECLINE_REASONS.map((r) => (
               <label
@@ -3250,27 +3362,78 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
           )}
+          </>
+          )}
         </ConfirmationDialog>
 
         <ConfirmationDialog
           open={showCancelConfirm}
-          title="Cancel this booking?"
-          description="Select a reason for cancelling. The customer will be notified of the cancellation."
+          title={
+            endBookingStep === "confirm"
+              ? cancelReason === "Customer no-show"
+                ? "Are you sure you want to mark a no-show?"
+                : "Are you sure you want to cancel?"
+              : "Cancel this booking?"
+          }
+          description={
+            endBookingStep === "confirm"
+              ? undefined
+              : "Select a reason for cancelling."
+          }
           onClose={() => setShowCancelConfirm(false)}
           enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
-            onAction: () => setShowCancelConfirm(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel job" shortcutKey="c" />,
-            onAction: handleCancelJob,
-            disabled: isActioning,
-            variant: "destructive",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
+          secondaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: "Go back",
+                  onAction: () => setEndBookingStep("reason"),
+                  disabled: isActioning,
+                }
+              : {
+                  label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
+                  onAction: () => setShowCancelConfirm(false),
+                  disabled: isActioning,
+                }
+          }
+          primaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: isActioning
+                    ? cancelReason === "Customer no-show"
+                      ? "Marking no-show..."
+                      : "Cancelling..."
+                    : (
+                      <ShortcutLabel
+                        text={
+                          cancelReason === "Customer no-show"
+                            ? "Yes, mark no-show"
+                            : "Yes, cancel booking"
+                        }
+                        shortcutKey="c"
+                      />
+                    ),
+                  onAction: handleCancelJob,
+                  disabled: isActioning,
+                  variant: "destructive",
+                  leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+                }
+              : {
+                  label: <ShortcutLabel text="Continue" shortcutKey="c" />,
+                  onAction: () => setEndBookingStep("confirm"),
+                  disabled: isActioning,
+                  variant: "destructive",
+                }
+          }
         >
+          {endBookingStep === "confirm" ? (
+            endBookingSummary(
+              cancelReason === "Customer no-show" ? "no_show" : "cancelled",
+              cancelReason === "Other"
+                ? cancelOtherText.trim() || "Other"
+                : cancelReason,
+            )
+          ) : (
+          <>
           {onRequestReschedule &&
             job?.status !== "in_progress" &&
             job?.status !== "vehicle_at_shop" ? (
@@ -3347,6 +3510,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               rows={2}
               className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
+          )}
+          </>
           )}
         </ConfirmationDialog>
 

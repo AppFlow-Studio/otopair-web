@@ -183,6 +183,7 @@ import type * as lib_appleMapsGeocode from "../lib/appleMapsGeocode.js";
 import type * as lib_bookingEnrichment from "../lib/bookingEnrichment.js";
 import type * as lib_booking_field_redaction from "../lib/booking_field_redaction.js";
 import type * as lib_brakeScope from "../lib/brakeScope.js";
+import type * as lib_cancelReasonLabels from "../lib/cancelReasonLabels.js";
 import type * as lib_cancellation_policy from "../lib/cancellation_policy.js";
 import type * as lib_carApi from "../lib/carApi.js";
 import type * as lib_checkin_questions from "../lib/checkin_questions.js";
@@ -829,6 +830,7 @@ declare const fullApi: ApiFromModules<{
   "lib/bookingEnrichment": typeof lib_bookingEnrichment;
   "lib/booking_field_redaction": typeof lib_booking_field_redaction;
   "lib/brakeScope": typeof lib_brakeScope;
+  "lib/cancelReasonLabels": typeof lib_cancelReasonLabels;
   "lib/cancellation_policy": typeof lib_cancellation_policy;
   "lib/carApi": typeof lib_carApi;
   "lib/checkin_questions": typeof lib_checkin_questions;

@@ -2955,6 +2955,10 @@ export default defineSchema({
     ),
     cancel_requested_at_ms: v.optional(v.number()),
     cancel_request_reason: v.optional(v.string()),
+    // Set by applyBookingStatusTransition on → cancelled/declined. Drives the
+    // customer app's 24h "Cancelled" card. Role: "shop" | "customer" | "system".
+    cancelled_at_ms: v.optional(v.number()),
+    cancelled_by_role: v.optional(v.string()),
     // Shop/mechanic response to the customer's "request pickup" above. Written
     // by respondToPickupRequest; surfaced back to the customer's booking card
     // and cleared implicitly by the eventual cancel/settlement transition.

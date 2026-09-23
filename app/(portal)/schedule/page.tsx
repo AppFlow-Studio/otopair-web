@@ -1,5 +1,6 @@
 "use client";
 
+import { notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -2674,7 +2675,7 @@ export default function SchedulePage() {
                 });
               }}
               onClose={() => setSelectedBookingId(null)}
-              onSuccess={(msg) => setToast({ msg, key: Date.now() })}
+              onSuccess={(msg) => notify.success(msg)}
               showBookingsLink
             />
           )

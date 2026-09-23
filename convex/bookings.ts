@@ -69,6 +69,7 @@ import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-statu
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
+import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
 import {
   getActiveQuoteCheckoutHold,
@@ -605,6 +606,35 @@ export const getByUserIdWithDetails = query({
           historyAmountCents = cancellationFeeCents ?? 0;
         }
 
+        // Cancel context for the app's 24h "Cancelled" card: when, by whom,
+        // and a customer-safe reason. Status history is only read for
+        // cancelled/declined rows; it also backfills rows cancelled before
+        // cancelled_at_ms existed.
+        let cancelledAtMs: number | null = booking.cancelled_at_ms ?? null;
+        let cancelledByRole: string | null = booking.cancelled_by_role ?? null;
+        let cancellationReasonLabel: string | null = null;
+        if (booking.status === "cancelled" || booking.status === "declined") {
+          const history = await ctx.db
+            .query("booking_status_history")
+            .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+            .collect();
+          const cancelRow = history
+            .filter((h) => h.new_status === booking.status)
+            .sort((a, b) => (b.changed_at ?? 0) - (a.changed_at ?? 0))[0];
+          if (cancelRow) {
+            cancellationReasonLabel = customerCancelReasonLabel(cancelRow.reason);
+            cancelledAtMs ??= cancelRow.changed_at ?? null;
+            if (!cancelledByRole) {
+              cancelledByRole = !cancelRow.changed_by
+                ? "system"
+                : String(cancelRow.changed_by) === String(booking.user_id)
+                  ? "customer"
+                  : "shop";
+            }
+          }
+          cancelledAtMs ??= booking.updated_at ?? null;
+        }
+
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -659,6 +689,9 @@ export const getByUserIdWithDetails = query({
           cancellation_kind: booking.cancellation_kind ?? null,
           historyOutcome,
           historyAmountCents,
+          cancelled_at_ms: cancelledAtMs,
+          cancelled_by_role: cancelledByRole,
+          cancellation_reason_label: cancellationReasonLabel,
           // Shop-assigned invoice / work-order number — surfaced inline on
           // the booking card so the customer can quote it on support.
           invoice_number: booking.invoice_number,
@@ -3660,6 +3693,8 @@ export const markNoShow = mutation({
       cancellationFeeCents: feeCents,
       cancellationKind: kind,
     });
+    await notifyCustomerOfShopCancel(ctx, booking, { kind: "no_show" });
+    return result;
   },
 });
 
@@ -9974,10 +10009,23 @@ export async function applyBookingStatusTransition(
     live_stage?: string;
     cancellation_fee_cents?: number;
     cancellation_kind?: string;
+    cancelled_at_ms?: number;
+    cancelled_by_role?: string;
   } = {
     status: newStatus,
     updated_at: Date.now(),
   };
+  // Stamp when/who cancelled so the customer app can keep a "Cancelled" card
+  // visible for 24h. Role is derived rather than passed so every cancel path
+  // (shop, customer, cron) gets it without touching each caller.
+  if (newStatus === "cancelled" || newStatus === "declined") {
+    patch.cancelled_at_ms = patch.updated_at;
+    patch.cancelled_by_role = !changedBy
+      ? "system"
+      : booking.user_id && String(changedBy) === String(booking.user_id)
+        ? "customer"
+        : "shop";
+  }
   if (
     (newStatus === "cancelled" || newStatus === "no_show") &&
     typeof cancellationFeeCents === "number"
@@ -14874,14 +14922,72 @@ export const cancel = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    return await applyBookingStatusTransition(ctx, {
+    const reason = args.reason ?? "cancelled_by_shop";
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "cancelled",
       changedBy: user._id,
-      reason: args.reason ?? "cancelled_by_shop",
+      reason,
     });
+    await notifyCustomerOfShopCancel(ctx, booking, { kind: "cancelled", reason });
+    return result;
   },
 });
+
+/**
+ * Push the customer when the SHOP ends their booking (cancel/decline or a
+ * manual no-show). Without this the booking silently vanished from the app.
+ * Walk-ins (no user_id) have nobody to push. Dedupe is per booking, so a retry
+ * of the same mutation can't double-send.
+ */
+async function notifyCustomerOfShopCancel(
+  ctx: any,
+  booking: any,
+  { kind, reason }: { kind: "cancelled" | "no_show"; reason?: string },
+) {
+  if (!booking.user_id) return;
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopName = (shop as any)?.name ?? "The shop";
+  const { ymm, vin } = await resolveVehicleDisplay(ctx, booking.vin);
+  const dateLabel = booking.scheduled_date ?? "";
+  const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+  const whenLabel = dateLabel
+    ? ` on ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+    : "";
+  const vehiclePart = ymm ? ` for your ${ymm}` : "";
+  const reasonLabel = customerCancelReasonLabel(reason);
+
+  const title =
+    kind === "no_show" ? "Booking marked as a no-show" : "Your booking was cancelled";
+  const body =
+    kind === "no_show"
+      ? `${shopName} marked your appointment${vehiclePart}${whenLabel} as a no-show.`
+      : `${shopName} cancelled your appointment${vehiclePart}${whenLabel}.${
+          reasonLabel ? ` Reason: ${reasonLabel}.` : ""
+        } Any card hold has been released.`;
+
+  await enqueueNotificationOutbox(ctx, {
+    userId: booking.user_id,
+    bookingId: booking._id,
+    shopId: booking.shop_id,
+    channel: "push",
+    category: kind === "no_show" ? "booking_no_show_by_shop" : "booking_cancelled_by_shop",
+    dedupeKey: `booking-${kind}-by-shop:${String(booking._id)}`,
+    payload: buildCustomerPushPayload({
+      title,
+      body,
+      bookingId: booking._id,
+      vehicleLabel: ymm,
+      vin,
+      extra: {
+        scheduledDate: booking.scheduled_date,
+        scheduledTime: booking.scheduled_time,
+        shopName,
+        reasonLabel,
+      },
+    }),
+  });
+}
 
 async function proposeRescheduleImpl(
   ctx: any,

@@ -1,5 +1,6 @@
 "use client";
 
+import { notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -230,7 +231,7 @@ export default function PreviousBookingsPage() {
                 }}
                 onRequestRescheduleConfirmation={handleProposeReschedule}
                 onClose={() => setSelectedJobId(null)}
-                onSuccess={setSuccessMessage}
+                onSuccess={(msg) => notify.success(msg)}
                 hideDisclosedRange
               />
             </div>

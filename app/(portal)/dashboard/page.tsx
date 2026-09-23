@@ -1,5 +1,6 @@
 "use client";
 
+import { notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -923,7 +924,7 @@ function OwnerDashboardPage({
               }}
               onRequestRescheduleConfirmation={handleProposeReschedule}
               onClose={() => setSelectedJobId(null)}
-              onSuccess={setSuccessMessage}
+              onSuccess={(msg) => notify.success(msg)}
             />
           </div>
         </div>

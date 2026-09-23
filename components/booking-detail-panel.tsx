@@ -13,6 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { notify } from "@/lib/feedback";
 import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
@@ -76,6 +77,7 @@ import {
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
 import BookingTimeline from "@/components/booking/booking-timeline";
+import BookingPickupPanel from "@/components/pickup/booking-pickup-panel";
 import ElapsedTimer from "@/components/mechanic/elapsed-timer";
 import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
@@ -690,6 +692,13 @@ export interface JobDetailData {
   assignmentPreference?: "any" | "specific_mechanic";
   vehicleArrivedAtMs?: number | null;
   vehicleArrivedByUserId?: Id<"users"> | null;
+  // Pickup ("request to cancel & pick up car") round trip — drives the in-drawer
+  // pickup panel so the request stays actionable after it drops off the board.
+  cancelRequestedAtMs?: number | null;
+  cancelRequestReason?: string | null;
+  pickupResponse?: "acknowledged" | "bringing_out" | "declined" | null;
+  pickupRespondedAtMs?: number | null;
+  pickupRequestResolvedAtMs?: number | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -848,6 +857,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
+
+    // Success already toasts through each parent's onSuccess handler, but a
+    // failed action only set inline `actionError` before — surface it as a toast
+    // too so every action reacts. The assign-mechanic conflict text is a
+    // pre-click "why blocked" hint (shown inline by the button), not a failure,
+    // so it's excluded here.
+    useEffect(() => {
+      if (actionError && !actionError.startsWith("Cannot assign this mechanic")) {
+        notify.error(actionError);
+      }
+    }, [actionError]);
     const [showDeclineModal, setShowDeclineModal] = useState(false);
     const [activeTab, setActiveTab] = useState<"details" | "timeline">("details");
     const [nowMs, setNowMs] = useState(() => Date.now());
@@ -951,6 +971,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const updateStatus = useMutation(api.bookings.updateStatus);
     const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
     const markNoShow = useMutation(api.bookings.markNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
@@ -1412,6 +1433,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         return;
       }
       setShowPrejobDialog(true);
+    }
+
+    // Dedicated "Start job": begins an at-shop booking whose estimate is already
+    // settled (customer-confirmed, or declined-and-continuing at original scope).
+    // The estimate popup only CONFIRMS now — it never starts — so starting the
+    // labor clock is this explicit action. The transition itself is exactly what
+    // the popup used to do (updateStatus -> in_progress); the FSM's in_progress
+    // guard already blocks any not-yet-approved state.
+    async function handleBeginJob() {
+      if (!job?._id || !job.mechanicId) return;
+      if (job.status !== "vehicle_at_shop") {
+        setActionError("Mark the vehicle here before starting work.");
+        return;
+      }
+      setActionError("");
+      if (activeJobConflict) {
+        setShowEndCurrentJobDialog(true);
+        return;
+      }
+      setIsActioning(true);
+      try {
+        await updateStatus({
+          bookingId: job._id,
+          newStatus: "in_progress",
+          reason: "job_started",
+        });
+        onSuccess?.("Job started");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "";
+        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+          setShowEndCurrentJobDialog(true);
+        } else {
+          setActionError(message || "Could not start the job.");
+        }
+      } finally {
+        setIsActioning(false);
+      }
     }
 
     async function handleVehicleAtShop() {
@@ -1879,7 +1937,31 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     s === "in_progress" && !quoteAwaitingCustomer && !mpiGateOpen;
                   const canOpenMpi = s === "in_progress" && !quoteAwaitingCustomer;
                   const canMarkVehicleHere = s === "confirmed" && !quoteAwaitingCustomer;
-                  const canStartJob = s === "vehicle_at_shop" && !quoteAwaitingCustomer;
+                  const pasState = (job as any).paymentApprovalState as
+                    | string
+                    | undefined;
+                  const hasSubmittedEstimate =
+                    (job as any).hasDisclosedRange &&
+                    pasState != null &&
+                    pasState !== "none";
+                  // Customer confirmed (or auto in-range) → the job is ready to
+                  // begin via the dedicated Start Job button. The estimate popup
+                  // only confirms now; it never starts.
+                  const canBeginJob =
+                    s === "vehicle_at_shop" &&
+                    !quoteAwaitingCustomer &&
+                    (job as any).hasDisclosedRange &&
+                    (pasState === "in_range" || pasState === "pre_job_approved");
+                  // Open-vehicle-check (inspection) is for at-shop bookings that
+                  // still need the pre-job check: legacy non-range bookings, or
+                  // range bookings that haven't submitted an estimate yet. Once
+                  // an estimate exists, Start Job (approved) or the estimate
+                  // dialog (pending/declined) takes over.
+                  const canStartJob =
+                    s === "vehicle_at_shop" &&
+                    !quoteAwaitingCustomer &&
+                    !canBeginJob &&
+                    !hasSubmittedEstimate;
                   const canMarkNoShow = s === "confirmed" && !quoteAwaitingCustomer;
                   const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
                   const canCancel =
@@ -1905,6 +1987,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     !canAccept &&
                     !canAdjustQuote &&
                     !canMarkVehicleHere &&
+                    !canBeginJob &&
+                    !canStartJob &&
                     !canComplete &&
                     !canDecline &&
                     !canCancel &&
@@ -1950,6 +2034,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                 ccept booking
                               </span>
                             )}
+                          </button>
+                        )}
+                        {canBeginJob && (
+                          <button
+                            onClick={handleBeginJob}
+                            disabled={!job.mechanicId || isActioning}
+                            title={
+                              !job.mechanicId
+                                ? "Assign a mechanic first"
+                                : "Estimate confirmed — begin the job and start the clock."
+                            }
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Start job
                           </button>
                         )}
                         {canStartJob && (
@@ -2063,13 +2164,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               }
                               disabled={isActioning}
                               className={drawerSecondaryButtonClassName}
-                              title="View pending customer confirmation"
+                              title={
+                                (job as any).paymentApprovalState === "pre_job_declined"
+                                  ? "Customer declined — revise, continue with the original services, or release the vehicle."
+                                  : (job as any).paymentApprovalState === "sla_expired"
+                                    ? "No response in time — revise, continue with the original services, or release the vehicle."
+                                    : "View pending customer confirmation"
+                              }
                             >
                               {(job as any).paymentApprovalState === "post_job_pending"
                                 ? "Customer reviewing final billing"
                                 : (job as any).paymentApprovalState === "mid_job_pending"
                                   ? "Mid-job pending confirmation"
-                                  : "Open pending estimate"}
+                                  : (job as any).paymentApprovalState === "pre_job_declined"
+                                    ? "Review declined estimate"
+                                    : (job as any).paymentApprovalState === "sla_expired"
+                                      ? "Review expired estimate"
+                                      : "Open pending estimate"}
                             </button>
                           )}
                         {canComplete && job.status === "in_progress" && (
@@ -2362,7 +2473,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     sentLabel={holdApproval.relativeSentLabel}
                     slaLabel={holdApproval.slaCountdownLabel}
                     addedServiceNames={pendingAddedServiceNames}
-                    onWithdraw={holdApproval.onWithdraw}
+                    onWithdraw={async () => {
+                      await holdApproval.onWithdraw();
+                      notify.success("Approval request withdrawn");
+                    }}
                   />
                 ) : null}
                 {actionBar}
@@ -2417,6 +2531,20 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               />
             ) : (
               <div className="divide-y divide-border">
+                {/* Pickup request — pinned to the top so the mechanic can
+                    always act on it from the booking itself, even after it
+                    drops off the schedule board / dashboard alert. Renders
+                    nothing (no DOM node, so divide-y skips it) unless the car's
+                    here and a pickup was requested — see BookingPickupPanel. */}
+                <BookingPickupPanel
+                  bookingId={job._id as Id<"bookings">}
+                  status={job.status}
+                  cancelRequestedAtMs={job.cancelRequestedAtMs ?? null}
+                  cancelRequestReason={job.cancelRequestReason ?? null}
+                  pickupResponse={job.pickupResponse ?? null}
+                  pickupRespondedAtMs={job.pickupRespondedAtMs ?? null}
+                />
+
                 <VehiclePassportCard
                   job={job}
                   passport={vehiclePassport ?? null}
@@ -2959,6 +3087,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
           layoverNotes={[
+            // Diagnostic worksheet findings seed the post-job findings step so a
+            // diagnostic wrapping up here doesn't retype what the mechanic already
+            // wrote on the checklist.
+            (job as any)?.diagnosticFindingsNote ?? "",
             job?.jobActuals?.inProgressNotes ?? "",
             // The "why the added scope / why this adjustment" reasons the
             // mechanic already gave for agreed changes — folded in so they seed

@@ -18,8 +18,12 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Car, CheckCircle2, Loader2 } from "lucide-react";
+import { Car, CheckCircle2, KeyRound, Loader2 } from "lucide-react";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import {
+  DeclinePickupDialog,
+  ReleaseVehicleDialog,
+} from "@/components/pickup/release-vehicle-dialog";
 
 type PickupRequest = {
   bookingId: Id<"bookings">;
@@ -53,6 +57,8 @@ export default function MechanicPickupAlert() {
   const [takeoverKey, setTakeoverKey] = useState<string | null>(null);
   const [submittingKey, setSubmittingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [releaseFor, setReleaseFor] = useState<Id<"bookings"> | null>(null);
+  const [declineFor, setDeclineFor] = useState<Id<"bookings"> | null>(null);
 
   useEffect(() => {
     if (!isMechanic) return;
@@ -64,7 +70,11 @@ export default function MechanicPickupAlert() {
   }, [open, isMechanic]);
 
   if (typeof document === "undefined") return null;
-  if (!isMechanic || open.length === 0) return null;
+  if (!isMechanic) return null;
+  // Keep rendering while a release/decline dialog is up even after the request
+  // itself drops out of `open` (a response/release resolves it reactively).
+  const hasDialog = releaseFor != null || declineFor != null;
+  if (open.length === 0 && !hasDialog) return null;
 
   const takeover = takeoverKey
     ? open.find((r) => keyOf(r) === takeoverKey) ?? null
@@ -134,6 +144,13 @@ export default function MechanicPickupAlert() {
               </button>
               <button
                 type="button"
+                onClick={() => setReleaseFor(takeover.bookingId)}
+                className="inline-flex items-center justify-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-semibold text-red-700 transition-colors hover:bg-red-50"
+              >
+                <KeyRound className="h-4 w-4" /> Release car
+              </button>
+              <button
+                type="button"
                 disabled={isSubmitting(takeover)}
                 onClick={() => act(takeover, "acknowledged")}
                 className="inline-flex items-center justify-center gap-2 rounded-xl border border-white/20 bg-white/5 px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-white/10 disabled:opacity-60"
@@ -141,13 +158,22 @@ export default function MechanicPickupAlert() {
                 <CheckCircle2 className="h-4 w-4" /> On it
               </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setTakeoverKey(null)}
-              className="mt-4 text-xs font-medium text-red-200/70 underline-offset-2 hover:underline"
-            >
-              Dismiss — keep as a banner
-            </button>
+            <div className="mt-4 flex items-center justify-center gap-4">
+              <button
+                type="button"
+                onClick={() => setDeclineFor(takeover.bookingId)}
+                className="text-xs font-medium text-red-200/70 underline-offset-2 hover:underline"
+              >
+                Can&apos;t release yet
+              </button>
+              <button
+                type="button"
+                onClick={() => setTakeoverKey(null)}
+                className="text-xs font-medium text-red-200/70 underline-offset-2 hover:underline"
+              >
+                Dismiss — keep as a banner
+              </button>
+            </div>
           </div>
         </div>
       ) : banner ? (
@@ -182,6 +208,13 @@ export default function MechanicPickupAlert() {
                 </button>
                 <button
                   type="button"
+                  onClick={() => setReleaseFor(banner.bookingId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-white/40 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-white/10"
+                >
+                  <KeyRound className="h-3.5 w-3.5" /> Release
+                </button>
+                <button
+                  type="button"
                   disabled={isSubmitting(banner)}
                   onClick={() => act(banner, "acknowledged")}
                   className="inline-flex items-center gap-1.5 rounded-lg border border-white/40 px-2.5 py-1 text-xs font-semibold text-white transition-colors hover:bg-white/10 disabled:opacity-60"
@@ -193,6 +226,21 @@ export default function MechanicPickupAlert() {
           </div>
         </div>
       ) : null}
+
+      <ReleaseVehicleDialog
+        bookingId={releaseFor}
+        open={releaseFor != null}
+        onClose={() => setReleaseFor(null)}
+        onReleased={() => setTakeoverKey(null)}
+        zIndexClassName="z-[90]"
+      />
+      <DeclinePickupDialog
+        bookingId={declineFor}
+        open={declineFor != null}
+        onClose={() => setDeclineFor(null)}
+        onDeclined={() => setTakeoverKey(null)}
+        zIndexClassName="z-[90]"
+      />
     </>,
     document.body,
   );

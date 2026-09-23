@@ -77,6 +77,22 @@ async function resolveMakeFromVin(
   return await ctx.db.get(cfg.make_id);
 }
 
+/**
+ * Just the vehicle's make name for a VIN — the parts editor uses it to default a
+ * new part's Brand to the car's make (an OEM-first nudge) while still allowing an
+ * "Other / custom" override. Kept here to reuse resolveMakeFromVin; returns null
+ * when the VIN isn't resolvable to a make so the field simply falls back to
+ * free-text entry.
+ */
+export const makeForVin = query({
+  args: { vin: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<{ makeLabel: string | null }> => {
+    if (!args.vin || !args.vin.trim()) return { makeLabel: null };
+    const make = await resolveMakeFromVin(ctx, args.vin);
+    return { makeLabel: make?.name ?? null };
+  },
+});
+
 function byMakeThenLabel(a: FluidCatalogOption, b: FluidCatalogOption): number {
   if (a.make_match !== b.make_match) return a.make_match ? -1 : 1;
   return a.label.localeCompare(b.label);

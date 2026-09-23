@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { LiveAlert } from "./use-live-alerts";
+import {
+  DeclinePickupDialog,
+  ReleaseVehicleDialog,
+} from "@/components/pickup/release-vehicle-dialog";
 
 const ACCENT_TEXT: Record<LiveAlert["accent"], string> = {
   emerald: "text-emerald-600",
@@ -54,6 +58,8 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [releaseOpen, setReleaseOpen] = useState(false);
+  const [declineOpen, setDeclineOpen] = useState(false);
 
   async function run<T>(fn: () => Promise<T>) {
     if (pending) return;
@@ -172,17 +178,18 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
             <button
               type="button"
               disabled={pending}
-              onClick={() =>
-                run(() =>
-                  respondToPickupRequest({
-                    bookingId: alert.bookingId as Id<"bookings">,
-                    response: "declined",
-                  }),
-                )
-              }
+              onClick={() => setDeclineOpen(true)}
               className="inline-flex items-center rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
             >
               Can&apos;t release yet
+            </button>
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => setReleaseOpen(true)}
+              className="inline-flex items-center rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              Release car
             </button>
           </>
         )}
@@ -334,6 +341,25 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
           </button>
         )}
       </div>
+
+      {alert.kind === "pickup_request" && alert.bookingId && (
+        <>
+          <ReleaseVehicleDialog
+            bookingId={alert.bookingId as Id<"bookings">}
+            open={releaseOpen}
+            onClose={() => setReleaseOpen(false)}
+            onReleased={() => onAfterAction?.()}
+            zIndexClassName="z-[90]"
+          />
+          <DeclinePickupDialog
+            bookingId={alert.bookingId as Id<"bookings">}
+            open={declineOpen}
+            onClose={() => setDeclineOpen(false)}
+            onDeclined={() => onAfterAction?.()}
+            zIndexClassName="z-[90]"
+          />
+        </>
+      )}
     </li>
   );
 }

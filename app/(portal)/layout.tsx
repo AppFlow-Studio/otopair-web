@@ -36,7 +36,6 @@ import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PortalSidebarContext } from "./portal-context";
-import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
 import MechanicPickupAlert from "@/components/mechanic/pickup-alert";
@@ -876,7 +875,6 @@ function AuthenticatedPortalLayout({ children }: { children: React.ReactNode }) 
           )}
 
           <main className="flex-1 px-6 pt-6 pb-0">
-            <CustomerSchedulingAlerts />
             {children}
           </main>
         </div>

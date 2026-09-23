@@ -126,6 +126,7 @@ export default function MechanicDashboard() {
   );
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+  const updateStatus = useMutation(api.bookings.updateStatus);
   const commitInspectionAndAwaitEstimate = useMutation(
     api.bookings.commitInspectionAndAwaitEstimate,
   );
@@ -247,14 +248,50 @@ export default function MechanicDashboard() {
       (j: any) => String(j._id) === bookingId,
     );
     const pas = (target as any)?.paymentApprovalState as string | undefined;
-    const alreadyEstimated =
-      (target as any)?.hasDisclosedRange &&
-      pas != null &&
-      pas !== "none";
+    const hasRange = (target as any)?.hasDisclosedRange === true;
+    // Estimate already confirmed (customer-approved or auto in-range): begin the
+    // job directly. The estimate popup only CONFIRMS now — it never starts — so
+    // starting is this explicit step, matching the booking drawer's Start Job
+    // button.
+    const estimateApprovedReadyToStart =
+      hasRange && (pas === "in_range" || pas === "pre_job_approved");
+    if (estimateApprovedReadyToStart) {
+      void beginJobDirectly(bookingId);
+      return;
+    }
+    // Pending / declined estimates still route through the dialog so the
+    // mechanic can view the pending confirmation or pick continue/revise/release
+    // on a decline; a not-yet-estimated booking opens the inspection.
+    const alreadyEstimated = hasRange && pas != null && pas !== "none";
     openWorkflowDialog(
       bookingId,
       alreadyEstimated ? "prejob_estimate" : "prejob",
     );
+  }
+
+  // Begin an at-shop booking whose estimate is already confirmed, straight from
+  // the job card — the transition is exactly what the estimate popup used to do
+  // (updateStatus -> in_progress); the FSM's in_progress guard blocks any
+  // not-yet-approved state, and the server enforces one active job per mechanic.
+  async function beginJobDirectly(bookingId: string) {
+    setBusyAction(`start:${bookingId}`);
+    try {
+      await updateStatus({
+        bookingId: bookingId as Id<"bookings">,
+        newStatus: "in_progress",
+        reason: "job_started",
+      });
+      setToast("Job started");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+        setToast("Finish your current in-progress job first — then start this one.");
+      } else {
+        setToast(message || "Could not start the job.");
+      }
+    } finally {
+      setBusyAction(null);
+    }
   }
 
   function closeWorkflowDialog() {
@@ -869,6 +906,10 @@ export default function MechanicDashboard() {
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
         layoverNotes={[
+          // Diagnostic worksheet findings seed the post-job findings step so a
+          // diagnostic wrapping up here doesn't retype what the mechanic already
+          // wrote on the checklist.
+          (selectedWorkflowBooking as any)?.diagnosticFindingsNote ?? "",
           (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? "",
           // "Why the added scope / why this adjustment" reasons for agreed
           // changes — folded in so they seed the findings and appear in the

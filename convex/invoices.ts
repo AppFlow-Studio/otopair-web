@@ -84,6 +84,15 @@ export type AssembledInvoiceData = {
   };
   mechanicName: string | null;
 
+  /** "cancellation_fee" = this booking was cancelled / released for pickup and
+   *  only the forfeit fee was captured; the breakdown is a single fee line, not
+   *  labor/parts/tax. Renderers should show "Pickup / cancellation fee", not a
+   *  service bill. */
+  receiptKind: "service" | "cancellation_fee";
+  /** The captured pickup / late-cancel fee in cents when receiptKind is
+   *  "cancellation_fee"; null otherwise. */
+  cancellationFeeCents: number | null;
+
   services: string[];
   parts: AssembledInvoicePart[];
 
@@ -253,6 +262,15 @@ async function assembleInvoiceData(
     const capturedCents = Number(payment.captured_amount_cents ?? 0);
     const subtotalCents = partsTotalCents + laborCents;
 
+    // A cancelled / no-show booking's captured amount is the pickup / late-cancel
+    // forfeit fee (the $20 deposit), not a service bill. Represent it as a single
+    // fee line — no labor/parts, no sales tax, and $0 platform cut (the deposit
+    // PI is a destination charge with application_fee_amount 0) — instead of the
+    // nonsensical "$X tax on a $20 fee" the normal breakdown would produce.
+    const isCancellationFeeReceipt =
+      (booking.status === "cancelled" || booking.status === "no_show") &&
+      capturedCents > 0;
+
     // Cash walk-in invoice: it's the shop's own bill (parts + labor), with no
     // sales tax line and no Otopair platform fee. Total = captured amount when
     // recorded (the mechanic's override), else the computed subtotal.
@@ -260,7 +278,11 @@ async function assembleInvoiceData(
     let totalCents: number;
     let platformFeeCents: number | null;
     let taxCents: number | null;
-    if (isCash) {
+    if (isCancellationFeeReceipt) {
+      totalCents = capturedCents;
+      platformFeeCents = 0;
+      taxCents = 0;
+    } else if (isCash) {
       totalCents = capturedCents > 0 ? capturedCents : subtotalCents;
       platformFeeCents = null;
       taxCents = null;
@@ -281,6 +303,7 @@ async function assembleInvoiceData(
     // payments.invoice_quote_flags so finance can audit drift without
     // grepping logs. Also rolls per-quote engine flags up to the invoice.
     if (
+      !isCancellationFeeReceipt &&
       cfgForBand &&
       booking.shop_id &&
       Array.isArray(booking.service_ids) &&
@@ -397,27 +420,32 @@ async function assembleInvoiceData(
         logoUrl: shopLogoUrl,
       },
       mechanicName,
+      receiptKind: isCancellationFeeReceipt ? "cancellation_fee" : "service",
+      cancellationFeeCents: isCancellationFeeReceipt ? capturedCents : null,
       // Catalog services first, then the off-catalog lines. Without the second
       // half a booking whose only work was custom produced a PDF and a
       // /receipts/<id> page listing NOTHING against a real charge — the
-      // customer's own proof of what they paid for, blank.
-      services: [
-        ...services
-          .map((s): string | null => (s ? (s as Doc<"services">).name : null))
-          .filter((x): x is string => Boolean(x)),
-        // Only lines the customer actually approved — a still-`pending_confirmation`
-        // draft the mechanic added but never got confirmed must never appear on
-        // the receipt as something paid for.
-        ...customServiceNames((booking as any).custom_services, {
-          customerVisibleOnly: true,
-        }),
-      ],
-      parts,
+      // customer's own proof of what they paid for, blank. A cancellation-fee
+      // receipt has no services at all — the single fee line stands in for them.
+      services: isCancellationFeeReceipt
+        ? ["Pickup / cancellation fee"]
+        : [
+            ...services
+              .map((s): string | null => (s ? (s as Doc<"services">).name : null))
+              .filter((x): x is string => Boolean(x)),
+            // Only lines the customer actually approved — a still-`pending_confirmation`
+            // draft the mechanic added but never got confirmed must never appear on
+            // the receipt as something paid for.
+            ...customServiceNames((booking as any).custom_services, {
+              customerVisibleOnly: true,
+            }),
+          ],
+      parts: isCancellationFeeReceipt ? [] : parts,
 
-      laborMinutes,
-      laborCents,
-      partsTotalCents,
-      subtotalCents,
+      laborMinutes: isCancellationFeeReceipt ? 0 : laborMinutes,
+      laborCents: isCancellationFeeReceipt ? 0 : laborCents,
+      partsTotalCents: isCancellationFeeReceipt ? 0 : partsTotalCents,
+      subtotalCents: isCancellationFeeReceipt ? totalCents : subtotalCents,
       taxCents,
       platformFeeCents,
       totalCents,
@@ -699,6 +727,13 @@ export const getReceiptForBooking = query({
       paymentId: data.paymentId,
       status: data.status,
       invoiceNumber: data.invoiceNumber,
+      // "cancellation_fee" → this receipt is the pickup / late-cancel forfeit
+      // fee, not a service bill; the breakdown collapses to a single fee line.
+      // Mobile should caption it "Pickup / cancellation fee", not "Labor,
+      // parts, fee and tax". See docs/mobile-pickup-past-services-spec.md §3.
+      receiptKind: data.receiptKind,
+      cancellationFeeCents: data.cancellationFeeCents,
+      services: data.services,
       url,
       generatedAtMs: data.invoiceGeneratedAtMs,
       emailedAtMs: data.invoiceEmailedAtMs,

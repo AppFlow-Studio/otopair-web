@@ -59,6 +59,10 @@ export const lookupConfig = query({
     fuelType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // YMM-only (no decoded transmission): the key intentionally omits the
+    // transmission family and stays in the legacy transmission-less namespace.
+    // At worst this misses a transmission-keyed config (soft — no pre-warm); the
+    // real add-flow decode links/enriches correctly. See types.ts.
     const nhtsaKey = buildNhtsaVinKey({
       year: args.year,
       make: args.make,
@@ -276,6 +280,8 @@ export const createStub = mutation({
     if (vin) {
       let matchedConfigId: Id<"vehicle_configs"> | undefined;
       if (args.year && args.make && args.model) {
+        // YMM-only — transmission family intentionally omitted (transmission-less
+        // namespace); may miss a transmission-keyed config, harmless. See types.ts.
         const nhtsaKey = buildNhtsaVinKey({
           year: args.year,
           make: args.make,

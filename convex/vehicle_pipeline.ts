@@ -209,6 +209,11 @@ export const processVin = internalAction({
       // this works even when VDB is down (403s). See types.ts.
       // ════════════════════════════════════════════════════════════
       const nhtsaYearNum = parseInt(nhtsa.year || "0");
+      // Canonical transmission family from the raw vPIC TransmissionStyle, folded
+      // into the base key so an automatic and a manual of the same engine dedup
+      // to DIFFERENT cached configs. Blank/"unknown" ⇒ null ⇒ the key stays in
+      // the transmission-less namespace (unchanged from before this field).
+      const nhtsaTransFamily = await canonicalizeTransmissionType(nhtsa.transStyle);
       const nhtsaVinKey = nhtsa.make && nhtsa.model && nhtsaYearNum
         ? buildNhtsaVinKey({
             year: nhtsaYearNum,
@@ -218,6 +223,7 @@ export const processVin = internalAction({
             displacementL: nhtsa.displacementL,
             cylinders: nhtsa.cylinders,
             fuelType: nhtsa.fuelType,
+            transmissionFamily: nhtsaTransFamily,
           })
         : "";
       if (nhtsaVinKey) {
@@ -1730,6 +1736,26 @@ export const decodeVin = action({
 });
 
 /**
+ * Best-confidence, KNOWN transmission family for a trim, canonicalized to
+ * automatic | manual | CVT | DCT (or null when undetermined). The trim's
+ * transmission rows are minted at VIN-decode time (processVin), so this is the
+ * VIN-authoritative family. Both confirm actions feed it into the dedup
+ * config_key AND the enrichment schedule so an automatic and a manual of the
+ * same engine can never collapse into one cached config. Client-supplied
+ * transmissionId is deliberately NOT consulted here — VIN wins.
+ */
+async function bestTransmissionFamily(
+  rows: Array<{ transmission_type?: string | null; confidence_score?: number | null }>,
+): Promise<string | null> {
+  const best = (rows ?? [])
+    .filter((r) => r.transmission_type && r.transmission_type.toLowerCase() !== "unknown")
+    .sort((a, b) => (b.confidence_score ?? 0) - (a.confidence_score ?? 0))[0];
+  return best?.transmission_type
+    ? await canonicalizeTransmissionType(best.transmission_type)
+    : null;
+}
+
+/**
  * Confirm a decoded vehicle for the current user.
  * Creates vehicle + owner records and schedules AI enrichment.
  */
@@ -1801,6 +1827,14 @@ export const confirmVehicleForUser = action({
       nickname: `${args.year} ${args.make} ${args.model}`,
     });
 
+    // VIN-authoritative transmission family for this trim (rows were created at
+    // decode time). Folded into the dedup config_key + threaded to enrichment so
+    // auto vs manual of the same engine resolve to distinct configs. The primary
+    // nhtsaVinKey already carries it (decodeVin baked it into the base key).
+    const transmissionFamily = await bestTransmissionFamily(
+      await ctx.runQuery(api.transmissions.listByTrimId, { trim_id: args.trimId }),
+    );
+
     // Early dedup. If a vehicle_configs row already exists for this VIN's
     // make/model/trim/engine fingerprint and is fresh, skip-attach the new
     // vehicle to it instead of running the full enrichment action.
@@ -1841,6 +1875,7 @@ export const confirmVehicleForUser = action({
           trim: args.trim,
           engineCode: args.engineCode,
           displacement: args.displacement,
+          transmissionFamily,
         });
         existingConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
@@ -1882,6 +1917,7 @@ export const confirmVehicleForUser = action({
           displacement: args.displacement,
           drivetrain: args.drivetrain,
           nhtsaVinKey: args.nhtsaVinKey,
+          transmissionFamily,
           trigger: "new_vehicle",
           // The driver who added the car — resolved from the authed identity so
           // a signup error-out names them. See lib/enrichmentActor.
@@ -1987,6 +2023,26 @@ export const confirmVehicleForShopCustomer = action({
       nickname: `${args.year} ${args.make} ${args.model}`,
     });
 
+    // VIN-authoritative transmission family for this trim (see confirmVehicleForUser).
+    // Drives the config identity regardless of what the shop client passed.
+    const transmissionFamily = await bestTransmissionFamily(
+      await ctx.runQuery(api.transmissions.listByTrimId, { trim_id: args.trimId }),
+    );
+    // Guard: the shop portal may pass a transmissionId. It never overrides the
+    // VIN-authoritative family above; warn if it disagrees so a bad decode/pick
+    // surfaces instead of silently shaping the record.
+    if (args.transmissionId) {
+      const clientTx = await ctx.runQuery(api.transmissions.getById, { id: args.transmissionId });
+      const clientFamily = await canonicalizeTransmissionType(clientTx?.transmission_type ?? null);
+      if (clientFamily && transmissionFamily && clientFamily !== transmissionFamily) {
+        console.warn(
+          `[confirmVehicleForShopCustomer] client transmissionId family "${clientFamily}" ` +
+          `disagrees with VIN-authoritative "${transmissionFamily}" for trim ${args.trimId} — ` +
+          `keeping VIN-authoritative for the config identity.`,
+        );
+      }
+    }
+
     let cacheHit = false;
     let scheduledEnrichment = false;
     let dedupSource: "nhtsa_vin_key" | "config_key" | "none" = "none";
@@ -2012,6 +2068,7 @@ export const confirmVehicleForShopCustomer = action({
           trim: args.trim,
           engineCode: args.engineCode,
           displacement: args.displacement,
+          transmissionFamily,
         });
         existingConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByKey,
@@ -2047,6 +2104,7 @@ export const confirmVehicleForShopCustomer = action({
           displacement: args.displacement,
           drivetrain: args.drivetrain,
           nhtsaVinKey: args.nhtsaVinKey,
+          transmissionFamily,
           trigger: "mechanic",
           actor: {
             name:

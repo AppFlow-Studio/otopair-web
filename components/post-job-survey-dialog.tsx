@@ -113,6 +113,7 @@ import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import ServicePickerModal from "@/components/booking/service-picker-modal";
 import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 import { isTireReplacementService } from "@/lib/vehicle-service-relevance";
+import { isNamedPart } from "@/lib/tire-part-lines";
 import TirePartsEditor, {
   type TireLine,
   isTirePartRow,
@@ -2719,11 +2720,12 @@ function PostJobSurveyDialogBody({
         };
       })
       .filter(
+        // A priced/oem/brand row with a blank name is the blank-"test part" bug
+        // — drop it (previously kept via the `cost > 0` clause). Keep named parts,
+        // customer-supplied ($0) rows, not-used rows, and in-progress tire rows
+        // the editor manages.
         (part) =>
-          part.part_name ||
-          part.brand ||
-          part.oem_number ||
-          (Number.isFinite(part.cost) && part.cost > 0) ||
+          isNamedPart(part) ||
           part.supplied_by === "customer" ||
           part.not_used === true ||
           part.is_tire === true
@@ -2754,6 +2756,27 @@ function PostJobSurveyDialogBody({
       const mileageIdx = visibleSteps.indexOf("mileage");
       if (mileageIdx >= 0) setStepIndex(mileageIdx);
       setMileageConfirmOpen(true);
+      return;
+    }
+
+    // Every priced/identified part needs a name. A row with a price (or oem /
+    // brand) but a blank name is the blank-"test part" bug — surface it here so
+    // the mechanic names or removes it, instead of normalizeParts silently
+    // dropping it. Tires carry a synthesized name, so they're exempt.
+    const namelessPart = parts.find(
+      (p) =>
+        !isTirePartRow(p) &&
+        p.not_used !== true &&
+        p.supplied_by !== "customer" &&
+        !p.part_name.trim() &&
+        (Number(p.cost) > 0 || p.oem_number.trim() || p.brand.trim()),
+    );
+    if (namelessPart) {
+      setError(
+        "Every part with a price needs a name. Add a name or remove the empty row.",
+      );
+      const partsIdx = visibleSteps.indexOf("parts");
+      if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
     }
 

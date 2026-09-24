@@ -76,6 +76,57 @@ export function isTirePartRow(part: {
   );
 }
 
+/** Does a tire row carry enough identity to render / bill? */
+function tireHasIdentity(part: {
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+  oem_number?: string | null;
+}): boolean {
+  return Boolean(
+    part.tire_size?.trim() ||
+      part.tire_brand?.trim() ||
+      part.tire_model?.trim() ||
+      part.oem_number?.replace(/^TIRE-/i, "").trim(),
+  );
+}
+
+/** CLIENT mirror of convex/lib/parts.ts isNamedPart — keep the two in sync. A
+ *  row is a real, nameable part: non-tire rows need a non-empty trimmed
+ *  part_name; tire rows need any tire identity (their name is synthesized). This
+ *  is the gate the post-job dialog uses so a blank-name priced row is never
+ *  persisted. */
+export function isNamedPart(part: {
+  part_name?: string | null;
+  is_tire?: boolean | null;
+  oem_number?: string | null;
+  tire_size?: string | null;
+  tire_brand?: string | null;
+  tire_model?: string | null;
+}): boolean {
+  if (isTirePartRow(part)) return tireHasIdentity(part);
+  return Boolean(part.part_name && part.part_name.trim().length > 0);
+}
+
+/** CLIENT mirror of convex/lib/parts.ts partDisplayName. NEVER returns "". */
+export function partDisplayName(part: {
+  part_name?: string | null;
+  is_tire?: boolean | null;
+  oem_number?: string | null;
+  tire_size?: string | null;
+}): string {
+  const name = (part.part_name ?? "").trim();
+  if (name) return name;
+  if (isTirePartRow(part)) {
+    const size = (
+      part.tire_size ?? (part.oem_number ?? "").replace(/^TIRE-/i, "")
+    ).trim();
+    return size ? `Tires (${size})` : "Tires";
+  }
+  const oem = (part.oem_number ?? "").trim();
+  return oem ? `Part ${oem}` : "Unnamed part";
+}
+
 /** Seed editor lines from the prejob inspection tire findings. Pre-loads every
  *  axle the inspection recorded a size for (user chose "all inspected tires"). */
 export function tireLinesFromPrejob(

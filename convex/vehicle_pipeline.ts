@@ -1746,13 +1746,13 @@ export const decodeVin = action({
  */
 async function bestTransmissionFamily(
   rows: Array<{ transmission_type?: string | null; confidence_score?: number | null }>,
-): Promise<string | null> {
+): Promise<string | undefined> {
   const best = (rows ?? [])
     .filter((r) => r.transmission_type && r.transmission_type.toLowerCase() !== "unknown")
     .sort((a, b) => (b.confidence_score ?? 0) - (a.confidence_score ?? 0))[0];
   return best?.transmission_type
-    ? await canonicalizeTransmissionType(best.transmission_type)
-    : null;
+    ? (await canonicalizeTransmissionType(best.transmission_type)) ?? undefined
+    : undefined;
 }
 
 /**

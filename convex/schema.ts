@@ -4975,6 +4975,10 @@ export default defineSchema({
     // Expo push ticket id, recorded when a push is accepted (status
     // `dispatched`). The receipts poller reads it back to confirm delivery.
     push_ticket_id: v.optional(v.string()),
+    // Number of send attempts a push row has taken. Incremented each time the
+    // dispatcher re-queues it after a transient Expo/network failure; once it
+    // hits MAX_PUSH_ATTEMPTS the row is marked `failed` instead of looping.
+    push_attempts: v.optional(v.number()),
     // READ axis: set when the user/staff has seen the row. Drives read/unread
     // styling; does NOT remove the row from the feed.
     read_at: v.optional(v.number()),

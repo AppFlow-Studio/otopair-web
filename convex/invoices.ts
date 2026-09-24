@@ -22,6 +22,7 @@ import {
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 import { customServiceNames } from "./lib/customServiceNames";
 import { axlePositionByServiceId } from "./lib/brakeScope";
+import { partDisplayName } from "./lib/parts";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -194,7 +195,10 @@ async function assembleInvoiceData(
       const unit = Number(s.unit_cost ?? 0);
       const line = Number(s.total_cost ?? qty * unit);
       return {
-        name: s.part_name,
+        name: partDisplayName({
+          part_name: s.part_name,
+          oem_number: s.oem_part_number,
+        }),
         oemNumber: displayOem(s.oem_part_number),
         brand: s.brand ?? null,
         qty,
@@ -212,7 +216,7 @@ async function assembleInvoiceData(
           const qty = Number(p.quantity ?? 1);
           const unit = Number(p.cost ?? 0);
           return {
-            name: p.part_name,
+            name: partDisplayName(p),
             oemNumber: displayOem(p.oem_number),
             brand: p.brand ?? null,
             qty,

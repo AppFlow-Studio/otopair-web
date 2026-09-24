@@ -35,6 +35,7 @@ import { capturedCentsOrNull } from "./lib/money";
 import { requireShopOwnerBySubject, requireShopViewerForPayments } from "./lib/shopAuth";
 import { resolveServiceNames, resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { formatPartIdentity } from "../lib/vehicle-passport";
+import { partDisplayName } from "./lib/parts";
 
 const STRIPE_API_VERSION = Stripe.API_VERSION;
 let stripeClient: Stripe | null = null;
@@ -386,7 +387,7 @@ export const getShopInvoice = query({
         const notes = [formatPartIdentity(p)].filter(Boolean);
         lineItems.push({
           kind: "part",
-          name: p.part_name ?? "Part",
+          name: partDisplayName(p),
           detail: notes.join(" · ") || null,
           qty,
           unitCents: unit,
@@ -414,7 +415,7 @@ export const getShopInvoice = query({
         ].filter(Boolean);
         lineItems.push({
           kind: "part",
-          name: p.part_name ?? "Part",
+          name: partDisplayName(p),
           detail: notes.join(" · ") || null,
           qty,
           unitCents: unit,

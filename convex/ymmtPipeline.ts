@@ -68,6 +68,9 @@ type ResolvedYmmtIdentity = {
   trimId: Id<"trims">;
   engineId: Id<"engines">;
   transmissionId: Id<"transmissions"> | null;
+  /** Canonical transmission family (automatic|manual|cvt|dct) or null — folded
+   *  into both dedup keys so auto vs manual of the same engine stay distinct. */
+  transmissionFamily: string | null;
   year: number;
   make: string;
   model: string;

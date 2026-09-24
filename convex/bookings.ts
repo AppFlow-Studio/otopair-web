@@ -67,6 +67,7 @@ import {
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { isNamedPart, partDisplayName } from "./lib/parts";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
@@ -1931,6 +1932,12 @@ export const create = mutation({
       payload: { source: "customer_self_serve" },
     });
 
+    await notifyCustomerOfRequestSent(ctx, {
+      userId: args.user_id,
+      shopId: args.shop_id,
+      bookingId,
+    });
+
     return bookingId;
   },
 });
@@ -2822,6 +2829,12 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       category: "new_booking",
       dedupeKey: `new-booking:${String(bookingId)}`,
       payload: { source: "customer_self_serve" },
+    });
+
+    await notifyCustomerOfRequestSent(ctx, {
+      userId: args.user_id,
+      shopId: args.shop_id,
+      bookingId,
     });
 
     return [bookingId];
@@ -5177,7 +5190,7 @@ async function enqueueWalkinClientUpdate(
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
     const partsUsed = Array.isArray(jobActual?.parts_used)
       ? jobActual.parts_used.map((p: any) => ({
-          part_name: p.part_name ?? null,
+          part_name: partDisplayName(p),
           brand: p.brand ?? null,
           oem_number: p.oem_number ?? null,
           cost: typeof p.cost === "number" ? p.cost : null,
@@ -5671,11 +5684,12 @@ export function normalizePartsUsed(parts: Array<{
       };
     })
     .filter(
+      // A priced row with no name/identity is the blank-"test part" bug — drop
+      // it here (the canonical normalizer feeding job_actuals.parts_used) so it
+      // is never billed or rendered. Customer-supplied ($0) and "not used" rows
+      // carry meaning even when unpriced, so keep them.
       (part) =>
-        hasText(part.part_name) ||
-        hasText(part.oem_number) ||
-        hasText(part.brand) ||
-        part.cost > 0 ||
+        isNamedPart(part) ||
         part.supplied_by === "customer" ||
         part.not_used === true
     );
@@ -5741,7 +5755,10 @@ async function recordPartSnapshotsForBooking(
   const fallbackServiceId = booking.service_ids?.[0] as Id<"services"> | undefined;
 
   for (const part of parts) {
-    if (!hasText(part.part_name) && !hasText(part.oem_number)) continue;
+    // Drop a priced-but-nameless non-tire row rather than snapshot it under its
+    // OEM number as a pseudo-name (the blank-"test part" bug). Tire rows carry
+    // a synthesized name and pass via isNamedPart.
+    if (!isNamedPart(part)) continue;
 
     // Per-part service_id wins; fall back to the booking's primary service
     // for legacy rows. Skip rather than throw if neither is present so a
@@ -5764,7 +5781,7 @@ async function recordPartSnapshotsForBooking(
 
       service_id: serviceId,
 
-      part_name: part.part_name || part.oem_number,
+      part_name: partDisplayName(part),
       oem_part_number: hasText(part.oem_number) ? part.oem_number : undefined,
       brand: hasText(part.brand) ? (part.brand as string) : undefined,
       part_tier: part.part_tier ?? "oem",
@@ -10158,6 +10175,15 @@ export async function applyBookingStatusTransition(
     if (fresh) await enqueueWalkinClientUpdate(ctx, fresh, walkinCategory);
   }
 
+  // App-customer lifecycle notifications — the happy-path milestones the
+  // customer never used to hear about (accept → check-in → work start →
+  // completion). Every lifecycle path funnels through this transition, so this
+  // is the single place to raise them. Deliberately scoped to those four
+  // statuses: cancel/no-show route through notifyCustomerOfShopCancel, and
+  // reschedule/approval/re-auth prompts enqueue at their own call sites — so
+  // none of them are raised here (that would double-send).
+  await notifyCustomerOfLifecycleMilestone(ctx, booking, newStatus);
+
   await syncBookingAssignments(ctx, [
     {
       shopId: booking.shop_id,
@@ -11524,7 +11550,7 @@ export const getJobDetail = query({
             const qty = Math.max(1, Number(p.quantity ?? 1));
             const unitCents = Math.round((Number(p.cost) || 0) * 100);
             return {
-              part_name: p.part_name ?? "Part",
+              part_name: partDisplayName(p),
               oem_number: p.oem_number ?? "",
               brand: p.brand ?? undefined,
               part_tier: p.part_tier ?? undefined,
@@ -13724,7 +13750,10 @@ export const createByShop = mutation({
     ) {
       const rows: PricedPartSnapshotRow[] = [];
       for (const m of args.mechanicPartEntries!) {
-        if (!m.part_name.trim() && !m.oem_number.trim()) continue;
+        // Drop a priced-but-nameless non-tire row (an oem_number alone is not a
+        // name — see the blank-"test part" bug). Tire rows pass via their
+        // TIRE-{size} sentinel / is_tire flag.
+        if (!isNamedPart(m)) continue;
         const qty =
           m.quantity != null && m.quantity > 0 ? Math.round(m.quantity) : 1;
         const unit =
@@ -13740,7 +13769,7 @@ export const createByShop = mutation({
           // format. Mirrors the client's tidyOem — authoritative even if a
           // caller bypasses the drawer.
           oem_number: m.oem_number.trim().toUpperCase().replace(/\s+/g, " "),
-          part_name: m.part_name.trim(),
+          part_name: m.part_name.trim() || partDisplayName(m),
           brand: m.brand?.trim() || undefined,
           source_url: m.source_url?.trim() || undefined,
           quantity: qty,
@@ -15018,6 +15047,128 @@ async function notifyCustomerOfShopCancel(
         shopName,
         reasonLabel,
       },
+    }),
+  });
+}
+
+/**
+ * Notify the app customer at the four happy-path milestones — accept
+ * (`confirmed`), check-in (`vehicle_at_shop`), work start (`in_progress`), and
+ * completion (`completed`). These previously produced NO customer notification:
+ * applyBookingStatusTransition ran every side effect but never told the
+ * customer their booking moved, so nothing appeared in the in-app feed or as a
+ * push. One `push` row raises BOTH surfaces (getMyNotifications reads the outbox
+ * by user_id, channel-agnostic).
+ *
+ * Scope is exactly these four statuses. Cancel / no-show go through
+ * notifyCustomerOfShopCancel; reschedule proposals and approval / re-auth
+ * prompts enqueue at their own call sites — raising any of them here too would
+ * double-send. Walk-ins (no user_id) have nobody to push. Dedupe is per
+ * booking + milestone, so a booking that re-enters `confirmed` after a
+ * reschedule won't re-spam while the first card is still open.
+ */
+async function notifyCustomerOfLifecycleMilestone(
+  ctx: any,
+  booking: any,
+  newStatus: string,
+) {
+  if (!booking.user_id) return;
+  if (
+    newStatus !== "confirmed" &&
+    newStatus !== "vehicle_at_shop" &&
+    newStatus !== "in_progress" &&
+    newStatus !== "completed"
+  ) {
+    return;
+  }
+
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopName = (shop as any)?.name ?? "The shop";
+  const { ymm, vin } = await resolveVehicleDisplay(ctx, booking.vin);
+  const dateLabel = booking.scheduled_date ?? "";
+  const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+  const whenLabel = dateLabel
+    ? ` on ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+    : "";
+  const vehiclePart = ymm ? ` your ${ymm}` : " your car";
+
+  let category: string;
+  let title: string;
+  let body: string;
+  switch (newStatus) {
+    case "confirmed":
+      category = "booking_confirmed_for_customer";
+      title = "Booking confirmed";
+      body = `${shopName} accepted your appointment for${vehiclePart}${whenLabel}.`;
+      break;
+    case "vehicle_at_shop":
+      category = "booking_vehicle_checked_in";
+      title = "We've got your car";
+      body = `${shopName} checked in${vehiclePart}. We'll let you know when work starts.`;
+      break;
+    case "in_progress":
+      category = "booking_work_started";
+      title = "Work has started";
+      body = `${shopName} started working on${vehiclePart}.`;
+      break;
+    case "completed":
+      category = "booking_service_completed";
+      title = "Service complete";
+      // Deliberately NOT "your car is ready" — that's the pickup_released
+      // message (the car-handoff moment). This is the work-finished moment.
+      body = `${shopName} finished the work on${vehiclePart}. Your final invoice is being wrapped up.`;
+      break;
+    default:
+      return;
+  }
+
+  await enqueueNotificationOutbox(ctx, {
+    userId: booking.user_id,
+    bookingId: booking._id,
+    shopId: booking.shop_id,
+    channel: "push",
+    category,
+    dedupeKey: `${category}:${String(booking._id)}`,
+    payload: buildCustomerPushPayload({
+      title,
+      body,
+      bookingId: booking._id,
+      vehicleLabel: ymm,
+      vin,
+      extra: {
+        scheduledDate: booking.scheduled_date,
+        scheduledTime: booking.scheduled_time,
+        shopName,
+      },
+    }),
+  });
+}
+
+/**
+ * In-app acknowledgement of the customer's OWN booking submission. No push —
+ * the app already shows a success screen; this is the durable feed record so
+ * the submit step isn't missing from the journey. channel:"in_app" has no
+ * dispatcher (see notificationOutbox.ts CHANNEL_DISPATCHER), so the row surfaces
+ * via getMyNotifications but never fires an Expo push.
+ */
+async function notifyCustomerOfRequestSent(
+  ctx: any,
+  { userId, shopId, bookingId }: { userId?: any; shopId?: any; bookingId: any },
+) {
+  if (!userId) return;
+  const shop = shopId ? await ctx.db.get(shopId) : null;
+  const shopName = (shop as any)?.name ?? "the shop";
+  await enqueueNotificationOutbox(ctx, {
+    userId,
+    shopId,
+    bookingId,
+    channel: "in_app",
+    category: "booking_request_sent",
+    dedupeKey: `booking-request-sent:${String(bookingId)}`,
+    payload: buildCustomerPushPayload({
+      title: "Request sent",
+      body: `We sent your request to ${shopName}. You'll hear back once they accept.`,
+      bookingId,
     }),
   });
 }
@@ -18901,13 +19052,19 @@ export const getReceipt = query({
           ? (jobActual!.parts_used as any[])
           : [];
     const partLines: PartLine[] = partsLineSource
+      // Intentionally NOT billablePart here: a legacy blank-name row is already
+      // baked into this booking's FROZEN parts_subtotal_cents, so dropping it
+      // from the lines would make them stop summing to that aggregate. Keep it
+      // and let partDisplayName give it a name ("Unnamed part") instead. New
+      // bookings never reach here with a blank row — performSubmission strips
+      // them before the snapshot is frozen.
       .filter((p: any) => p?.not_used !== true && p?.supplied_by !== "customer")
       .map((p: any) => {
         const unit = typeof p.cost === "number" ? p.cost : null;
         const qty = Math.max(0, typeof p.quantity === "number" ? p.quantity : 1);
         return {
           type: "part" as const,
-          name: p.part_name ?? "Part",
+          name: partDisplayName(p),
           oem_number: p.oem_number ?? null,
           quantity: qty,
           unit_cost: unit,
@@ -19072,7 +19229,7 @@ export const getReceipt = query({
                   ? Math.round(unit * qty * 100) / 100
                   : null;
             return {
-              name: (p.part_name ?? "Part") as string,
+              name: partDisplayName(p),
               oem_number: (p.oem_number ?? null) as string | null,
               quantity: qty,
               unit_cost: unit,

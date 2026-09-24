@@ -16,6 +16,7 @@ import { bookingOrigin } from "./director";
 import type { Doc, Id } from "./_generated/dataModel";
 import type { QueryCtx } from "./_generated/server";
 import { resolveVehicleDisplay, userDisplayName } from "./lib/bookingEnrichment";
+import { partDisplayName } from "./lib/parts";
 
 /** cents → dollars, null-safe. */
 const centsToDollars = (c: number | null | undefined): number | null =>
@@ -879,7 +880,7 @@ export const moneyDetail = query({
           deniedParts: isDenied
             ? introduced.flatMap((c) =>
                 (c.parts ?? []).map((p) => ({
-                  name: p.part_name,
+                  name: partDisplayName(p),
                   quantity: p.quantity ?? 1,
                   lineCents: p.line_total_cents ?? null,
                 })),

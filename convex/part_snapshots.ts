@@ -2,6 +2,7 @@ import { internalMutation, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
+import { partDisplayName } from "./lib/parts";
 
 // Outlier thresholds — keep generous so we don't flag normal price variation.
 // Triggered only with a minimum sample of OUTLIER_MIN_SAMPLE prior snapshots.
@@ -193,7 +194,13 @@ export async function insertSnapshotImpl(
     service_id: args.service_id,
 
     part_id: partId,
-    part_name: args.part_name.trim(),
+    // Never persist a blank name — coalesce to the OEM number / a placeholder so
+    // a snapshot row can't render as an empty receipt line (belt-and-suspenders;
+    // callers already drop nameless rows).
+    part_name: partDisplayName({
+      part_name: args.part_name,
+      oem_number: args.oem_part_number,
+    }),
     oem_part_number: args.oem_part_number?.trim() || undefined,
     brand: args.brand?.trim() || undefined,
     part_tier: partTier,

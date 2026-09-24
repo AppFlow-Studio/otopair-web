@@ -3674,6 +3674,12 @@ export default defineSchema({
     application_fee_refunded_cents: v.optional(v.number()),
     transfer_reversal_cents: v.optional(v.number()),
     requested_by_user_id: v.optional(v.id("users")),
+    // Director-issued refunds (dispute resolution) — the staff member who
+    // authorized it. requested_by_user_id above is a `users` id and can't hold a
+    // director, so accountability for a panel refund is recorded here (and in
+    // audit_log). See convex/directorRefunds.ts.
+    resolved_by_director_id: v.optional(v.id("director_users")),
+    resolved_by_name: v.optional(v.string()),
     requested_at_ms: v.number(),
     settled_at_ms: v.optional(v.number()),
     // Key handed to Stripe. Derived from a client-generated requestId minted

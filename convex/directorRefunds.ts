@@ -213,8 +213,11 @@ export const _reserveDisputeRefund = internalMutation({
       amount_cents: requested,
       currency: "usd",
       reason: "dispute_resolution",
-      // No requested_by_user_id: a director is a director_users id. The audit
-      // log + this note + the Stripe metadata carry who did it.
+      // Accountability: a director is a director_users id (not the `users`
+      // requested_by_user_id), so the staff member who authorized this refund is
+      // recorded structurally here + in audit_log + the Stripe metadata + note.
+      resolved_by_director_id: actor.userId,
+      resolved_by_name: actor.name,
       note: `Dispute resolution by ${actor.name}${args.notes ? ` — ${args.notes}` : ""}`,
       status: "pending",
       stripe_payment_intent_id: activePiId,

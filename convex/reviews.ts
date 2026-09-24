@@ -32,6 +32,21 @@ export const getById = query({
   },
 });
 
+/** Newest first. `created_at` is optional on the table, so fall back to the
+ *  system `_creationTime` rather than sinking undated rows to the bottom.
+ *
+ *  Ordering belongs here, not in each consumer: the app's shop page, the
+ *  mechanic sheet and the shop portal all render this list, and none of them
+ *  sorted — so every one of them showed the newest review last (Ahmad,
+ *  2026-09-24). */
+function newestFirst<T extends { created_at?: number | null; _creationTime: number }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime),
+  );
+}
+
 export const getByShopId = query({
   args: {
     shopId: v.id("shops"),
@@ -48,7 +63,8 @@ export const getByShopId = query({
     // filter hidden_at." This one never did, so a review ops had hidden was
     // still rendered on the shop page in the app — moderation that moderated
     // nothing. Same omission in getByMechanicId below.
-    const reviews = args.includeHidden ? all : all.filter((r) => r.hidden_at == null);
+    const visible = args.includeHidden ? all : all.filter((r) => r.hidden_at == null);
+    const reviews = newestFirst(visible);
     return await Promise.all(
       reviews.map(async (review) => {
         const mechanic = review.mechanic_id ? await ctx.db.get(review.mechanic_id) : null;
@@ -67,7 +83,7 @@ export const getByMechanicId = query({
       .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", args.mechanicId))
       .collect();
     // See getByShopId — hidden reviews must not reach a customer-facing read.
-    const reviews = all.filter((r) => r.hidden_at == null);
+    const reviews = newestFirst(all.filter((r) => r.hidden_at == null));
     return await Promise.all(
       reviews.map(async (review) => {
         const shop = await ctx.db.get(review.shop_id);

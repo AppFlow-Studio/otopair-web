@@ -19,9 +19,21 @@
  * Hidden reviews are excluded: `getByShopId` now filters `hidden_at`, which
  * is the contract `convex/opsReviews.ts` always stated. A shop sees exactly
  * what a customer sees.
+ *
+ * FILTERS
+ * -------
+ * All / Shop only / All mechanics / one chip per mechanic. The rating summary
+ * recomputes for whatever is selected, which is the point — "how is James Bond
+ * doing" is the question this page could not answer before.
+ *
+ * The mechanic chips are derived from the reviews themselves rather than from
+ * `mechanics.getManagedByShop`, which computes booking blockers per mechanic
+ * and is far heavier than a filter row needs. The trade-off: a mechanic with
+ * zero reviews gets no chip. They would contribute nothing to any view, so the
+ * only thing lost is confirming a silence you can already see in the counts.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -92,7 +104,53 @@ export default function ShopReviewsPage() {
     shop ? { shopId: shop._id } : "skip",
   ) as ReviewRow[] | undefined;
 
+  /** "all" | "shop" (no mechanic attached) | "mechanics" (any mechanic) |
+   *  a mechanic's display name. */
+  const [filter, setFilter] = useState<string>("all");
+
+  /** Chips, with counts, built from the reviews in one pass. Mechanics are
+   *  keyed by display name because that is all the review row carries. */
+  const chips = useMemo(() => {
+    if (!reviews) return [];
+    let shopOnly = 0;
+    let withMechanic = 0;
+    const byMechanic = new Map<string, number>();
+    for (const r of reviews) {
+      const mech = mechanicName(r.mechanic);
+      if (mech) {
+        withMechanic += 1;
+        byMechanic.set(mech, (byMechanic.get(mech) ?? 0) + 1);
+      } else {
+        shopOnly += 1;
+      }
+    }
+    const base = [
+      { key: "all", label: "All reviews", count: reviews.length },
+      { key: "shop", label: "Shop only", count: shopOnly },
+      { key: "mechanics", label: "All mechanics", count: withMechanic },
+    ];
+    const perMechanic = [...byMechanic.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([name, count]) => ({ key: name, label: name, count }));
+    // Drop the two aggregate chips when they would say the same thing as
+    // "All" — a shop with no mechanic-attributed reviews does not need a
+    // "Shop only (25)" chip sitting next to "All reviews (25)".
+    const useful = base.filter(
+      (c) => c.key === "all" || (c.count > 0 && c.count < reviews.length),
+    );
+    return [...useful, ...perMechanic];
+  }, [reviews]);
+
+  const filtered = useMemo(() => {
+    if (!reviews) return undefined;
+    if (filter === "all") return reviews;
+    if (filter === "shop") return reviews.filter((r) => !mechanicName(r.mechanic));
+    if (filter === "mechanics") return reviews.filter((r) => !!mechanicName(r.mechanic));
+    return reviews.filter((r) => mechanicName(r.mechanic) === filter);
+  }, [reviews, filter]);
+
   const summary = useMemo(() => {
+    const reviews = filtered;
     if (!reviews) return null;
     const counts: Record<1 | 2 | 3 | 4 | 5, number> = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     let total = 0;
@@ -106,14 +164,14 @@ export default function ShopReviewsPage() {
       count: reviews.length,
       average: reviews.length > 0 ? total / reviews.length : 0,
     };
-  }, [reviews]);
+  }, [filtered]);
 
   const ordered = useMemo(() => {
-    if (!reviews) return [];
-    return [...reviews].sort(
+    if (!filtered) return [];
+    return [...filtered].sort(
       (a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime),
     );
-  }, [reviews]);
+  }, [filtered]);
 
   const loading = shops === undefined || (shop != null && reviews === undefined);
 
@@ -145,9 +203,58 @@ export default function ShopReviewsPage() {
         </SettingsCard>
       ) : (
         <div className="space-y-6">
-          {/* Rating breakdown — mirrors the app's shop page so both agree. */}
+          {/* Filters. Rendered only when there is something to choose between —
+              a shop with one mechanic and no unattributed reviews would get a
+              row of chips that all say the same thing. */}
+          {chips.length > 1 ? (
+            <div
+              className="flex flex-wrap gap-2"
+              role="group"
+              aria-label="Filter reviews"
+            >
+              {chips.map((c) => {
+                const active = filter === c.key;
+                return (
+                  <button
+                    key={c.key}
+                    type="button"
+                    onClick={() => setFilter(c.key)}
+                    aria-pressed={active}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors",
+                      active
+                        ? "border-blue-600 bg-blue-600 text-white"
+                        : "border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300",
+                    )}
+                  >
+                    <span>{c.label}</span>
+                    <span
+                      className={cn(
+                        "tabular-nums text-xs",
+                        active ? "text-blue-100" : "text-slate-400",
+                      )}
+                    >
+                      {c.count}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+
+          {/* Rating breakdown — mirrors the app's shop page so both agree.
+              Recomputes for the active filter, so selecting a mechanic gives
+              that mechanic's average rather than the shop's. */}
           <SettingsCard
-            title="Rating"
+            title={
+              filter === "all"
+                ? "Rating"
+                : filter === "shop"
+                  ? "Rating — shop only"
+                  : filter === "mechanics"
+                    ? "Rating — all mechanics"
+                    : `Rating — ${filter}`
+            }
             description={
               summary && summary.count > 0
                 ? `${summary.count} review${summary.count === 1 ? "" : "s"}`
@@ -190,8 +297,9 @@ export default function ShopReviewsPage() {
               </div>
             ) : (
               <p className="text-sm text-slate-500">
-                Once a customer reviews a completed booking, it shows here and on your shop
-                page in the app.
+                {filter === "all"
+                  ? "Once a customer reviews a completed booking, it shows here and on your shop page in the app."
+                  : "No reviews match this filter yet."}
               </p>
             )}
           </SettingsCard>
@@ -199,7 +307,9 @@ export default function ShopReviewsPage() {
           {ordered.length > 0 ? (
             <section aria-label="Customer reviews" className="space-y-3">
               <h2 className="text-sm font-medium text-slate-500 dark:text-slate-400">
-                Customer reviews ({ordered.length})
+                {filter === "all"
+                  ? `Customer reviews (${ordered.length})`
+                  : `${chips.find((c) => c.key === filter)?.label ?? filter} (${ordered.length})`}
               </h2>
               {ordered.map((r) => {
                 const mech = mechanicName(r.mechanic);

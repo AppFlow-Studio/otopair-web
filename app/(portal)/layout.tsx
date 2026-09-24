@@ -29,6 +29,7 @@ import {
   Wrench,
   Contact,
   History,
+  Star,
   type LucideIcon,
 } from "lucide-react";
 import { UserSupportPage } from "./user-support-page";
@@ -46,6 +47,10 @@ const ownerManagerLinks = [
   { href: "/customers", label: "Customers", icon: Contact },
   { href: "/previous-bookings", label: "Previous Bookings", icon: History },
   { href: "/team", label: "Team", icon: Users },
+  // Reviews are on owner/manager only for now: it is the reputation surface
+  // and they are the ones who act on it. Front-desk and mechanic links are a
+  // one-line addition if the shop wants them wider.
+  { href: "/reviews", label: "Reviews", icon: Star },
   { href: "/messages", label: "Messages", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/payouts", label: "Payments", icon: CreditCard },

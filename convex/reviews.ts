@@ -33,12 +33,22 @@ export const getById = query({
 });
 
 export const getByShopId = query({
-  args: { shopId: v.id("shops") },
+  args: {
+    shopId: v.id("shops"),
+    /** Moderation view only. Defaults to false so every ordinary caller —
+     *  the app's shop page, the shop portal — sees what a customer sees. */
+    includeHidden: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
-    const reviews = await ctx.db
+    const all = await ctx.db
       .query("reviews")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .collect();
+    // convex/opsReviews.ts states the contract outright: "Consumer reads must
+    // filter hidden_at." This one never did, so a review ops had hidden was
+    // still rendered on the shop page in the app — moderation that moderated
+    // nothing. Same omission in getByMechanicId below.
+    const reviews = args.includeHidden ? all : all.filter((r) => r.hidden_at == null);
     return await Promise.all(
       reviews.map(async (review) => {
         const mechanic = review.mechanic_id ? await ctx.db.get(review.mechanic_id) : null;
@@ -52,10 +62,12 @@ export const getByShopId = query({
 export const getByMechanicId = query({
   args: { mechanicId: v.id("mechanics") },
   handler: async (ctx, args) => {
-    const reviews = await ctx.db
+    const all = await ctx.db
       .query("reviews")
       .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", args.mechanicId))
       .collect();
+    // See getByShopId — hidden reviews must not reach a customer-facing read.
+    const reviews = all.filter((r) => r.hidden_at == null);
     return await Promise.all(
       reviews.map(async (review) => {
         const shop = await ctx.db.get(review.shop_id);

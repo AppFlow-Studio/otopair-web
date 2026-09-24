@@ -555,12 +555,12 @@ function getEmptyMechanicForm(): MechanicFormState {
 }
 
 function getFirstIncompleteSavedStep(params: {
-  hasSavedShop: boolean;
+  hasSavedShopDetails: boolean;
   savedHoursCount: number;
   savedServiceCount: number;
   mechanicCount: number;
 }) {
-  if (!params.hasSavedShop) return 0;
+  if (!params.hasSavedShopDetails) return 0;
   if (params.savedHoursCount < 7) return 1;
   if (params.savedServiceCount === 0) return 2;
   // Licenses (3) and mechanics (4) are optional/skippable — resume at Payments.
@@ -735,7 +735,12 @@ export default function ShopSetupPage() {
   const firstIncompleteSavedStep = useMemo(
     () =>
       getFirstIncompleteSavedStep({
-        hasSavedShop: Boolean(onboardingData?.shop),
+        // Director-approved invites pre-create the shop record (name/address/phone
+        // pulled from the application) but WITHOUT a slug — the owner still has to
+        // fill the required "page name" on Step 0. Gate on the slug actually being
+        // set rather than the bare record existing, otherwise an invited shop skips
+        // Step 0 and opens on Operating Hours with no page name captured.
+        hasSavedShopDetails: Boolean(onboardingData?.shop?.slug),
         savedHoursCount: onboardingData?.hours.length ?? 0,
         savedServiceCount: persistedServiceCount,
         mechanicCount: onboardingData?.mechanics.length ?? 0,

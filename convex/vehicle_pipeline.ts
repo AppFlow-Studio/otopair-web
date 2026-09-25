@@ -20,6 +20,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { searchAndFetch } from "./vehicleEnrichment/firecrawl";
 import { advancedVinDecode, extractVDBFields } from "./lib/vehicleDatabases";
 import { decodeProvider } from "./lib/decodeProvider";
+import { isRealVin, isNorthAmericanVin, passesVinCheckDigitGate } from "./lib/vinIdentity";
 import { carApiVinDecode, extractCarApiFields } from "./lib/carApi";
 import { findHaloVariant } from "./lib/haloVariantRules";
 import { canonicalizeTransmissionType } from "./lib/transmissionTypeInference";
@@ -167,6 +168,18 @@ export const processVin = internalAction({
         // otherwise proceed and let the model fallback + the make/model/year gate
         // below recover it. (Previously any non-zero code with VDB down hard-failed
         // a real vehicle.)
+        // Bug #275: separate "our database is incomplete" from "this VIN is
+        // wrong". Codes 4/5/8/14 are coverage gaps and still yield a usable
+        // make/year/engine (the 2009 Escalade returns "4,14"). Codes 1 (check
+        // digit does not calculate) and 400 (invalid characters present)
+        // describe the VIN STRING itself — NHTSA still hands back Make/Model/
+        // Year for those, decoded from characters 1-11, which is exactly how
+        // an altered serial rendered as a real car. Those are fatal — except
+        // code 1 on a non-North-American VIN, which isn't required to carry a
+        // check digit (imports, Smartcar EU cars).
+        const VIN_STRING_ERRORS = new Set(isNorthAmericanVin(args.vin) ? ["1", "400"] : ["400"]);
+        if (errorCodes.some((c: string) => VIN_STRING_ERRORS.has(c))) return null;
+
         const nhtsaMake = getValue(nhtsaData, "Make");
         if (!nhtsaMake && !vdb) return null; // both sources genuinely dead
       }
@@ -1674,6 +1687,26 @@ export const decodeVin = action({
 
     if (vin.length !== 17) {
       return { success: false as const, error: "VIN must be exactly 17 characters" };
+    }
+
+    // Bug #275. Length alone let altered VINs through: NHTSA reads the make,
+    // year and engine out of characters 1-11, so WAULDAF87PN000000 came back
+    // "2023 Audi A8" exactly like the real WAULDAF87PN012340 — and the card
+    // then echoed the altered string back as if it were that car's VIN.
+    // Only the check digit can catch an edited serial, so it is enforced here
+    // rather than left to the decoder's opinion — for North American VINs
+    // only; imports aren't required to carry one.
+    if (!isRealVin(vin)) {
+      return {
+        success: false as const,
+        error: "A VIN never contains the letters I, O or Q. Check for a 1 or a 0.",
+      };
+    }
+    if (!passesVinCheckDigitGate(vin)) {
+      return {
+        success: false as const,
+        error: "This VIN doesn't add up — one character looks wrong. Please check it and try again.",
+      };
     }
 
     const result: ProcessVinResult | null = await ctx.runAction(internal.vehicle_pipeline.processVin, { vin });

@@ -76,3 +76,80 @@ export function mintPseudoVin(now: number, randomSuffix: string): string {
 export function canonicalVin(vin: string): string {
   return vin.trim().toUpperCase();
 }
+
+/**
+ * ISO 3779 transliteration table for the check-digit calculation.
+ *
+ * I, O and Q are absent by design: they are not in the VIN alphabet, so
+ * `isRealVin` has already rejected any string containing them.
+ */
+const TRANSLITERATION: Record<string, number> = {
+  A: 1, B: 2, C: 3, D: 4, E: 5, F: 6, G: 7, H: 8,
+  J: 1, K: 2, L: 3, M: 4, N: 5, P: 7, R: 9,
+  S: 2, T: 3, U: 4, V: 5, W: 6, X: 7, Y: 8, Z: 9,
+};
+
+/** Positional weights, 1-indexed. Position 9 is the check digit itself (0). */
+const POSITION_WEIGHTS = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2];
+
+/**
+ * True when position 9 matches the FMVSS 565 / ISO 3779 check digit.
+ *
+ * This is the only thing that catches a VIN whose SERIAL was altered. NHTSA's
+ * decoder reads the make, year and engine out of characters 1–11 alone, so
+ * `WAULDAF87PN000000` and `WAULDAF87PN012340` both come back "2023 Audi A8" —
+ * the last six characters are the serial and no decoder can tell you they are
+ * wrong. The check digit can: it is computed over all 17 characters, so any
+ * single-character edit breaks it.
+ *
+ * Deliberately NOT folded into `isRealVin`, which is documented as the exact
+ * complement of `isPseudoVin`. A real VIN with a typo is a mistyped VIN, not a
+ * placeholder we minted, and it must not start being treated as one by
+ * walkinVinRepair or the booking VIN resolver.
+ */
+export function hasValidVinCheckDigit(vin: string | null | undefined): boolean {
+  if (!isRealVin(vin)) return false;
+  const v = canonicalVin(vin as string);
+
+  let sum = 0;
+  for (let i = 0; i < 17; i++) {
+    const ch = v[i];
+    const value = ch >= "0" && ch <= "9" ? Number(ch) : TRANSLITERATION[ch];
+    if (value === undefined) return false; // unreachable past isRealVin; belt and braces
+    sum += value * POSITION_WEIGHTS[i];
+  }
+
+  const remainder = sum % 11;
+  return v[8] === (remainder === 10 ? "X" : String(remainder));
+}
+
+/**
+ * True when the WMI (position 1) is a North American region code, 1–5
+ * (US, Canada, Mexico). Only these VINs are guaranteed to carry a check
+ * digit; European and Asian home-market VINs often use position 9 for
+ * something else, so a failed check there says nothing about a typo.
+ */
+export function isNorthAmericanVin(vin: string | null | undefined): boolean {
+  if (!isRealVin(vin)) return false;
+  return /^[1-5]/.test(canonicalVin(vin as string));
+}
+
+/**
+ * True when the check digit is either valid or not required: enforced for
+ * North American VINs only, so imports and grey-market cars still decode.
+ */
+export function passesVinCheckDigitGate(vin: string | null | undefined): boolean {
+  return !isNorthAmericanVin(vin) || hasValidVinCheckDigit(vin);
+}
+
+/**
+ * True when `vin` is worth handing to a decoder: real alphabet AND, for North
+ * American VINs, a check digit that proves it was transcribed correctly.
+ *
+ * Use this at VIN-ENTRY doors (typed, scanned, pasted) where a wrong answer
+ * becomes a car in someone's garage. Keep using `isRealVin` for "is this a
+ * placeholder", which is a different question with different callers.
+ */
+export function isDecodableVin(vin: string | null | undefined): boolean {
+  return isRealVin(vin) && passesVinCheckDigitGate(vin);
+}

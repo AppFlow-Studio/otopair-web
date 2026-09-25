@@ -734,8 +734,14 @@ export async function resolveAvailableMechanicForWindow(
   const fewestBookings = candidates.filter((candidate) => candidate.count === lowestCount);
   const lowestMinutes = Math.min(...fewestBookings.map((candidate) => candidate.minutes));
   const tiedCandidates = fewestBookings.filter((candidate) => candidate.minutes === lowestMinutes);
-  const randomIndex = Math.floor(Math.random() * tiedCandidates.length);
-  return tiedCandidates[randomIndex].mechanicId;
+  // Deterministic tie-break. Math.random() here made the choice unstable, and
+  // the test asserting a stable order failed intermittently. Ported from
+  // otopair-web, which fixed this first — mobile pushing its own copy would
+  // otherwise have reverted that fix on the shared deployment.
+  tiedCandidates.sort((a, b) =>
+    String(a.mechanicId).localeCompare(String(b.mechanicId)),
+  );
+  return tiedCandidates[0].mechanicId;
 }
 
 export async function getMechanicDayWorkload(

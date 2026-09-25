@@ -15,7 +15,26 @@ describe("PortalAuthBoundary", () => {
       ),
     );
 
-    expect(html).toContain("Signing out");
+    expect(html).toContain("Please wait, signing you out.");
+    expect(html).not.toContain("Protected portal content");
+  });
+
+  test("shows the signing-out screen before Clerk reports the session closed", () => {
+    const html = renderToStaticMarkup(
+      createElement(
+        PortalAuthBoundary,
+        {
+          isLoaded: true,
+          isSignedIn: true,
+          isSigningOut: true,
+          allowSignedOut: false,
+        },
+        protectedContent,
+      ),
+    );
+
+    expect(html).toContain("Please wait, signing you out.");
+    expect(html).toContain("animate-spin");
     expect(html).not.toContain("Protected portal content");
   });
 

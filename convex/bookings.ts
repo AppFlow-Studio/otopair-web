@@ -11579,8 +11579,11 @@ export const getJobDetail = query({
     // seeds the BASE line (base-only, not the conflated whole-approval total);
     // `recordedByKey` (custom-job id → hours) seeds each custom line, gated
     // below on "not touched since the agreement".
-    const { baseHours: recordedBaseLaborHours, byLineKey: recordedByKey } =
-      parseAgreedLaborAllocations(agreedApproval?.labor_allocations);
+    const {
+      baseHours: recordedBaseLaborHours,
+      byLineKey: recordedByKey,
+      byServiceId: recordedByServiceId,
+    } = parseAgreedLaborAllocations(agreedApproval?.labor_allocations);
     const effectiveEstimatedLaborMinutes: number | null =
       typeof recordedBaseLaborHours === "number"
         ? hoursToMinutes(recordedBaseLaborHours)
@@ -11596,12 +11599,14 @@ export const getJobDetail = query({
     const perServiceLaborBaseServices: Array<{
       name: string;
       catalogHours: number | null;
+      serviceId: string;
     }> = [];
     for (const sid of booking.service_ids ?? []) {
       const svc: any = await ctx.db.get(sid);
       if (!svc) continue;
       perServiceLaborBaseServices.push({
         name: svc.name ?? "Service",
+        serviceId: String(sid),
         catalogHours:
           typeof svc.default_labor_hours === "number"
             ? svc.default_labor_hours
@@ -11818,14 +11823,24 @@ export const getJobDetail = query({
         all_in_low_cents: shopLine?.all_in_low_cents ?? null,
         all_in_high_cents: shopLine?.all_in_high_cents ?? null,
         all_in_default_cents: shopLine?.all_in_default_cents ?? null,
-        // The booked labor (single-service) wins so the estimate opens at the
-        // agreed time; else the engine projection, else the vehicle/catalog
-        // labor-time fallback so shop-priced rows pre-fill how long it takes.
+        // The AGREED per-service time from an estimate-cycle approval wins, so a
+        // re-quote (mid-job added scope, pre-job revise) opens at what the
+        // customer approved instead of snapping back to the estimate. Then the
+        // booked labor (single-service); else the engine projection, else the
+        // vehicle/catalog labor-time fallback so shop-priced rows pre-fill.
         est_labor_minutes:
+          (recordedByServiceId.has(key)
+            ? hoursToMinutes(recordedByServiceId.get(key)!)
+            : null) ??
           (singleService ? effectiveEstimatedLaborMinutes : null) ??
           estLaborMinutesById.get(key) ??
           fallbackLaborMinutesById.get(key) ??
           null,
+        // What the customer APPROVED for this service (null = never agreed), so
+        // a re-quote can flag a labor move instead of changing it silently.
+        agreed_labor_minutes: recordedByServiceId.has(key)
+          ? hoursToMinutes(recordedByServiceId.get(key)!)
+          : null,
       };
     });
 
@@ -18970,14 +18985,18 @@ export const getReceipt = query({
     // AGREED split lives in resolveAgreedLaborLines (the single reader shared
     // with the post-job Labor step's seeding), so both derive per-line labor
     // from the same canonical source instead of a hand-rolled copy that drifts.
-    const baseServices: Array<{ name: string; catalogHours: number | null }> =
-      [];
+    const baseServices: Array<{
+      name: string;
+      catalogHours: number | null;
+      serviceId: string;
+    }> = [];
     if (Array.isArray(booking.service_ids)) {
       for (const sid of booking.service_ids) {
         const svc: any = await ctx.db.get(sid);
         if (!svc) continue;
         baseServices.push({
           name: svc.name ?? "Service",
+          serviceId: String(sid),
           catalogHours:
             typeof svc.default_labor_hours === "number"
               ? svc.default_labor_hours

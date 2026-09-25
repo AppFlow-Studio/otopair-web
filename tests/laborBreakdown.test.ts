@@ -179,3 +179,74 @@ describe("resolveAgreedLaborLines", () => {
     expect(small.laborCost).toBeCloseTo(75, 6);
   });
 });
+
+// Estimate cycles (pre/mid-job) write `svc:<serviceId>` / `job:<customJobId>`
+// keys. The reader used to only know "base" + bare ids, so every estimate-cycle
+// agreement was invisible: re-opening "Add unforeseen scope" snapped an Oil
+// Change the customer approved at 0.2 hr back to its 0.5 hr estimate.
+describe("estimate-cycle labor_allocations (svc:/job: keys)", () => {
+  it("parses svc: into byServiceId and strips the job: prefix", () => {
+    const { baseHours, byLineKey, byServiceId } = parseAgreedLaborAllocations([
+      { line_key: "svc:oil", hours: 0.2 },
+      { line_key: "svc:rotate", hours: 0.5 },
+      { line_key: "job:job1", hours: 0.3 },
+    ]);
+    expect(byServiceId.get("oil")).toBe(0.2);
+    expect(byServiceId.get("rotate")).toBe(0.5);
+    expect(byLineKey.get("job1")).toBe(0.3);
+    expect(byLineKey.has("svc:oil")).toBe(false);
+    // No "base" row → the booked services' agreed time is their sum.
+    expect(baseHours).toBeCloseTo(0.7);
+  });
+
+  it("keeps the post-job shape unchanged", () => {
+    const { baseHours, byLineKey, byServiceId } = parseAgreedLaborAllocations([
+      { line_key: "base", hours: 1 },
+      { line_key: "job1", hours: 0.4 },
+    ]);
+    expect(baseHours).toBe(1);
+    expect(byLineKey.get("job1")).toBe(0.4);
+    expect(byServiceId.size).toBe(0);
+  });
+
+  it("bills booked + added lines at their agreed hours, not catalog", () => {
+    const { lines, totalHours } = resolveAgreedLaborLines({
+      baseServices: [
+        { name: "Oil Change", catalogHours: 0.5, serviceId: "oil" },
+      ],
+      customServices: [{ name: "Diagnostic Scan", durationMinutes: 30 }],
+      customJobs: [
+        {
+          _id: "job1",
+          name: "Diagnostic Scan",
+          estimated_minutes: 30,
+          status: "planned",
+        },
+      ],
+      allocations: [
+        { line_key: "svc:oil", hours: 0.2 },
+        { line_key: "job:job1", hours: 0.2 },
+      ],
+      laborSubtotalDollars: 60,
+    });
+    expect(totalHours).toBeCloseTo(0.4);
+    expect(lines.map((l) => [l.name, l.laborHours, l.laborCost])).toEqual([
+      ["Oil Change", 0.2, 30],
+      ["Diagnostic Scan", 0.2, 30],
+    ]);
+  });
+
+  it("a booked service without its own svc: row keeps catalog hours", () => {
+    const { lines } = resolveAgreedLaborLines({
+      baseServices: [
+        { name: "Oil Change", catalogHours: 0.5, serviceId: "oil" },
+        { name: "Tire Rotation", catalogHours: 0.4, serviceId: "rotate" },
+      ],
+      customServices: [],
+      customJobs: [],
+      allocations: [{ line_key: "svc:oil", hours: 0.2 }],
+      laborSubtotalDollars: null,
+    });
+    expect(lines.map((l) => l.laborHours)).toEqual([0.2, 0.4]);
+  });
+});

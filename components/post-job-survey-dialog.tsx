@@ -381,6 +381,9 @@ type BookingServiceLine = {
   all_in_high_cents: number | null;
   all_in_default_cents: number | null;
   est_labor_minutes: number | null;
+  /** Labor the customer approved for this service on an earlier estimate
+   *  (null = never agreed). Drives the "was X hr" flag on a re-quote. */
+  agreed_labor_minutes?: number | null;
 };
 
 /** One row in the estimate summary's per-service breakdown. Shop-priced rows
@@ -395,6 +398,9 @@ type SummaryServiceRow = {
   priceCents: number;
   laborCents: number | null;
   laborHours: number | null;
+  /** Hours the customer approved for this row earlier; set only when the
+   *  current hours differ, so the summary shows what moved. */
+  agreedLaborHours?: number | null;
   parts: Array<{
     name: string;
     qty: number;
@@ -2166,14 +2172,47 @@ function PostJobSurveyDialogBody({
       out[`svc:${line.service_id}`] = mins > 0 ? mins / 60 : 0;
     }
     for (const job of customJobs ?? []) {
+      // An added line the customer already approved re-opens at its AGREED
+      // time (server-guarded to lines untouched since the agreement), not its
+      // original estimate — otherwise every re-quote silently resets it.
+      const agreed = customLaborOverridesMinutes?.[String(job._id)];
       const mins =
-        typeof job.estimated_minutes === "number" && job.estimated_minutes > 0
-          ? job.estimated_minutes
-          : 0;
+        typeof agreed === "number" && agreed > 0
+          ? agreed
+          : typeof job.estimated_minutes === "number" &&
+              job.estimated_minutes > 0
+            ? job.estimated_minutes
+            : 0;
       out[`job:${job._id}`] = mins > 0 ? mins / 60 : 0;
     }
     return out;
-  }, [serviceLines, customJobs, estimatedLaborMinutes]);
+  }, [
+    serviceLines,
+    customJobs,
+    estimatedLaborMinutes,
+    customLaborOverridesMinutes,
+  ]);
+  // What the customer APPROVED per row on an earlier estimate, keyed like
+  // laborDefaultsByKey. Only rows with a real agreement appear — a first-time
+  // estimate has nothing to compare against, so nothing is flagged.
+  const agreedLaborHoursByKey = useMemo(() => {
+    const out: Record<string, number> = {};
+    if (!isEstimateCycle) return out;
+    for (const line of serviceLines) {
+      if (
+        typeof line.agreed_labor_minutes === "number" &&
+        line.agreed_labor_minutes >= 0
+      ) {
+        out[`svc:${line.service_id}`] = line.agreed_labor_minutes / 60;
+      }
+    }
+    for (const [jobId, mins] of Object.entries(
+      customLaborOverridesMinutes ?? {},
+    )) {
+      if (typeof mins === "number" && mins > 0) out[`job:${jobId}`] = mins / 60;
+    }
+    return out;
+  }, [isEstimateCycle, serviceLines, customLaborOverridesMinutes]);
   // Effective labor hours for a per-service key: the mechanic's typed value when
   // present (blank = 0), otherwise the estimate default.
   const laborHoursForKey = useCallback(
@@ -2511,6 +2550,13 @@ function PostJobSurveyDialogBody({
           lineCents: Math.round(partDollars(p) * 100),
           customerSupplied: p.supplied_by === "customer",
         }));
+    // The approved hours for a row, but only when the current hours moved off
+    // them — the summary names exactly what the re-quote changes.
+    const movedAgreedHours = (key: string): number | null => {
+      const agreed = agreedLaborHoursByKey[key];
+      if (typeof agreed !== "number") return null;
+      return Math.abs(laborHoursForKey(key) - agreed) > 0.001 ? agreed : null;
+    };
     const rows: SummaryServiceRow[] = [];
     for (const line of serviceLines) {
       const svcParts = parts.filter(
@@ -2533,6 +2579,7 @@ function PostJobSurveyDialogBody({
           priceCents: partsCents + laborCents,
           laborCents,
           laborHours: laborHoursForKey(`svc:${line.service_id}`),
+          agreedLaborHours: movedAgreedHours(`svc:${line.service_id}`),
           parts: itemize(svcParts),
         });
       } else {
@@ -2581,6 +2628,7 @@ function PostJobSurveyDialogBody({
           priceCents: partsCents + laborCents,
           laborCents,
           laborHours: laborHoursForKey(`job:${job._id}`),
+          agreedLaborHours: movedAgreedHours(`job:${job._id}`),
           parts: itemize(jobParts),
         });
       }
@@ -2594,6 +2642,7 @@ function PostJobSurveyDialogBody({
     serviceSetCents,
     laborHoursForKey,
     effectiveLaborRateCents,
+    agreedLaborHoursByKey,
   ]);
 
   // The quoted price as the CLIENT computes it — same formula as liveTotals but
@@ -3534,6 +3583,7 @@ function PostJobSurveyDialogBody({
             serviceLaborHours={serviceLaborHours}
             setServiceLaborHours={setServiceLaborHours}
             laborDefaultsByKey={laborDefaultsByKey}
+            agreedLaborHoursByKey={agreedLaborHoursByKey}
             isShopSet={isShopSet}
             serviceBreakdown={serviceBreakdown}
           />
@@ -3956,6 +4006,7 @@ function StepContent(props: {
     React.SetStateAction<Record<string, string>>
   >;
   laborDefaultsByKey: Record<string, number>;
+  agreedLaborHoursByKey: Record<string, number>;
   isShopSet: boolean;
   /** Per-service breakdown for the estimate summary (review/receipt). */
   serviceBreakdown: SummaryServiceRow[];
@@ -4160,6 +4211,7 @@ function StepContent(props: {
           serviceLaborHours={props.serviceLaborHours}
           setServiceLaborHours={props.setServiceLaborHours}
           laborDefaultsByKey={props.laborDefaultsByKey}
+          agreedLaborHoursByKey={props.agreedLaborHoursByKey}
           customJobs={props.customJobs}
           laborRateCents={props.laborRateCents}
           isShopSet={props.isShopSet}
@@ -4646,6 +4698,7 @@ function ServicePartsGroup({
   serviceSetCents,
   setServiceSetCents,
   laborInputValue,
+  agreedLaborHours = null,
   setServiceLaborHours,
   laborRatePerHourDollars,
   children,
@@ -4658,6 +4711,8 @@ function ServicePartsGroup({
     React.SetStateAction<Record<string, number>>
   >;
   laborInputValue: (laborKey: string) => string;
+  /** Hours the customer approved for this row earlier (null = never agreed). */
+  agreedLaborHours?: number | null;
   setServiceLaborHours?: React.Dispatch<
     React.SetStateAction<Record<string, string>>
   >;
@@ -4704,6 +4759,16 @@ function ServicePartsGroup({
         (Number(laborRatePerHourDollars) || 0)
       : 0;
   const laborOverCap = laborLineDollars > MAX_PRICE_DOLLARS;
+  // A billing row whose hours moved off what the customer approved — flagged so
+  // a re-quote never changes agreed labor without the mechanic seeing it.
+  const currentLaborHours =
+    showLabor && group.laborKey
+      ? Number(laborInputValue(group.laborKey)) || 0
+      : null;
+  const laborMovedFromAgreed =
+    currentLaborHours != null &&
+    agreedLaborHours != null &&
+    Math.abs(currentLaborHours - agreedLaborHours) > 0.001;
   return (
     <div className="overflow-hidden rounded-2xl border border-primary/12 bg-card">
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -4768,6 +4833,32 @@ function ServicePartsGroup({
           </div>
         ) : null}
       </div>
+      {laborMovedFromAgreed ? (
+        <div className="flex items-center justify-between gap-2 border-t border-amber-200 bg-amber-50/70 px-3 py-1.5 text-[11px] text-amber-800">
+          <span>
+            Customer approved{" "}
+            <span className="font-semibold tabular-nums">
+              {formatHoursValue(agreedLaborHours! * 60)} hr
+            </span>{" "}
+            — now{" "}
+            <span className="font-semibold tabular-nums">
+              {formatHoursValue(currentLaborHours! * 60)} hr
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setServiceLaborHours?.((prev) => ({
+                ...prev,
+                [group.laborKey!]: formatHoursValue(agreedLaborHours! * 60),
+              }))
+            }
+            className="shrink-0 font-semibold underline underline-offset-2 hover:text-amber-900"
+          >
+            Restore
+          </button>
+        </div>
+      ) : null}
       {laborOverCap ? (
         <div className="border-t border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
           Labor for {group.label} is $
@@ -4856,6 +4947,7 @@ function PartsStep({
   serviceLaborHours = {},
   setServiceLaborHours,
   laborDefaultsByKey = {},
+  agreedLaborHoursByKey = {},
   customJobs,
   laborRateCents,
   isShopSet = false,
@@ -4911,6 +5003,7 @@ function PartsStep({
     React.SetStateAction<Record<string, string>>
   >;
   laborDefaultsByKey?: Record<string, number>;
+  agreedLaborHoursByKey?: Record<string, number>;
   customJobs?: CustomJobRow[];
   laborRateCents?: number;
   isShopSet?: boolean;
@@ -6036,6 +6129,11 @@ function PartsStep({
                 serviceSetCents={serviceSetCents}
                 setServiceSetCents={setServiceSetCents}
                 laborInputValue={laborInputValue}
+                agreedLaborHours={
+                  group.laborKey != null
+                    ? (agreedLaborHoursByKey[group.laborKey] ?? null)
+                    : null
+                }
                 setServiceLaborHours={setServiceLaborHours}
                 laborRatePerHourDollars={laborRatePerHourDollars}
               >
@@ -9305,6 +9403,15 @@ function EstimateSummary({
                               {row.laborHours
                                 ? ` · ${laborDurationLabel(hoursToMinutes(row.laborHours))}`
                                 : ""}
+                              {row.agreedLaborHours != null ? (
+                                <span className="ml-1 font-medium text-amber-700">
+                                  (was{" "}
+                                  {laborDurationLabel(
+                                    hoursToMinutes(row.agreedLaborHours),
+                                  )}
+                                  )
+                                </span>
+                              ) : null}
                             </span>
                             <span className="tabular-nums">
                               {fmtCents(row.laborCents!)}

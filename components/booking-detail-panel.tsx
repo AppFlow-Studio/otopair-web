@@ -3229,6 +3229,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           passportData={vehiclePassport ?? null}
           estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          customLaborOverridesMinutes={
+            (job as any)?.customLaborOverridesMinutes ?? null
+          }
           prefillData={actualsPrefill ?? null}
           isSubmitting={false}
           onClose={() => setShowPrejobEstimateDialog(false)}

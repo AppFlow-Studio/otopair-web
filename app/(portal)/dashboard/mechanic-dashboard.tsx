@@ -971,6 +971,9 @@ export default function MechanicDashboard() {
         }
         passportData={selectedWorkflowPassport ?? null}
         estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        customLaborOverridesMinutes={
+          (selectedWorkflowBooking as any)?.customLaborOverridesMinutes ?? null
+        }
         prefillData={workflowPrefill ?? null}
         isSubmitting={false}
         onClose={closeWorkflowDialog}

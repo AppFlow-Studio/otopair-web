@@ -90,6 +90,7 @@ export default function PreJobScopeDialog({
       // MidJobScopeDialog.
       passportData={(vehiclePassport ?? null) as never}
       estimatedLaborMinutes={j.estimatedLaborMinutes ?? null}
+      customLaborOverridesMinutes={j.customLaborOverridesMinutes ?? null}
       prefillData={actualsPrefill ?? null}
       isSubmitting={false}
       onClose={onClose}

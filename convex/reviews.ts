@@ -99,6 +99,32 @@ export const getByMechanicId = query({
  * mobile My Bookings screen to decide whether to show the "Leave a review"
  * card on a completed booking.
  */
+/**
+ * This user's SHOP review for one booking, or null.
+ *
+ * `listReviewedBookingIdsForUser` answers "has it been reviewed" but not
+ * "what did they say", so a screen showing a rating had nothing to render
+ * from — the past-service page drew five empty outline stars whether or not
+ * a review existed, which read as the review not having saved (#303).
+ *
+ * Shop review only (mechanic_id undefined): that is the row the visit-level
+ * star rating represents.
+ */
+export const getMyReviewForBooking = query({
+  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("reviews")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    return (
+      rows.find(
+        (r) => r.mechanic_id === undefined && r.user_id === args.userId,
+      ) ?? null
+    );
+  },
+});
+
 export const listReviewedBookingIdsForUser = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {

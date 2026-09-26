@@ -104,3 +104,33 @@ export const create = internalMutation({
     return messageId;
   },
 });
+
+/**
+ * Deletes a conversation's messages from `fromTimestamp` on — an edited user
+ * message and everything after it (#272) — and keeps message_count in step.
+ * Called by oto/chat.ts only once the replacement turn has succeeded.
+ * Returns how many rows were removed.
+ */
+export const truncateFromInternal = internalMutation({
+  args: {
+    conversationId: v.id("ai_conversations"),
+    fromTimestamp: v.number(),
+  },
+  handler: async (ctx, { conversationId, fromTimestamp }) => {
+    const rows = await ctx.db
+      .query("ai_messages")
+      .withIndex("by_conversation_id", (q) => q.eq("conversation_id", conversationId))
+      .collect();
+    const tail = rows.filter((r) => r.timestamp >= fromTimestamp);
+    for (const row of tail) await ctx.db.delete(row._id);
+    if (tail.length > 0) {
+      const conversation = await ctx.db.get(conversationId);
+      if (conversation) {
+        await ctx.db.patch(conversationId, {
+          message_count: Math.max(0, (conversation.message_count ?? 0) - tail.length),
+        });
+      }
+    }
+    return tail.length;
+  },
+});

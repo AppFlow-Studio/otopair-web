@@ -90,7 +90,7 @@ export const backfillBookingAssignmentPreferenceAny = mutation({
 
 /**
  * Ensure has_options=true on the services that need driver-side option selection
- * (brake pads, brake rotors, tire rotation, etc.) and (re)seed their service_options
+ * (brake pads, brake rotors, etc.) and (re)seed their service_options
  * with the correct labels. Idempotent — safe to re-run.
  *
  * Run: npx convex run migrations:backfillServiceOptions
@@ -123,18 +123,6 @@ export const backfillServiceOptions = mutation({
           { option_type: "position", option_label: "Front", labor_hours: 1.2, parts_cost_low: 200, parts_cost_high: 260, display_order: 1 },
           { option_type: "position", option_label: "Rear", labor_hours: 1.2, parts_cost_low: 170, parts_cost_high: 220, display_order: 2 },
           { option_type: "position", option_label: "Front and rear", labor_hours: 2.2, parts_cost_low: 370, parts_cost_high: 480, display_order: 3 },
-        ],
-      },
-      {
-        // Tire rotation: pick which tires are being moved. Most rotations are
-        // all 4; per-pair options support shops that only have time/budget
-        // for a partial rotation (e.g. matched-pair replacement scenarios).
-        slug: "tire-rotation",
-        options: [
-          { option_type: "tire_set", option_label: "All 4 tires", labor_hours: 0.3, parts_cost_low: 0, parts_cost_high: 0, display_order: 1 },
-          { option_type: "tire_set", option_label: "All 4 tires + balance", labor_hours: 0.9, parts_cost_low: 8, parts_cost_high: 12, display_order: 2 },
-          { option_type: "tire_set", option_label: "Front 2 only", labor_hours: 0.2, parts_cost_low: 0, parts_cost_high: 0, display_order: 3 },
-          { option_type: "tire_set", option_label: "Rear 2 only", labor_hours: 0.2, parts_cost_low: 0, parts_cost_high: 0, display_order: 4 },
         ],
       },
       {
@@ -191,7 +179,59 @@ export const backfillServiceOptions = mutation({
       }
     }
 
+    // Tire rotation is one all-four-wheel service. Match by name so this also
+    // cleans up catalogs seeded before the tire-rotation slug was standardized.
+    const tireRotationServices = (await ctx.db.query("services").collect()).filter(
+      (service) => service.name === "Tire Rotation",
+    );
+    for (const service of tireRotationServices) {
+      if (service.has_options !== false) {
+        await ctx.db.patch(service._id, { has_options: false });
+        servicesPatched += 1;
+      }
+      const existing = await ctx.db
+        .query("service_options")
+        .withIndex("by_service_id", (q) => q.eq("service_id", service._id))
+        .collect();
+      for (const option of existing) {
+        await ctx.db.delete(option._id);
+        optionsDeleted += 1;
+      }
+    }
+
     return { servicesPatched, optionsDeleted, optionsInserted, missingSlugs };
+  },
+});
+
+/**
+ * Retire the legacy per-axle Tire Rotation choices without changing any other
+ * catalog service or option. Run: npx convex run migrations:retireTireRotationOptions
+ */
+export const retireTireRotationOptions = mutation({
+  args: {},
+  handler: async (ctx) => {
+    let servicesPatched = 0;
+    let optionsDeleted = 0;
+    const tireRotationServices = (await ctx.db.query("services").collect()).filter(
+      (service) => service.name === "Tire Rotation",
+    );
+
+    for (const service of tireRotationServices) {
+      if (service.has_options !== false) {
+        await ctx.db.patch(service._id, { has_options: false });
+        servicesPatched += 1;
+      }
+      const options = await ctx.db
+        .query("service_options")
+        .withIndex("by_service_id", (q) => q.eq("service_id", service._id))
+        .collect();
+      for (const option of options) {
+        await ctx.db.delete(option._id);
+        optionsDeleted += 1;
+      }
+    }
+
+    return { servicesPatched, optionsDeleted };
   },
 });
 

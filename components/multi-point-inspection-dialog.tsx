@@ -447,6 +447,10 @@ export default function MultiPointInspectionDialog(props: {
     inspection: InspectionInputPayload,
   ) => Promise<void>;
 }) {
+  // The inspection holds a local working copy. Unmount it while closed so a
+  // reopened booking always initializes from the latest persisted data.
+  if (!props.open) return null;
+
   return (
     <MultiPointInspectionDialogBody
       key={`${props.passportData?.vin ?? "no-vin"}-${props.bookingId ?? "no-booking"}`}
@@ -1760,7 +1764,7 @@ function MultiPointInspectionDialogBody({
    * sent, no money moves, and the customer isn't notified. How it later reaches
    * the customer depends on whether the job is running:
    *   - pre-job (the usual inspection case): the added scope goes out as part of
-   *     "Submit → Vehicle Health" — commitInspectionAndAwaitEstimate opens the
+   *     "Submit" — commitInspectionAndAwaitEstimate opens the
    *     pre-job estimate in the booking panel. There is NO send button here.
    *   - mid-job: the running job has no such submit step, so each line keeps its
    *     own "Price & send" → mid-job change.
@@ -2053,7 +2057,7 @@ function MultiPointInspectionDialogBody({
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Submit → Vehicle Health
+          Submit
         </button>
       </div>
     </div>
@@ -2069,7 +2073,7 @@ function MultiPointInspectionDialogBody({
           flushPendingSave();
           onClose();
         }}
-        title="Multi-point inspection"
+        title={phase === "pre" ? "Vehicle pre-check" : "Multi-point inspection"}
         description={bookingSubLabel}
         maxWidthClassName="max-w-2xl"
         mobileFullBleed
@@ -2672,7 +2676,7 @@ function MultiPointInspectionDialogBody({
           the customer's confirmation. Opened from "Price & send" in the "Added
           to this job" box while the job is running (there's no inspection-submit
           step then to carry the estimate). A PRE-job inspection has no scope
-          dialog here at all — its added scope rides the "Submit → Vehicle Health"
+          dialog here at all — its added scope rides the "Submit"
           flow (commitInspectionAndAwaitEstimate opens the pre-job estimate in the
           booking panel), so the mechanic can't send before the check is done. */}
       <MidJobScopeDialog
@@ -5502,7 +5506,7 @@ function ResultsScreen({
    *  the inspection SUBMIT, not a button here. */
   onOpenScope: () => void;
   /** The booking is already running. Pre-job (false): the added scope is sent as
-   *  part of "Submit → Vehicle Health" (commitInspectionAndAwaitEstimate opens
+   *  part of "Submit" (commitInspectionAndAwaitEstimate opens
    *  the estimate), so there's NO "Price & send" here — just a note that submit
    *  will prompt it. Mid-job (true): the job's underway with no such submit step,
    *  so the line keeps its own "Price & send" → mid-job change. */
@@ -5619,7 +5623,7 @@ function ResultsScreen({
             // mechanic that's where it happens. No standalone send button.
             <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-primary">
               <Wrench className="h-3.5 w-3.5 flex-shrink-0" />
-              Ready — &ldquo;Submit → Vehicle Health&rdquo; will prompt you to
+              Ready — &ldquo;Submit&rdquo; will prompt you to
               price and send this added scope for the customer&apos;s
               confirmation.
             </p>
@@ -5635,7 +5639,7 @@ function ResultsScreen({
                 </span>
                 {/* Mid-job only: the running job has no inspection-submit step to
                     carry the estimate, so each line keeps its own send. A pre-job
-                    inspection sends everything through "Submit → Vehicle Health". */}
+                    inspection sends everything through "Submit". */}
                 {jobInProgress ? (
                   <button
                     type="button"

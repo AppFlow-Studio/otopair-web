@@ -109,6 +109,12 @@ export interface VehicleInput {
    *  variants use it (LEMON publishes sibling "…, AWD" / "…, FWD" manuals whose
    *  fluid capacities differ). Absent = no signal, not "unknown drivetrain". */
   drivetrain?: string | null;
+  /** Canonical transmission family (automatic | manual | cvt | dct) as produced
+   *  by canonicalizeTransmissionType. Part of the config identity: an automatic
+   *  and a manual (or CVT/DCT) of the SAME engine must not share one enriched
+   *  spec set. Absent/unknown ⇒ dropped from the key (stays in the
+   *  transmission-less namespace), so we never fragment configs on uncertainty. */
+  transmissionFamily?: string | null;
 }
 
 // ─── Call Results ────────────────────────────────────────────────
@@ -236,14 +242,36 @@ function canonicalizeMake(raw: string): string {
   return MAKE_ALIASES[base] ?? base;
 }
 
+/** The only transmission families that participate in the config identity.
+ *  Maps the output of canonicalizeTransmissionType ("automatic" | "manual" |
+ *  "CVT" | "DCT") — case-insensitively — to a stable lowercase key token. */
+const TRANSMISSION_FAMILY_KEY_TOKENS: Record<string, string> = {
+  automatic: "automatic",
+  manual: "manual",
+  cvt: "cvt",
+  dct: "dct",
+};
+
+/** Transmission token for a config key, or "" when unknown/unrecognized.
+ *  Unknown ⇒ "" so the caller's `.filter(p => p.length > 0)` drops it and the
+ *  key stays byte-identical to the legacy transmission-less key. Only the four
+ *  known families ever fragment the config space. */
+export function transmissionKeyToken(family: string | undefined | null): string {
+  if (!family) return "";
+  return TRANSMISSION_FAMILY_KEY_TOKENS[family.toLowerCase().trim()] ?? "";
+}
+
 export function buildEngineKey(input: VehicleInput): string {
   const year = String(input.year);
   const make = canonicalizeMake(input.make);
   const model = canonicalize(input.model);
   const trim = canonicalize(input.trim);
   const engine = canonicalize(input.engineCode);
+  // Appended LAST and dropped when unknown, so keys for transmission-less
+  // vehicles are unchanged from before this field existed.
+  const transmission = transmissionKeyToken(input.transmissionFamily);
 
-  const parts = [year, make, model, trim, engine].filter((p) => p.length > 0);
+  const parts = [year, make, model, trim, engine, transmission].filter((p) => p.length > 0);
   return parts.join("_");
 }
 
@@ -256,8 +284,12 @@ export function buildEngineKey(input: VehicleInput): string {
  * (e.g. VW "1.4 TSI", Hyundai "Smartstream", Ford "EcoBoost") that need
  * Haiku resolution before the canonical config_key can be computed.
  *
- * Format: `{year}_{makeSlug}_{modelSlug}_{trimSlug}_{displacementL}l_{cylinders}cyl_{fuelSlug}`
- * Example: "2020_volkswagen_jetta_r_line_1.4l_4cyl_gas"
+ * Format: `{year}_{makeSlug}_{modelSlug}_{trimSlug}_{displacementL}l_{cylinders}cyl_{fuelSlug}[_{transmission}]`
+ * Example: "2020_volkswagen_jetta_r_line_1.4l_4cyl_gas_automatic"
+ *
+ * The transmission suffix is appended only when the family is known — an
+ * automatic and a manual of the same engine must not share one cached config.
+ * Unknown transmission ⇒ suffix dropped ⇒ key identical to the legacy form.
  */
 export function buildNhtsaVinKey(input: {
   year: number;
@@ -267,6 +299,8 @@ export function buildNhtsaVinKey(input: {
   displacementL?: number | string;
   cylinders?: number | string;
   fuelType?: string;
+  /** Canonical transmission family from canonicalizeTransmissionType. */
+  transmissionFamily?: string | null;
 }): string {
   const year = String(input.year);
   const make = canonicalizeMake(input.make);
@@ -291,8 +325,9 @@ export function buildNhtsaVinKey(input: {
   }
 
   const fuel = canonicalize(input.fuelType ?? "");
+  const transmission = transmissionKeyToken(input.transmissionFamily);
 
-  const parts = [year, make, model, trim, disp, cyl, fuel].filter((p) => p.length > 0);
+  const parts = [year, make, model, trim, disp, cyl, fuel, transmission].filter((p) => p.length > 0);
   return parts.join("_");
 }
 

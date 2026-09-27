@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Fragment,
   useCallback,
   useEffect,
   useMemo,
@@ -94,6 +95,7 @@ import ServiceSuggestions from "@/components/booking/service-suggestions";
 import { cn } from "@/lib/utils";
 import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
+import { MAX_PRICE_CENTS, MAX_PRICE_DOLLARS } from "@/lib/price-cap";
 import {
   BRAKE_PAD_BRAND_OPTIONS,
   TIRE_BRAND_OPTIONS,
@@ -111,6 +113,7 @@ import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import ServicePickerModal from "@/components/booking/service-picker-modal";
 import { describeCustomJobTaxonomy } from "@/lib/custom-job-taxonomy";
 import { isTireReplacementService } from "@/lib/vehicle-service-relevance";
+import { isNamedPart } from "@/lib/tire-part-lines";
 import TirePartsEditor, {
   type TireLine,
   isTirePartRow,
@@ -378,6 +381,9 @@ type BookingServiceLine = {
   all_in_high_cents: number | null;
   all_in_default_cents: number | null;
   est_labor_minutes: number | null;
+  /** Labor the customer approved for this service on an earlier estimate
+   *  (null = never agreed). Drives the "was X hr" flag on a re-quote. */
+  agreed_labor_minutes?: number | null;
 };
 
 /** One row in the estimate summary's per-service breakdown. Shop-priced rows
@@ -392,6 +398,9 @@ type SummaryServiceRow = {
   priceCents: number;
   laborCents: number | null;
   laborHours: number | null;
+  /** Hours the customer approved for this row earlier; set only when the
+   *  current hours differ, so the summary shows what moved. */
+  agreedLaborHours?: number | null;
   parts: Array<{
     name: string;
     qty: number;
@@ -1365,6 +1374,7 @@ function PostJobSurveyDialogBody({
     cycle,
   });
   const [submittedForApproval, setSubmittedForApproval] = useState(false);
+  const [awaitingHoldConfirmation, setAwaitingHoldConfirmation] = useState(false);
   // When the mechanic clicks "Revise estimate" on a declined / SLA-expired
   // status panel we drop them back to the form. The booking row is still in a
   // terminal *_declined / sla_expired state, so without this guard the
@@ -1385,8 +1395,23 @@ function PostJobSurveyDialogBody({
     } else {
       manualReviseRef.current = false;
       setSubmittedForApproval(false);
+      setAwaitingHoldConfirmation(false);
     }
   }, [open]);
+  // Keep the review screen and its submit button visible while the deferred
+  // card-hold update runs. Switching to the status panel before its query sees
+  // a settled state briefly rendered the generic "Nothing to confirm" view.
+  useEffect(() => {
+    if (
+      !awaitingHoldConfirmation ||
+      workflow.state === "none" ||
+      workflow.state === "hold_processing"
+    ) {
+      return;
+    }
+    setAwaitingHoldConfirmation(false);
+    setSubmittedForApproval(true);
+  }, [awaitingHoldConfirmation, workflow.state]);
   // Re-entry: if the dialog opens on a booking that already has an in-flight
   // approval for *this* cycle, jump straight to the status panel.
   // A mid-job dialog opened on a booking still at pre_job_approved /
@@ -2147,14 +2172,47 @@ function PostJobSurveyDialogBody({
       out[`svc:${line.service_id}`] = mins > 0 ? mins / 60 : 0;
     }
     for (const job of customJobs ?? []) {
+      // An added line the customer already approved re-opens at its AGREED
+      // time (server-guarded to lines untouched since the agreement), not its
+      // original estimate — otherwise every re-quote silently resets it.
+      const agreed = customLaborOverridesMinutes?.[String(job._id)];
       const mins =
-        typeof job.estimated_minutes === "number" && job.estimated_minutes > 0
-          ? job.estimated_minutes
-          : 0;
+        typeof agreed === "number" && agreed > 0
+          ? agreed
+          : typeof job.estimated_minutes === "number" &&
+              job.estimated_minutes > 0
+            ? job.estimated_minutes
+            : 0;
       out[`job:${job._id}`] = mins > 0 ? mins / 60 : 0;
     }
     return out;
-  }, [serviceLines, customJobs, estimatedLaborMinutes]);
+  }, [
+    serviceLines,
+    customJobs,
+    estimatedLaborMinutes,
+    customLaborOverridesMinutes,
+  ]);
+  // What the customer APPROVED per row on an earlier estimate, keyed like
+  // laborDefaultsByKey. Only rows with a real agreement appear — a first-time
+  // estimate has nothing to compare against, so nothing is flagged.
+  const agreedLaborHoursByKey = useMemo(() => {
+    const out: Record<string, number> = {};
+    if (!isEstimateCycle) return out;
+    for (const line of serviceLines) {
+      if (
+        typeof line.agreed_labor_minutes === "number" &&
+        line.agreed_labor_minutes >= 0
+      ) {
+        out[`svc:${line.service_id}`] = line.agreed_labor_minutes / 60;
+      }
+    }
+    for (const [jobId, mins] of Object.entries(
+      customLaborOverridesMinutes ?? {},
+    )) {
+      if (typeof mins === "number" && mins > 0) out[`job:${jobId}`] = mins / 60;
+    }
+    return out;
+  }, [isEstimateCycle, serviceLines, customLaborOverridesMinutes]);
   // Effective labor hours for a per-service key: the mechanic's typed value when
   // present (blank = 0), otherwise the estimate default.
   const laborHoursForKey = useCallback(
@@ -2235,6 +2293,23 @@ function PostJobSurveyDialogBody({
     }
     return 12500;
   }, [laborRateCents, laborCostDollars, estimatedLaborMinutes]);
+
+  // Any labor LINE (hours × rate) over the $10,000 ceiling — mechanic-entered
+  // hours in either the estimate cycle's per-service inputs (serviceLaborHours)
+  // or the standalone Labor step (laborAllocations). Blocks Continue so the
+  // over-cap line is fixed here, not rejected server-side at submit.
+  const hasLaborLineOverCap = useMemo(() => {
+    const rate = effectiveLaborRateCents;
+    if (!(rate > 0)) return false;
+    const overCap = (hoursStr: string) => {
+      const hours = Number(hoursStr);
+      return Number.isFinite(hours) && Math.round(hours * rate) > MAX_PRICE_CENTS;
+    };
+    return (
+      Object.values(serviceLaborHours).some(overCap) ||
+      Object.values(laborAllocations).some(overCap)
+    );
+  }, [effectiveLaborRateCents, serviceLaborHours, laborAllocations]);
 
   const liveTotals = useMemo(() => {
     if (!isEstimateCycle) return null;
@@ -2475,6 +2550,13 @@ function PostJobSurveyDialogBody({
           lineCents: Math.round(partDollars(p) * 100),
           customerSupplied: p.supplied_by === "customer",
         }));
+    // The approved hours for a row, but only when the current hours moved off
+    // them — the summary names exactly what the re-quote changes.
+    const movedAgreedHours = (key: string): number | null => {
+      const agreed = agreedLaborHoursByKey[key];
+      if (typeof agreed !== "number") return null;
+      return Math.abs(laborHoursForKey(key) - agreed) > 0.001 ? agreed : null;
+    };
     const rows: SummaryServiceRow[] = [];
     for (const line of serviceLines) {
       const svcParts = parts.filter(
@@ -2497,6 +2579,7 @@ function PostJobSurveyDialogBody({
           priceCents: partsCents + laborCents,
           laborCents,
           laborHours: laborHoursForKey(`svc:${line.service_id}`),
+          agreedLaborHours: movedAgreedHours(`svc:${line.service_id}`),
           parts: itemize(svcParts),
         });
       } else {
@@ -2545,6 +2628,7 @@ function PostJobSurveyDialogBody({
           priceCents: partsCents + laborCents,
           laborCents,
           laborHours: laborHoursForKey(`job:${job._id}`),
+          agreedLaborHours: movedAgreedHours(`job:${job._id}`),
           parts: itemize(jobParts),
         });
       }
@@ -2558,6 +2642,7 @@ function PostJobSurveyDialogBody({
     serviceSetCents,
     laborHoursForKey,
     effectiveLaborRateCents,
+    agreedLaborHoursByKey,
   ]);
 
   // The quoted price as the CLIENT computes it — same formula as liveTotals but
@@ -2684,11 +2769,12 @@ function PostJobSurveyDialogBody({
         };
       })
       .filter(
+        // A priced/oem/brand row with a blank name is the blank-"test part" bug
+        // — drop it (previously kept via the `cost > 0` clause). Keep named parts,
+        // customer-supplied ($0) rows, not-used rows, and in-progress tire rows
+        // the editor manages.
         (part) =>
-          part.part_name ||
-          part.brand ||
-          part.oem_number ||
-          (Number.isFinite(part.cost) && part.cost > 0) ||
+          isNamedPart(part) ||
           part.supplied_by === "customer" ||
           part.not_used === true ||
           part.is_tire === true
@@ -2719,6 +2805,27 @@ function PostJobSurveyDialogBody({
       const mileageIdx = visibleSteps.indexOf("mileage");
       if (mileageIdx >= 0) setStepIndex(mileageIdx);
       setMileageConfirmOpen(true);
+      return;
+    }
+
+    // Every priced/identified part needs a name. A row with a price (or oem /
+    // brand) but a blank name is the blank-"test part" bug — surface it here so
+    // the mechanic names or removes it, instead of normalizeParts silently
+    // dropping it. Tires carry a synthesized name, so they're exempt.
+    const namelessPart = parts.find(
+      (p) =>
+        !isTirePartRow(p) &&
+        p.not_used !== true &&
+        p.supplied_by !== "customer" &&
+        !p.part_name.trim() &&
+        (Number(p.cost) > 0 || p.oem_number.trim() || p.brand.trim()),
+    );
+    if (namelessPart) {
+      setError(
+        "Every part with a price needs a name. Add a name or remove the empty row.",
+      );
+      const partsIdx = visibleSteps.indexOf("parts");
+      if (partsIdx >= 0) setStepIndex(partsIdx);
       return;
     }
 
@@ -2790,6 +2897,7 @@ function PostJobSurveyDialogBody({
     // The customer-side approval state then drives further UI (live
     // status banner inside this dialog after submit).
     if (cycle && bookingId) {
+      setAwaitingHoldConfirmation(true);
       const partsForApproval = normalizedParts.map((p) => ({
         part_name: p.part_name,
         brand: p.brand ?? undefined,
@@ -2930,12 +3038,13 @@ function PostJobSurveyDialogBody({
           onApprovalSubmitted?.(result as any);
           // Fixed-price bookings now run the SAME confirm-hold flow as any
           // estimate (the base is pinned, added scope is priced on top), so
-          // there's no longer a silent "audit-only" close path — every submit
-          // returns a real approval state and routes to the status panel.
-          setSubmittedForApproval(true);
+          // there's no longer a silent "audit-only" close path. The status
+          // panel waits for the card-hold result so the submit button owns the
+          // loading state instead of a transient empty panel.
         }
         return;
       } catch (err: any) {
+        setAwaitingHoldConfirmation(false);
         setError(err?.message ?? "Could not submit estimate. Try again.");
         return;
       }
@@ -3474,6 +3583,7 @@ function PostJobSurveyDialogBody({
             serviceLaborHours={serviceLaborHours}
             setServiceLaborHours={setServiceLaborHours}
             laborDefaultsByKey={laborDefaultsByKey}
+            agreedLaborHoursByKey={agreedLaborHoursByKey}
             isShopSet={isShopSet}
             serviceBreakdown={serviceBreakdown}
           />
@@ -3601,16 +3711,18 @@ function PostJobSurveyDialogBody({
               <button
                 type="button"
                 onClick={() => void handleFinalSubmit()}
-                disabled={isSubmitting}
+                disabled={isSubmitting || awaitingHoldConfirmation}
                 className={cn(
                   drawerPrimaryButtonClassName,
                   "h-10 rounded-lg px-5 text-[13px]"
                 )}
               >
-                {isSubmitting ? (
+                {isSubmitting || awaitingHoldConfirmation ? (
                   <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
                 ) : null}
-                {cycle
+                {awaitingHoldConfirmation
+                  ? "Confirming card hold…"
+                  : cycle
                   ? cycle === "post_job_reapproval"
                     ? "Confirm final"
                     : isEstimateCycle && isShopSet && fixedTotals
@@ -3647,6 +3759,7 @@ function PostJobSurveyDialogBody({
                         ).length,
                   recommendations,
                   laborStepValid,
+                  laborOverCap: hasLaborLineOverCap,
                 })}
                 className={cn(
                   drawerPrimaryButtonClassName,
@@ -3681,11 +3794,14 @@ function canAdvance(
     unpricedBlockingCount: number;
     recommendations: RecRowState[];
     laborStepValid: boolean;
+    // Any labor line (hours × rate) over the $10,000 per-line ceiling. Blocks
+    // both the standalone Labor step and the estimate cycle's merged parts step.
+    laborOverCap: boolean;
   }
 ) {
   if (step === "labor") {
-    // Can't leave labor with any line at 0 — that would quote free labor.
-    return state.laborStepValid;
+    // Can't leave labor with any line at 0 (free labor) or over the $10k cap.
+    return state.laborStepValid && !state.laborOverCap;
   }
   if (step === "recommendations") {
     // Every rec for a has_options service must carry a pick.
@@ -3715,6 +3831,9 @@ function canAdvance(
     // Every billable shop part must carry a price. An unpriced row has to be
     // priced, swapped, marked Not used, or removed before continuing.
     if (state.unpricedBlockingCount > 0) return false;
+    // In the estimate cycle this step also holds per-service labor — a line
+    // over the $10k ceiling must be lowered before continuing.
+    if (state.laborOverCap) return false;
     return true;
   }
   if (step === "parts_accuracy") {
@@ -3887,6 +4006,7 @@ function StepContent(props: {
     React.SetStateAction<Record<string, string>>
   >;
   laborDefaultsByKey: Record<string, number>;
+  agreedLaborHoursByKey: Record<string, number>;
   isShopSet: boolean;
   /** Per-service breakdown for the estimate summary (review/receipt). */
   serviceBreakdown: SummaryServiceRow[];
@@ -4091,6 +4211,7 @@ function StepContent(props: {
           serviceLaborHours={props.serviceLaborHours}
           setServiceLaborHours={props.setServiceLaborHours}
           laborDefaultsByKey={props.laborDefaultsByKey}
+          agreedLaborHoursByKey={props.agreedLaborHoursByKey}
           customJobs={props.customJobs}
           laborRateCents={props.laborRateCents}
           isShopSet={props.isShopSet}
@@ -4577,6 +4698,7 @@ function ServicePartsGroup({
   serviceSetCents,
   setServiceSetCents,
   laborInputValue,
+  agreedLaborHours = null,
   setServiceLaborHours,
   laborRatePerHourDollars,
   children,
@@ -4589,6 +4711,8 @@ function ServicePartsGroup({
     React.SetStateAction<Record<string, number>>
   >;
   laborInputValue: (laborKey: string) => string;
+  /** Hours the customer approved for this row earlier (null = never agreed). */
+  agreedLaborHours?: number | null;
   setServiceLaborHours?: React.Dispatch<
     React.SetStateAction<Record<string, string>>
   >;
@@ -4626,6 +4750,25 @@ function ServicePartsGroup({
   // the schedule, never added to the total.
   const showScheduleLabor =
     !!priced && !!group.laborKey && group.laborBills !== true;
+  // Live per-line labor guard: this billing input's hours × rate can't exceed
+  // the $10,000 ceiling. Scheduling-only labor (showScheduleLabor) never bills,
+  // so it's exempt.
+  const laborLineDollars =
+    showLabor && group.laborKey
+      ? (Number(laborInputValue(group.laborKey)) || 0) *
+        (Number(laborRatePerHourDollars) || 0)
+      : 0;
+  const laborOverCap = laborLineDollars > MAX_PRICE_DOLLARS;
+  // A billing row whose hours moved off what the customer approved — flagged so
+  // a re-quote never changes agreed labor without the mechanic seeing it.
+  const currentLaborHours =
+    showLabor && group.laborKey
+      ? Number(laborInputValue(group.laborKey)) || 0
+      : null;
+  const laborMovedFromAgreed =
+    currentLaborHours != null &&
+    agreedLaborHours != null &&
+    Math.abs(currentLaborHours - agreedLaborHours) > 0.001;
   return (
     <div className="overflow-hidden rounded-2xl border border-primary/12 bg-card">
       <div className="flex items-center gap-2 px-3 py-2.5">
@@ -4690,6 +4833,42 @@ function ServicePartsGroup({
           </div>
         ) : null}
       </div>
+      {laborMovedFromAgreed ? (
+        <div className="flex items-center justify-between gap-2 border-t border-amber-200 bg-amber-50/70 px-3 py-1.5 text-[11px] text-amber-800">
+          <span>
+            Customer approved{" "}
+            <span className="font-semibold tabular-nums">
+              {formatHoursValue(agreedLaborHours! * 60)} hr
+            </span>{" "}
+            — now{" "}
+            <span className="font-semibold tabular-nums">
+              {formatHoursValue(currentLaborHours! * 60)} hr
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={() =>
+              setServiceLaborHours?.((prev) => ({
+                ...prev,
+                [group.laborKey!]: formatHoursValue(agreedLaborHours! * 60),
+              }))
+            }
+            className="shrink-0 font-semibold underline underline-offset-2 hover:text-amber-900"
+          >
+            Restore
+          </button>
+        </div>
+      ) : null}
+      {laborOverCap ? (
+        <div className="border-t border-amber-300 bg-amber-50 px-3 py-2 text-[11px] font-medium text-amber-800">
+          Labor for {group.label} is $
+          {laborLineDollars.toLocaleString("en-US", {
+            maximumFractionDigits: 2,
+          })}{" "}
+          — over the ${MAX_PRICE_DOLLARS.toLocaleString()} max. Lower the hours to
+          continue.
+        </div>
+      ) : null}
       {open ? (
         <div className="space-y-2 border-t border-primary/10 px-3 py-3">
           {showScheduleLabor && group.laborKey ? (
@@ -4768,6 +4947,7 @@ function PartsStep({
   serviceLaborHours = {},
   setServiceLaborHours,
   laborDefaultsByKey = {},
+  agreedLaborHoursByKey = {},
   customJobs,
   laborRateCents,
   isShopSet = false,
@@ -4823,6 +5003,7 @@ function PartsStep({
     React.SetStateAction<Record<string, string>>
   >;
   laborDefaultsByKey?: Record<string, number>;
+  agreedLaborHoursByKey?: Record<string, number>;
   customJobs?: CustomJobRow[];
   laborRateCents?: number;
   isShopSet?: boolean;
@@ -5716,6 +5897,7 @@ function PartsStep({
                               </span>
                               <FixedCentCurrencyInput
                                 value={part.cost}
+                                maxCents={MAX_PRICE_CENTS}
                                 onValueChange={(value) =>
                                   updatePart(index, {
                                     cost: value,
@@ -5947,6 +6129,11 @@ function PartsStep({
                 serviceSetCents={serviceSetCents}
                 setServiceSetCents={setServiceSetCents}
                 laborInputValue={laborInputValue}
+                agreedLaborHours={
+                  group.laborKey != null
+                    ? (agreedLaborHoursByKey[group.laborKey] ?? null)
+                    : null
+                }
                 setServiceLaborHours={setServiceLaborHours}
                 laborRatePerHourDollars={laborRatePerHourDollars}
               >
@@ -8807,11 +8994,10 @@ function LaborStep({
             // or an editable input (that would imply the mechanic's time moves
             // the price — it doesn't).
             const baseLocked = isFixedPrice && line.key === "base";
+            const lineOverCap = !baseLocked && lineDollars > MAX_PRICE_DOLLARS;
             return (
-              <div
-                key={line.key}
-                className="flex items-center justify-between gap-3 rounded-xl border border-primary/10 bg-card px-4 py-3"
-              >
+              <Fragment key={line.key}>
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-primary/10 bg-card px-4 py-3">
                 <div className="min-w-0">
                   <p className="truncate text-[13px] font-medium text-foreground">
                     {line.label}
@@ -8840,7 +9026,18 @@ function LaborStep({
                     <span className="text-[11px] text-muted-foreground">hr</span>
                   </div>
                 )}
-              </div>
+                </div>
+                {lineOverCap ? (
+                  <p className="px-1 text-[11px] font-medium text-amber-700">
+                    {line.label} labor is $
+                    {lineDollars.toLocaleString("en-US", {
+                      maximumFractionDigits: 2,
+                    })}{" "}
+                    — over the ${MAX_PRICE_DOLLARS.toLocaleString()} max. Lower the
+                    hours to continue.
+                  </p>
+                ) : null}
+              </Fragment>
             );
           })}
         </div>
@@ -9206,6 +9403,15 @@ function EstimateSummary({
                               {row.laborHours
                                 ? ` · ${laborDurationLabel(hoursToMinutes(row.laborHours))}`
                                 : ""}
+                              {row.agreedLaborHours != null ? (
+                                <span className="ml-1 font-medium text-amber-700">
+                                  (was{" "}
+                                  {laborDurationLabel(
+                                    hoursToMinutes(row.agreedLaborHours),
+                                  )}
+                                  )
+                                </span>
+                              ) : null}
                             </span>
                             <span className="tabular-nums">
                               {fmtCents(row.laborCents!)}

@@ -229,11 +229,13 @@ crons.interval(
 
 // Recover notification_outbox rows stranded in `dispatching` by a mid-send
 // network/timeout error (the dispatcher can't tell "delivered" from "lost", so
-// it leaves them), flipping any stuck > 10 min back to `pending` for the next
-// dispatch tick. Channel-agnostic (push/sms/email).
+// it leaves them), flipping any stuck > 3 min back to `pending` for the next
+// dispatch tick. Channel-agnostic (push/sms/email). The push dispatcher now
+// re-queues its own transient failures immediately (see _requeuePushRows), so
+// this is a backstop for sends that died mid-flight before recording anything.
 crons.interval(
   "reset-stuck-dispatching",
-  { minutes: 5 },
+  { minutes: 1 },
   (internal as any).lib.push_dispatcher.resetStuckDispatching,
 );
 

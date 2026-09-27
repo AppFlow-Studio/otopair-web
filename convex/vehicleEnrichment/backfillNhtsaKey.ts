@@ -35,7 +35,8 @@ import {
   internalQuery,
 } from "../_generated/server";
 import { internal } from "../_generated/api";
-import { buildNhtsaVinKey } from "./types";
+import { buildNhtsaVinKey, transmissionKeyToken } from "./types";
+import { canonicalizeTransmissionType } from "../lib/transmissionTypeInference";
 
 const NHTSA_API =
   "https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvaluesextended/";
@@ -178,6 +179,12 @@ export const backfillNhtsaVinKeys = internalAction({
           continue;
         }
 
+        // Fold transmission into the key so it matches what a live decode now
+        // produces — otherwise this backfill writes a stale transmission-less key
+        // that a future decode of the same vehicle would miss.
+        const transmissionFamily = await canonicalizeTransmissionType(
+          getValue(data, "TransmissionStyle"),
+        );
         const key = buildNhtsaVinKey({
           year,
           make,
@@ -186,6 +193,7 @@ export const backfillNhtsaVinKeys = internalAction({
           displacementL: getValue(data, "DisplacementL"),
           cylinders: getValue(data, "EngineCylinders"),
           fuelType: getValue(data, "FuelTypePrimary"),
+          transmissionFamily,
         });
         if (!key) {
           decodeFailed++;
@@ -232,6 +240,147 @@ export const backfillNhtsaVinKeys = internalAction({
       moreLikelyRemaining: configs.length === limit,
     };
     console.log(`[backfillNhtsa] done`, summary);
+    return summary;
+  },
+});
+
+// ─── One-shot: fold the transmission family into EXISTING config keys ─────────
+//
+// Why:
+//   Configs enriched BEFORE transmission entered the identity carry
+//   transmission-less config_key / nhtsa_vin_key. A future decode of the same
+//   vehicle now appends a transmission token, so those old keys no longer match —
+//   the primary/secondary dedup would MISS and needlessly re-enrich every
+//   existing vehicle on its next add.
+//
+// How (cheap — no NHTSA re-decode, no Claude enrichment):
+//   Both buildEngineKey and buildNhtsaVinKey APPEND the transmission token LAST,
+//   so the new key is exactly `<oldKey>_<token>`. We resolve each config's
+//   canonical family from its own transmission_id and string-append the token.
+//   A future decode of the same vehicle rebuilds the identical key → cache hit
+//   preserved. Configs with an unknown/absent transmission keep their
+//   transmission-less keys (correct — they stay in the legacy namespace).
+//
+//   Idempotent: a key that already ends with a known token is skipped. A
+//   collapsed config re-keys to the ONE transmission it currently holds; the
+//   other variant self-heals on its next add (the chosen forward-only behavior).
+//
+// Usage (dashboard / MCP), page until isDone:
+//   vehicleEnrichment/backfillNhtsaKey:migrateTransmissionIntoKeys
+//   args: { limit: 200, dryRun: true }
+//   args: { limit: 200, dryRun: false, cursor: "<continueCursor from prior run>" }
+
+export const _listConfigsPageForTxMigration = internalQuery({
+  args: { cursor: v.union(v.string(), v.null()), limit: v.number() },
+  handler: async (ctx, args) => {
+    const res = await ctx.db
+      .query("vehicle_configs")
+      .paginate({ cursor: args.cursor, numItems: args.limit });
+    const page = await Promise.all(
+      res.page.map(async (c) => {
+        const tx = c.transmission_id ? await ctx.db.get(c.transmission_id) : null;
+        return {
+          _id: c._id,
+          config_key: c.config_key,
+          nhtsa_vin_key: (c as any).nhtsa_vin_key ?? null,
+          transmission_type: (tx as any)?.transmission_type ?? null,
+        };
+      }),
+    );
+    return { page, isDone: res.isDone, continueCursor: res.continueCursor };
+  },
+});
+
+export const _applyKeyTxMigration = internalMutation({
+  args: {
+    configId: v.id("vehicle_configs"),
+    newConfigKey: v.string(),
+    newNhtsaKey: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const cfg = await ctx.db.get(args.configId);
+    if (!cfg) return "missing" as const;
+    // Guard: never merge onto another config that already holds the target key.
+    const clash = await ctx.db
+      .query("vehicle_configs")
+      .withIndex("by_config_key", (q) => q.eq("config_key", args.newConfigKey))
+      .first();
+    if (clash && String(clash._id) !== String(args.configId)) return "key_clash" as const;
+    const patch: Record<string, unknown> = { config_key: args.newConfigKey };
+    if (args.newNhtsaKey) patch.nhtsa_vin_key = args.newNhtsaKey;
+    await ctx.db.patch(args.configId, patch);
+    return "patched" as const;
+  },
+});
+
+export const migrateTransmissionIntoKeys = internalAction({
+  args: {
+    limit: v.optional(v.number()),
+    dryRun: v.optional(v.boolean()),
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, args): Promise<any> => {
+    const limit = args.limit ?? 200;
+    const dryRun = args.dryRun ?? true;
+
+    const { page, isDone, continueCursor } = await ctx.runQuery(
+      internal.vehicleEnrichment.backfillNhtsaKey._listConfigsPageForTxMigration,
+      { cursor: args.cursor ?? null, limit },
+    );
+
+    let migrated = 0;
+    let unknownTransmission = 0;
+    let alreadyMigrated = 0;
+    let keyClash = 0;
+
+    for (const c of page) {
+      const token = transmissionKeyToken(
+        await canonicalizeTransmissionType(c.transmission_type),
+      );
+      if (!token) {
+        unknownTransmission++;
+        continue; // leave transmission-less keys as-is
+      }
+      const suffix = `_${token}`;
+      if (c.config_key.endsWith(suffix)) {
+        alreadyMigrated++;
+        continue; // idempotent
+      }
+      const newConfigKey = c.config_key + suffix;
+      const newNhtsaKey =
+        c.nhtsa_vin_key && !c.nhtsa_vin_key.endsWith(suffix)
+          ? c.nhtsa_vin_key + suffix
+          : c.nhtsa_vin_key ?? undefined;
+
+      if (dryRun) {
+        migrated++;
+        console.log(`[txKeyMigrate] (dry) ${c.config_key} → ${newConfigKey}`);
+        continue;
+      }
+      const result = await ctx.runMutation(
+        internal.vehicleEnrichment.backfillNhtsaKey._applyKeyTxMigration,
+        { configId: c._id, newConfigKey, newNhtsaKey },
+      );
+      if (result === "patched") {
+        migrated++;
+        console.log(`[txKeyMigrate] ${c.config_key} → ${newConfigKey}`);
+      } else if (result === "key_clash") {
+        keyClash++;
+        console.warn(`[txKeyMigrate] key clash, skipped: ${c.config_key} → ${newConfigKey}`);
+      }
+    }
+
+    const summary = {
+      scanned: page.length,
+      migrated,
+      unknownTransmission,
+      alreadyMigrated,
+      keyClash,
+      dryRun,
+      isDone,
+      continueCursor,
+    };
+    console.log(`[txKeyMigrate] done`, summary);
     return summary;
   },
 });

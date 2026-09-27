@@ -20,6 +20,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import type { QueryCtx } from "../_generated/server";
 import { resolveVehicleByIdOrVin } from "./resolveVehicle";
+// The `services` rows still read "Timing Belt"; customers see "Drive Belt" (#244).
+import { formatServiceDisplayName } from "../../utils/serviceDisplayName";
 
 export interface OtoDueService {
   service_slug: string | null;
@@ -91,7 +93,7 @@ async function _getDueServicesCore(
       const svc: Doc<"services"> | null = await ctx.db.get(s.service_id);
       return {
         service_slug: svc?.slug ?? null,
-        service_name: svc?.name ?? "Unknown service",
+        service_name: svc?.name ? formatServiceDisplayName(svc.name) : "Unknown service",
         urgency: (s.urgency || "unknown").toLowerCase(),
         due_at_mileage: s.due_at_mileage ?? null,
         due_at_date: s.due_at_date ?? null,

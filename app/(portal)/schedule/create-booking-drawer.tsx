@@ -1295,6 +1295,8 @@ export default function CreateBookingDrawer({
   const [holdNowMs, setHoldNowMs] = useState(() => Date.now());
   const holdRef = useRef(hold);
   holdRef.current = hold;
+  const onToastRef = useRef(onToast);
+  onToastRef.current = onToast;
   const holdDurationMinutes =
     effectiveEstimateMinutes > 0 ? effectiveEstimateMinutes : 60;
 
@@ -1318,10 +1320,16 @@ export default function CreateBookingDrawer({
             ? { holdId: res.holdId, expiresAt: res.expiresAt }
             : null,
         );
-      } catch {
-        // Taken by another session / unavailable — clear the badge. The submit
-        // path re-asserts availability server-side and surfaces the real error.
-        if (!cancelled) setHold(null);
+      } catch (err) {
+        // Taken by another session / unavailable — clear the badge and say so
+        // now, rather than letting the owner fill the whole form and fail on
+        // submit. The grid is reactive, so whatever took the slot is visible.
+        if (!cancelled) {
+          setHold(null);
+          onToastRef.current(
+            `${getUserFacingErrorMessage(err)} Please pick another open time.`,
+          );
+        }
       }
     })();
     return () => {

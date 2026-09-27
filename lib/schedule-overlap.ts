@@ -117,7 +117,8 @@ export function overlapsBlockedSlot(
   return blockedSlots.some((slot) => {
     if (excludeSlotId && slot._id === excludeSlotId) return false;
     if (slot.date !== date) return false;
-    if (slot.mechanicId !== mechanicId) return false;
+    // A block with no mechanic is shop-wide: it applies to every lane.
+    if (slot.mechanicId != null && slot.mechanicId !== mechanicId) return false;
     return toMinutes(slot.startTime) < newEnd && toMinutes(slot.endTime) > newStart;
   });
 }

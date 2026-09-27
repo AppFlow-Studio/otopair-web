@@ -37,8 +37,14 @@ import {
 } from "./lib/vehicle_passports";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { isNamedPart, partDisplayName, billablePart } from "./lib/parts";
 import { resolveShopSetForBooking } from "./booking_quotes";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
+import {
+  assertPriceCentsWithinCap,
+  assertPriceWithinCap,
+} from "./lib/priceCap";
+import { ABSOLUTE_MAX_RATE } from "./lib/vehicleTiers";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   buildCustomerInspectionSnapshot,
@@ -137,8 +143,10 @@ type SubmittedPart = {
 function partsSubtotalCents(parts: SubmittedPart[]): number {
   let total = 0;
   for (const p of parts) {
-    if (p.not_used) continue;
-    if (p.supplied_by === "customer") continue;
+    // Same predicate the parts COUNT uses (billablePart) so the billed subtotal
+    // and any count can never diverge — the "3 counted / 5 billed" bug. Excludes
+    // blank-name, not-used, and customer-supplied ($0) rows.
+    if (!billablePart(p)) continue;
     const qty = Math.max(0, p.quantity ?? 1);
     total += Math.round((p.cost ?? 0) * qty * 100);
   }
@@ -363,6 +371,63 @@ async function performSubmission(
   const booking: any = await ctx.db.get(args.bookingId);
   if (!booking) throw new Error("Booking not found.");
 
+  // Drop blank-name priced rows ONCE, up front, so the billed subtotal
+  // (partsSubtotalCents) and the customer-facing/iOS-card-hold parts_snapshot
+  // are computed from the identical set — this is what stops the "3 counted /
+  // 5 billed" divergence. Silent drop, not throw: a mixed submit with one stray
+  // blank row still succeeds (the good rows go through); the client submit-guard
+  // surfaces the blank to the mechanic before the network call.
+  const cleanParts = args.parts.filter(isNamedPart);
+
+  // Hard $10,000-per-line ceiling on any mechanic-entered price. Reject over-cap
+  // part unit prices and shop-set service prices before they can reach the
+  // customer's authorized charge (the UI clamps too, but it can be bypassed).
+  for (const part of cleanParts) {
+    assertPriceWithinCap(part.cost, `Part price for "${part.part_name}"`);
+  }
+  if (args.shopSetBaseCents != null) {
+    assertPriceCentsWithinCap(args.shopSetBaseCents, "Set price");
+  }
+
+  // Labor: re-assert the shop rate rail server-side (the client sends the rate
+  // verbatim; only Settings enforces $50–$900 otherwise) and cap each labor
+  // LINE at the same $10,000 ceiling — hours × rate, per line, mirroring the
+  // parts rule. A booking's TOTAL labor across many service lines can still
+  // exceed $10k, exactly as the parts total can.
+  if (args.laborRateCents != null && args.laborRateCents > 0) {
+    const rate = args.laborRateCents;
+    if (rate / 100 > ABSOLUTE_MAX_RATE) {
+      throw new Error(
+        `Labor rate $${(rate / 100).toLocaleString()}/hr exceeds the ` +
+          `$${ABSOLUTE_MAX_RATE.toLocaleString()}/hr maximum.`,
+      );
+    }
+    // Base labor, per service line (falls back to the scalar total when the
+    // client didn't send a per-line breakdown).
+    const baseLines =
+      args.laborAllocations && args.laborAllocations.length > 0
+        ? args.laborAllocations.map((a) => ({
+            hours: a.hours,
+            label: a.label ?? a.line_key,
+          }))
+        : args.laborHours != null
+          ? [{ hours: args.laborHours, label: "labor" }]
+          : [];
+    for (const line of baseLines) {
+      assertPriceCentsWithinCap(
+        Math.round(line.hours * rate),
+        `Labor for "${line.label}"`,
+      );
+    }
+    // Added off-catalog (mid-job) scope labor is its own line.
+    if (args.addedLaborHours != null && args.addedLaborHours > 0) {
+      assertPriceCentsWithinCap(
+        Math.round(args.addedLaborHours * rate),
+        "Added labor",
+      );
+    }
+  }
+
   // ADDED lines the shop flat-prices (a catalog service with a
   // shop_service_fixed_prices row at the vehicle's tier) are billed at their
   // frozen flat price, NOT parts+labor — the same rule a booked fixed-price
@@ -381,7 +446,7 @@ async function performSubmission(
       : Math.round((booking.labor_cost ?? 0) * 100);
   let priced = await priceWithFlat(ctx, booking, {
     partsCents: partsSubtotalCents(
-      args.parts.filter((p) => !flatNames.has(normLineName(p.custom_service_name))),
+      cleanParts.filter((p) => !flatNames.has(normLineName(p.custom_service_name))),
     ),
     laborCents: baseLaborCents,
     flatCents: flatAddedCents,
@@ -451,7 +516,7 @@ async function performSubmission(
     // (billed via flatAddedCents). For a pure fixed/range booking there are no
     // dynamic base parts, so this reduces to the added off-catalog parts —
     // identical to the prior fixed-price path.
-    const onTopParts = args.parts.filter(
+    const onTopParts = cleanParts.filter(
       (p) =>
         !isShopPricedBasePart(p) &&
         !flatNames.has(normLineName(p.custom_service_name)),
@@ -581,7 +646,7 @@ async function performSubmission(
     labor_cents: priced.labor_cents,
     tax_cents: priced.tax_cents,
     service_fee_cents: priced.service_fee_cents,
-    parts_snapshot: args.parts as any,
+    parts_snapshot: cleanParts as any,
     labor_hours: args.laborHours,
     labor_allocations:
       args.laborAllocations && args.laborAllocations.length > 0
@@ -621,7 +686,9 @@ async function performSubmission(
   }
 
   const newState = inRange
-    ? "in_range"
+    ? args.cycle === "post_job"
+      ? "in_range"
+      : "hold_processing"
     : args.cycle === "pre_job"
       ? "pre_job_pending"
       : args.cycle === "mid_job"
@@ -675,7 +742,10 @@ async function performSubmission(
       await ctx.scheduler.runAfter(
         0,
         internal.payments_stripe.adjustAuthorization,
-        { bookingId: args.bookingId },
+        {
+          bookingId: args.bookingId,
+          stateAfterHold: args.cycle === "post_job" ? undefined : "in_range",
+        },
       );
     }
     // No confirmation needed either way — the price sits inside (or under) what
@@ -963,13 +1033,15 @@ export const applyApprovalDecision = mutation({
         decided_by_user_id: user._id,
         ceiling_after_decision_cents: newCeiling,
       });
+      const stateAfterHold =
+        cycle === "pre_job"
+          ? "pre_job_approved"
+          : cycle === "mid_job"
+            ? "mid_job_approved"
+            : "post_job_approved";
       const approvedPatch: any = {
         payment_approval_state:
-          cycle === "pre_job"
-            ? "pre_job_approved"
-            : cycle === "mid_job"
-              ? "mid_job_approved"
-              : "post_job_approved",
+          cycle === "post_job" ? stateAfterHold : "hold_processing",
         running_approved_ceiling_cents: newCeiling,
         estimate_approved_at_ms: now,
         estimate_decided_by_user_id: user._id,
@@ -1004,7 +1076,10 @@ export const applyApprovalDecision = mutation({
         await ctx.scheduler.runAfter(
           0,
           internal.payments_stripe.adjustAuthorization,
-          { bookingId: args.bookingId },
+          {
+            bookingId: args.bookingId,
+            stateAfterHold: cycle === "post_job" ? undefined : stateAfterHold,
+          },
         );
         if (cycle === "post_job") {
           // Final actuals already > approved ceiling. Approved → finalize
@@ -1471,7 +1546,7 @@ export const getReauthBreakdownForBooking = query({
           const quantity = Math.max(0, p?.quantity ?? 1);
           const unitPriceCents = Math.round((p?.cost ?? 0) * 100);
           return {
-            part_name: (p?.part_name ?? "Part") as string,
+            part_name: partDisplayName(p),
             ...(p?.oem_number ? { oem_number: p.oem_number as string } : {}),
             ...(p?.brand ? { brand: p.brand as string } : {}),
             quantity,
@@ -1516,7 +1591,7 @@ export const getReauthBreakdownForBooking = query({
     // are hidden from the itemization; the frozen totals above stay the
     // contract, so lines may sum to less than parts_cents — accepted.
     const parts = snapshot.filter((p) => p?.integrity_flag == null).map((p) => ({
-      part_name: (p?.part_name ?? "Part") as string,
+      part_name: partDisplayName(p),
       ...(p?.oem_number ? { oem_number: p.oem_number as string } : {}),
       ...(p?.brand ? { brand: p.brand as string } : {}),
       quantity: Math.max(0, p?.quantity ?? 1),

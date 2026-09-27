@@ -28,7 +28,7 @@ export const sidebarCounts = query({
   handler: async (ctx, { token }) => {
     await requireDirector(ctx, token);
     const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs, awaitingSettlement] = await Promise.all([
+    const [bugs, feedback, otoFeedback, refunds, pendingVerifications, pendingDeletions, reviews, errorLogs, awaitingSettlement, newSupport, bdOpen, bdInReview, cbNeedsResponse, cbWarning] = await Promise.all([
       ctx.db.query("bugs").collect(),
       ctx.db.query("app_feedback").collect(),
       ctx.db.query("ai_feedback").collect(),
@@ -39,6 +39,12 @@ export const sidebarCounts = query({
       ctx.db.query("reviews").take(500),
       ctx.db.query("client_logs").withIndex("by_level", (q) => q.eq("level", "error")).order("desc").take(200),
       ctx.db.query("bookings").withIndex("by_settlement_state", (q) => q.eq("settlement_state", "awaiting_settlement")).collect(),
+      // Disputes inbox badge: new web submissions + open app disputes + open Stripe chargebacks.
+      ctx.db.query("support_requests").withIndex("by_status", (q) => q.eq("status", "new")).collect(),
+      ctx.db.query("booking_disputes").withIndex("by_status", (q) => q.eq("status", "open")).collect(),
+      ctx.db.query("booking_disputes").withIndex("by_status", (q) => q.eq("status", "in_review")).collect(),
+      ctx.db.query("payment_disputes").withIndex("by_status", (q) => q.eq("status", "needs_response")).collect(),
+      ctx.db.query("payment_disputes").withIndex("by_status", (q) => q.eq("status", "warning_needs_response")).collect(),
     ]);
     const openBugStatuses   = new Set(["new", "triaged", "assigned", "in_progress"]);
     const openFbStatuses    = new Set(["new", "reviewed", "triaged"]);
@@ -54,6 +60,7 @@ export const sidebarCounts = query({
       reviews:       reviews.filter((r) => r.hidden_at == null && r.rating <= 3).length,
       systemHealth:  errorLogs.filter((l) => l.timestamp >= sevenDaysAgo).length,
       settlement:    awaitingSettlement.length,
+      disputes:      newSupport.length + bdOpen.length + bdInReview.length + cbNeedsResponse.length + cbWarning.length,
     };
   },
 });

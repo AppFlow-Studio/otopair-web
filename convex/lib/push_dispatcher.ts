@@ -42,7 +42,8 @@ const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
 const SEND_CHUNK = 100; // Expo accepts up to 100 messages per /push/send request
 const RECEIPT_CHUNK = 1000; // Expo accepts up to 1000 ids per /getReceipts request
 const FETCH_TIMEOUT_MS = 10_000;
-const STUCK_DISPATCHING_MS = 10 * 60 * 1000; // reset rows stuck this long
+const STUCK_DISPATCHING_MS = 3 * 60 * 1000; // reset rows stuck this long
+const MAX_PUSH_ATTEMPTS = 5; // give up (mark failed) after this many send tries
 const RECEIPT_MIN_AGE_MS = 60 * 1000; // give Expo time to produce a receipt
 const RECEIPT_GIVEUP_MS = 30 * 60 * 1000; // stop polling; mark delivered-unconfirmed
 
@@ -218,10 +219,16 @@ export const dispatchPendingPush = internalAction({
       }
 
       // Transient failure (network, timeout, or an unexpected/short response):
-      // leave the whole chunk in `dispatching` for resetStuckDispatching to
-      // recover, rather than burning them as `failed`.
+      // re-queue the whole chunk to `pending` NOW so the 1-min dispatch cron
+      // retries within ≤60s. Previously these were left in `dispatching` for
+      // resetStuckDispatching to recover — a 5-min cron with a 10-min stuck
+      // threshold, which was the 10–15 min delivery tail. Bounded by
+      // push_attempts so a permanently-failing row eventually gives up.
       if (!tickets || tickets.length !== group.length) {
         failed += group.length;
+        await ctx.runMutation(internal.lib.push_dispatcher._requeuePushRows, {
+          outboxIds: group.map((row) => row.outboxId),
+        });
         continue;
       }
 
@@ -295,6 +302,38 @@ export const resetStuckDispatching = internalMutation({
       reset += 1;
     }
     return { reset };
+  },
+});
+
+/** Re-queue a chunk that hit a transient send failure: bump push_attempts and
+ *  flip back to `pending` so the next dispatch tick (≤1 min) retries. Once a
+ *  row has burned MAX_PUSH_ATTEMPTS tries it's marked `failed` instead of
+ *  looping forever — the in-app card still stands (feed reads the resolve axis,
+ *  not delivery status), and SMS/email fallbacks (if separately enqueued) can
+ *  still carry the message. */
+export const _requeuePushRows = internalMutation({
+  args: { outboxIds: v.array(v.id("notification_outbox")) },
+  handler: async (ctx, args): Promise<void> => {
+    const now = Date.now();
+    for (const id of args.outboxIds) {
+      const row: any = await ctx.db.get(id);
+      if (!row) continue;
+      const attempts = (row.push_attempts ?? 0) + 1;
+      if (attempts >= MAX_PUSH_ATTEMPTS) {
+        await ctx.db.patch(id, {
+          status: "failed",
+          push_attempts: attempts,
+          updated_at: now,
+          payload: { ...(row.payload ?? {}), error: "max_send_attempts" },
+        } as any);
+      } else {
+        await ctx.db.patch(id, {
+          status: "pending",
+          push_attempts: attempts,
+          updated_at: now,
+        } as any);
+      }
+    }
   },
 });
 

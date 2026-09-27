@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { errorMessage, notify } from "@/lib/feedback";
 
 type NotificationItem = {
   kind: "booking" | "tire_quote" | "rotor_quote";
@@ -166,9 +167,12 @@ export function NotificationCard({
         bookingId: item.bookingId,
         reason: declineReason.trim() || "declined_by_shop",
       });
+      notify.success("Booking declined — the customer has been notified");
       onAfterAction?.();
-    } catch (e: any) {
-      setError(e?.message ?? "Couldn't decline this booking.");
+    } catch (e: unknown) {
+      const msg = errorMessage(e, "Couldn't decline this booking.");
+      setError(msg);
+      notify.error(msg);
       setPending(false);
     }
   }
@@ -399,7 +403,8 @@ export function NotificationCard({
             className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-gray-400"
           />
           <p className="mt-1 text-[11px] text-gray-500">
-            The customer will be notified.
+            Are you sure? The customer gets a push notification that their
+            booking was declined. This can&apos;t be undone.
           </p>
           <div className="mt-2 flex items-center justify-end gap-2">
             <button
@@ -411,7 +416,7 @@ export function NotificationCard({
               disabled={pending}
               className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900"
             >
-              Cancel
+              Keep booking
             </button>
             <button
               type="button"
@@ -419,7 +424,7 @@ export function NotificationCard({
               disabled={pending}
               className="inline-flex items-center rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
             >
-              Confirm decline
+              {pending ? "Declining..." : "Yes, decline booking"}
             </button>
           </div>
         </div>

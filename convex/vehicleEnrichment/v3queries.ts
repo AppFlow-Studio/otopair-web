@@ -134,12 +134,20 @@ export const getFitmentsByConfigAndService = internalQuery({
   },
 });
 
-/** Fuzzy dedup: find an existing config with the same engine + year + make. */
+/** Fuzzy dedup: find an existing config with the same engine + year + make.
+ *  When transmission_id is supplied, a candidate must ALSO share it — so an
+ *  automatic never dedups onto a manual of the same engine (their config_key and
+ *  transmission-specific specs differ). Transmission rows are keyed by
+ *  (trim_id, type), so every same-trim/same-family VIN resolves to one id; a
+ *  different family is a different id and is correctly skipped. The legitimate
+ *  use — reusing a config whose engine_code drifted — keeps the same
+ *  transmission_id, so it still matches. Omitted ⇒ legacy engine+year+make. */
 export const findSimilarConfig = internalQuery({
   args: {
     engine_id: v.id("engines"),
     year: v.float64(),
     make_id: v.id("makes"),
+    transmission_id: v.optional(v.id("transmissions")),
   },
   handler: async (ctx, args) => {
     const configs = await ctx.db
@@ -147,7 +155,14 @@ export const findSimilarConfig = internalQuery({
       .withIndex("by_engine", (q) => q.eq("engine_id", args.engine_id))
       .collect();
 
-    return configs.find((c) => c.year === args.year && c.make_id === args.make_id) ?? null;
+    return (
+      configs.find(
+        (c) =>
+          c.year === args.year &&
+          c.make_id === args.make_id &&
+          (args.transmission_id === undefined || c.transmission_id === args.transmission_id),
+      ) ?? null
+    );
   },
 });
 

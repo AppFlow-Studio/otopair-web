@@ -68,6 +68,9 @@ type ResolvedYmmtIdentity = {
   trimId: Id<"trims">;
   engineId: Id<"engines">;
   transmissionId: Id<"transmissions"> | null;
+  /** Canonical transmission family (automatic|manual|cvt|dct) or null — folded
+   *  into both dedup keys so auto vs manual of the same engine stay distinct. */
+  transmissionFamily: string | null;
   year: number;
   make: string;
   model: string;
@@ -276,14 +279,19 @@ async function resolveIdentity(
     },
   );
   const transmissionId: Id<"transmissions"> | null = transDoc?._id ?? null;
-  if (transmissionId && transTypeRaw !== "unknown") {
-    const mapped = await canonicalizeTransmissionType(transTypeRaw);
-    if (mapped) {
-      await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
-        transmission_id: transmissionId,
-        type: mapped,
-      } as any);
-    }
+  // Canonical transmission family for this YMMT — folded into BOTH dedup keys so
+  // an automatic and a manual of the same engine resolve to distinct configs.
+  // YMMT is no-VIN research; when the picked source carries no transmission
+  // signal this is null and the keys stay in the transmission-less namespace.
+  const transmissionFamily =
+    transTypeRaw && transTypeRaw !== "unknown"
+      ? await canonicalizeTransmissionType(transTypeRaw)
+      : null;
+  if (transmissionId && transmissionFamily) {
+    await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateTransmissionSpecs, {
+      transmission_id: transmissionId,
+      type: transmissionFamily,
+    } as any);
   }
 
   // NOTE: no chassis_variants write. See the module header — a guessed
@@ -298,6 +306,7 @@ async function resolveIdentity(
     displacementL: chosen.displacement_l ?? undefined,
     cylinders: chosen.cylinders ?? undefined,
     fuelType: chosen.fuel_type,
+    transmissionFamily,
   });
 
   console.log(
@@ -322,6 +331,7 @@ async function resolveIdentity(
       displacement,
       cylinders,
       fuelType: chosen.fuel_type,
+      transmissionFamily,
       nhtsaVinKey,
       disambiguatedBy: picked.disambiguated_by,
       confidence: chosen.confidence,
@@ -435,6 +445,7 @@ export const enrichVehicleFromYmmt = internalAction({
       trim: id.trim,
       engineCode: id.engineCode,
       displacement: id.displacement,
+      transmissionFamily: id.transmissionFamily,
     });
     if (!existingConfig) {
       existingConfig = await ctx.runQuery(
@@ -484,6 +495,7 @@ export const enrichVehicleFromYmmt = internalAction({
       displacement: id.displacement,
       // drivetrain intentionally omitted — see module header.
       nhtsaVinKey: id.nhtsaVinKey,
+      transmissionFamily: id.transmissionFamily ?? undefined,
     });
     await ctx.runMutation(internal.vehicle_mutations.recordYmmtOutcome, {
       vin,

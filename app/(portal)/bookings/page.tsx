@@ -7,7 +7,7 @@ import { jobListTotal } from "@/lib/booking-total";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { runAction } from "@/lib/feedback";
+import { notify, runAction } from "@/lib/feedback";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import { Bell, Calendar, Car, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, User, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -965,7 +965,7 @@ export default function BookingsPage() {
               }}
               onRequestRescheduleConfirmation={handleProposeReschedule}
               onClose={() => setSelectedJobId(null)}
-              onSuccess={setSuccessMessage}
+              onSuccess={(msg) => notify.success(msg)}
             />
           </div>
         </div>

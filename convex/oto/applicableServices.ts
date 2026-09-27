@@ -22,6 +22,8 @@ import { v } from "convex/values";
 import type { Doc, Id } from "../_generated/dataModel";
 import { resolveVehicleByIdOrVin } from "./resolveVehicle";
 import { getApplicableServices } from "../services/applicability";
+// The `services` rows still read "Timing Belt"; customers see "Drive Belt" (#244).
+import { formatServiceDisplayName } from "../../utils/serviceDisplayName";
 
 export type OtoServiceListing = {
   slug: string | null;
@@ -35,8 +37,8 @@ export type OtoServiceListing = {
 function toListing(s: Doc<"services">): OtoServiceListing {
   return {
     slug: s.slug ?? null,
-    name: s.name,
-    description: s.description ?? null,
+    name: formatServiceDisplayName(s.name),
+    description: s.description ? formatServiceDisplayName(s.description) : null,
     default_labor_hours: s.default_labor_hours ?? null,
     has_options: s.has_options === true,
     is_labor_only: s.is_labor_only === true,

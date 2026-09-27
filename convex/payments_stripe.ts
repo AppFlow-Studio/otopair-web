@@ -1924,12 +1924,34 @@ async function raiseHoldToTarget(
  *  `reauth_required` and pushes the customer — the estimate-flow contract, so a
  *  mechanic isn't left thinking they're approved on a stale hold. Idempotent —
  *  skips when the hold already matches. */
+export const _completeAuthorizationAdjustment = internalMutation({
+  args: { bookingId: v.id("bookings"), stateAfterHold: v.string() },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (booking?.payment_approval_state !== "hold_processing") return;
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: args.stateAfterHold,
+      updated_at: Date.now(),
+    });
+  },
+});
+
 export const adjustAuthorization = internalAction({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    stateAfterHold: v.optional(v.string()),
+  },
   handler: async (
     ctx,
     args,
   ): Promise<{ status: string; targetCents?: number; reason?: string }> => {
+    const completeHold = async () => {
+      if (!args.stateAfterHold) return;
+      await ctx.runMutation(internal.payments_stripe._completeAuthorizationAdjustment, {
+        bookingId: args.bookingId,
+        stateAfterHold: args.stateAfterHold,
+      });
+    };
     const result: any = await ctx.runQuery(
       internal.payments_stripe._getBookingForPayment,
       { bookingId: args.bookingId },
@@ -1943,6 +1965,7 @@ export const adjustAuthorization = internalAction({
     );
     const activePiId = resolveActivePaymentIntentId(payment);
     if (!activePiId) {
+      await completeHold();
       return { status: "skipped", reason: "no payment intent" };
     }
 
@@ -1967,6 +1990,14 @@ export const adjustAuthorization = internalAction({
         { bookingId: args.bookingId },
       );
       return { status: "reauth_required", reason: outcome.reason };
+    }
+    if (
+      outcome.status === "ok" ||
+      outcome.status === "reauth_ok" ||
+      (outcome.status === "skipped" &&
+        outcome.reason === "hold already covers target")
+    ) {
+      await completeHold();
     }
     return outcome;
   },

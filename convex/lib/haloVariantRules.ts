@@ -116,7 +116,9 @@ export const HALO_VARIANT_RULES: HaloVariantRule[] = [
     ruleId: "mb-amg-performance",
     make: "Mercedes-Benz",
     trimPattern: /(?=.*\bAMG\b)(?=.*\b(?:35|43|45|53|55|63|65)\b)/i,
-    promotedModel: (base) => `${base} AMG`,
+    // Idempotent: decodeCardSpecs hands wheel-size the already-promoted
+    // "CLE-Class AMG", which used to become "CLE-Class AMG AMG" (no tires).
+    promotedModel: (base) => (/\bAMG\s*$/i.test(base) ? base : `${base} AMG`),
     hardwareStandard: true,
   },
   // Any other AMG mention ("AMG Line", "AMG Styling", badge-less "G 63" edge

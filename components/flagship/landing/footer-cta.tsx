@@ -15,6 +15,9 @@ import {
 } from "@/lib/site";
 
 const FOOTER_LINKS = [
+  // Help centre first — the hub drivers reach for a charge dispute, a refund,
+  // or any "how does this work" question (it links on to /support).
+  { href: "/help", label: "Help" },
   { href: "/privacy", label: "Privacy" },
   // Privacy Policy v6.1 §6 points to a "Your Privacy Choices" link.
   { href: "/privacy-choices", label: "Your privacy choices" },

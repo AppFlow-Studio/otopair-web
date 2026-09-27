@@ -21,6 +21,7 @@ import {
   type AxlePosition,
 } from "./lib/brakeScope";
 import { ensureWalkInCashPayment } from "./bookings";
+import { assertPriceWithinCap } from "./lib/priceCap";
 import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { rotorMinForVin } from "./lib/rotorMin";
@@ -29,6 +30,22 @@ import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
 import { applyInspectionLightPicker } from "./lib/warningLightsMerge";
+
+/**
+ * Enforce the $10,000-per-line ceiling on each mechanic-entered part cost.
+ * Applied at every mutation that accepts actuals (submit / draft / finalize).
+ * The derived `actual_parts_cost` total is intentionally NOT capped — it is a
+ * sum of these already-capped lines and can legitimately exceed $10,000.
+ */
+function assertActualsPartsWithinCap(
+  actuals?: {
+    parts_used?: ReadonlyArray<{ part_name?: string | null; cost?: number | null }> | null;
+  } | null,
+): void {
+  for (const part of actuals?.parts_used ?? []) {
+    assertPriceWithinCap(part.cost, `Part price for "${part.part_name ?? "part"}"`);
+  }
+}
 
 function primaryServiceId(booking: { service_ids?: Id<"services">[] }): Id<"services"> | undefined {
   return booking.service_ids?.[0];
@@ -1338,6 +1355,7 @@ export const saveDraft = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    assertActualsPartsWithinCap(args.actuals);
 
     return await saveJobActualDraft(ctx, {
       booking,
@@ -1364,6 +1382,7 @@ export const finalizeByBooking = mutation({
     if (booking.status !== "completed") {
       throw new Error("Booking must be completed before finalizing actuals.");
     }
+    assertActualsPartsWithinCap(args.actuals);
 
     return await finalizeJobActuals(ctx, {
       booking,
@@ -1411,6 +1430,7 @@ export const submitJobActuals = mutation({
     if (!booking) throw new Error("Booking not found");
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+    assertActualsPartsWithinCap({ parts_used: args.parts_used });
 
     const now = Date.now();
     await saveJobActualDraft(ctx, {

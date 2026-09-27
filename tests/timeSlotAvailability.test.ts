@@ -332,7 +332,7 @@ test("any-mechanic assignment chooses the lowest same-day workload", async () =>
   expect(mechanicId).toBe("mech-2");
 });
 
-test("any-mechanic tie-breaks by scheduled minutes, then randomly", async () => {
+test("any-mechanic tie-breaks by scheduled minutes, then by stable mechanic id", async () => {
   const sameCountCtx = makeCtx(
     baseSeed({
       bookings: [
@@ -367,20 +367,20 @@ test("any-mechanic tie-breaks by scheduled minutes, then randomly", async () => 
     }),
   ).toBe("mech-1");
 
-  const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
-  try {
-    const noWorkloadCtx = makeCtx(baseSeed());
-    expect(
-      await resolveAvailableMechanicForWindow(noWorkloadCtx, {
-        shopId: "shop-1",
-        date: "2026-06-01",
-        startTime: "15:00",
-        durationMinutes: 60,
-      }),
-    ).toBe("mech-2");
-  } finally {
-    random.mockRestore();
-  }
+  // Re-baselined 2026-09-23: the tie-break was Math.random(), which made this
+  // choice unstable and this test fail intermittently. It is now a sort on
+  // mechanicId, so the same tie resolves the same way every run. Ported from
+  // otopair-web, which fixed it first — asserting the old random behaviour
+  // here would have made a mobile push revert that fix on the shared backend.
+  const noWorkloadCtx = makeCtx(baseSeed());
+  expect(
+    await resolveAvailableMechanicForWindow(noWorkloadCtx, {
+      shopId: "shop-1",
+      date: "2026-06-01",
+      startTime: "15:00",
+      durationMinutes: 60,
+    }),
+  ).toBe("mech-1");
 });
 
 test("any-mechanic workload includes live tire quote holds", async () => {

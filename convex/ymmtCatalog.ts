@@ -343,15 +343,22 @@ export const ensureTrimsForModelYear = action({
  * "4× identical AMG GLE 63 S" bug). Providers are the source of truth here.
  */
 export const resolveTrimsForYmm = action({
-  args: { year: v.number(), make: v.string(), model: v.string() },
+  args: {
+    year: v.number(),
+    make: v.string(),
+    model: v.string(),
+    // VIN-decoded trim — lets the resolver pull in sibling catalog models the
+    // trim names ("AMG GT63" → "AMG GT 63"). Optional for older clients.
+    decodedTrim: v.optional(v.string()),
+  },
   handler: async (
     ctx,
-    { year, make, model },
+    { year, make, model, decodedTrim },
   ): Promise<{ trims: string[] }> => {
     if (!year || !make.trim() || !model.trim()) return { trims: [] };
     let trims: string[] = [];
     try {
-      trims = await fetchYmmTrimsFromProviders({ year, make, model });
+      trims = await fetchYmmTrimsFromProviders({ year, make, model, decodedTrim });
     } catch {
       trims = [];
     }

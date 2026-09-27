@@ -175,6 +175,7 @@ export default function MidJobScopeDialog({
       // narrowly here rather than adding another silent error to the pile.
       passportData={(vehiclePassport ?? null) as never}
       estimatedLaborMinutes={j.estimatedLaborMinutes ?? null}
+      customLaborOverridesMinutes={j.customLaborOverridesMinutes ?? null}
       prefillData={actualsPrefill ?? null}
       isSubmitting={false}
       onClose={onClose}

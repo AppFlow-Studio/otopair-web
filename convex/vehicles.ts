@@ -541,6 +541,10 @@ export const saveVehicleImageUrl = mutation({
   args: {
     vin: v.string(),
     image_url: v.string(),
+    // True when the client resolved this image from a catalog trim that
+    // matched the vehicle's own trim (not a VIN/base-trim or first-trim
+    // fallback). Only such an image may replace an existing config image.
+    trim_matched: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const vehicle = await ctx.db
@@ -552,12 +556,14 @@ export const saveVehicleImageUrl = mutation({
 
     // Promote the image to the YMMT cache (vehicle_configs.image_url) so
     // a different VIN with the same year/make/model/trim skips VDB next
-    // time. First-fetched-wins: only write if the config slot is empty,
-    // so concurrent fetches for sibling VINs don't fight over it.
+    // time. First-fetched-wins for fallback images, so concurrent fetches
+    // for sibling VINs don't fight over the slot — but a trim-matched image
+    // replaces a fallback one. First-write-wins alone made a wrong first
+    // image (a base-trim render on an M car) permanent for every sibling.
     const configId = (vehicle as any).vehicle_config_id as string | undefined;
     if (configId) {
       const cfg = await ctx.db.get(configId as any);
-      if (cfg && !(cfg as any).image_url) {
+      if (cfg && (args.trim_matched || !(cfg as any).image_url)) {
         await ctx.db.patch(cfg._id, { image_url: args.image_url } as any);
       }
     }

@@ -72,7 +72,10 @@ export function buildCustomerPushPayload({
  *
  * `front_desk` rows are read reactively by the shop UI (no dispatcher). `slack`
  * rows are written through a separate path and drained by their own cron — ops
- * alerts don't need instant delivery.
+ * alerts don't need instant delivery. `in_app` rows are the customer analogue:
+ * they surface in the customer feed (getMyNotifications reads by user_id,
+ * channel-agnostic) but have no dispatcher, so they never push — used for
+ * acknowledgements of the customer's own actions (e.g. booking submitted).
  */
 const CHANNEL_DISPATCHER: Record<string, any> = {
   push: internal.lib.push_dispatcher.dispatchPendingPush,
@@ -97,7 +100,7 @@ export async function enqueueNotificationOutbox(
     bookingId?: any;
     userId?: any;
     mechanicId?: any;
-    channel: "push" | "sms" | "front_desk" | "email";
+    channel: "push" | "sms" | "front_desk" | "email" | "in_app";
     category: string;
     dedupeKey: string;
     payload: any;

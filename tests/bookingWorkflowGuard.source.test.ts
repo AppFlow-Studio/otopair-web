@@ -14,4 +14,10 @@ describe("BookingWorkflowGuard", () => {
     expect(source).toContain('zIndexClassName="z-[80]"');
     expect(source).toContain('label: "Acknowledge"');
   });
+
+  test("keeps an unavailable acknowledgement visible until it is acknowledged", () => {
+    expect(source).toContain("const latchedNotice = useRef<string | null>(null)");
+    expect(source).toContain("latchedNotice.current ??= currentNotice");
+    expect(source).toContain("latchedNotice.current ?? currentNotice");
+  });
 });

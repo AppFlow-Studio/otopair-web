@@ -235,6 +235,23 @@ export const upsertVehicleConfig = internalMutation({
       .first();
 
     if (existing) {
+      // Defensive: config_key now encodes the transmission family, so a given key
+      // maps to exactly one trim+family and thus one transmission_id. Patching an
+      // existing row to a DIFFERENT transmission under the same key means some
+      // upstream path built the key without the family — surface it rather than
+      // silently re-collapsing an automatic and a manual. Non-fatal.
+      if (
+        existing.transmission_id &&
+        args.transmission_id &&
+        String(existing.transmission_id) !== String(args.transmission_id)
+      ) {
+        console.warn(
+          `[upsertVehicleConfig] transmission_id change under one config_key ` +
+          `"${args.config_key}": ${existing.transmission_id} → ${args.transmission_id}. ` +
+          `Should be impossible now that config_key carries the transmission family — ` +
+          `check the key-build path.`,
+        );
+      }
       const patch: Record<string, unknown> = {
         year: args.year,
         make_id: args.make_id,

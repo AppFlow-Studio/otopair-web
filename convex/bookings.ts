@@ -67,8 +67,10 @@ import {
 import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/notificationScope";
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { isNamedPart, partDisplayName } from "./lib/parts";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
+import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
 import {
   getActiveQuoteCheckoutHold,
@@ -101,6 +103,7 @@ import {
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
+import { assertPriceWithinCap } from "./lib/priceCap";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   minorRecordTypeForServiceSlug,
@@ -121,7 +124,9 @@ import {
   roundDownToFiveMinutes,
 } from "./lib/schedule_overlap";
 import {
+  assertBookingWindowAgainstHoursAndBlocks,
   assertMechanicAvailableForWindow,
+  checkBookingWindowAgainstHoursAndBlocks,
   getActiveMechanicsForShop,
   resolveAvailableMechanicForWindow,
   syncMechanicDayAvailability,
@@ -283,7 +288,7 @@ async function assertBookingWithinShopHours(
   const openMinutes = hhmmToMinutes(hours.open_time);
   const closeMinutes = hhmmToMinutes(hours.close_time);
 
-  if (startMinutes < openMinutes || startMinutes > closeMinutes) {
+  if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
     throw new Error("The requested start time is outside the shop's operating hours.");
   }
   if (endMinutes > closeMinutes && !allowAfterClose) {
@@ -605,6 +610,35 @@ export const getByUserIdWithDetails = query({
           historyAmountCents = cancellationFeeCents ?? 0;
         }
 
+        // Cancel context for the app's 24h "Cancelled" card: when, by whom,
+        // and a customer-safe reason. Status history is only read for
+        // cancelled/declined rows; it also backfills rows cancelled before
+        // cancelled_at_ms existed.
+        let cancelledAtMs: number | null = booking.cancelled_at_ms ?? null;
+        let cancelledByRole: string | null = booking.cancelled_by_role ?? null;
+        let cancellationReasonLabel: string | null = null;
+        if (booking.status === "cancelled" || booking.status === "declined") {
+          const history = await ctx.db
+            .query("booking_status_history")
+            .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
+            .collect();
+          const cancelRow = history
+            .filter((h) => h.new_status === booking.status)
+            .sort((a, b) => (b.changed_at ?? 0) - (a.changed_at ?? 0))[0];
+          if (cancelRow) {
+            cancellationReasonLabel = customerCancelReasonLabel(cancelRow.reason);
+            cancelledAtMs ??= cancelRow.changed_at ?? null;
+            if (!cancelledByRole) {
+              cancelledByRole = !cancelRow.changed_by
+                ? "system"
+                : String(cancelRow.changed_by) === String(booking.user_id)
+                  ? "customer"
+                  : "shop";
+            }
+          }
+          cancelledAtMs ??= booking.updated_at ?? null;
+        }
+
         return {
           _id: booking._id,
           _creationTime: booking._creationTime,
@@ -659,6 +693,9 @@ export const getByUserIdWithDetails = query({
           cancellation_kind: booking.cancellation_kind ?? null,
           historyOutcome,
           historyAmountCents,
+          cancelled_at_ms: cancelledAtMs,
+          cancelled_by_role: cancelledByRole,
+          cancellation_reason_label: cancellationReasonLabel,
           // Shop-assigned invoice / work-order number — surfaced inline on
           // the booking card so the customer can quote it on support.
           invoice_number: booking.invoice_number,
@@ -1895,6 +1932,12 @@ export const create = mutation({
       payload: { source: "customer_self_serve" },
     });
 
+    await notifyCustomerOfRequestSent(ctx, {
+      userId: args.user_id,
+      shopId: args.shop_id,
+      bookingId,
+    });
+
     return bookingId;
   },
 });
@@ -2788,6 +2831,12 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       payload: { source: "customer_self_serve" },
     });
 
+    await notifyCustomerOfRequestSent(ctx, {
+      userId: args.user_id,
+      shopId: args.shop_id,
+      bookingId,
+    });
+
     return [bookingId];
 }
 
@@ -3652,7 +3701,7 @@ export const markNoShow = mutation({
       policy: resolvePolicy(noShowShop),
       intent: "no_show",
     });
-    return await applyBookingStatusTransition(ctx, {
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "no_show",
       changedBy: user._id,
@@ -3660,6 +3709,8 @@ export const markNoShow = mutation({
       cancellationFeeCents: feeCents,
       cancellationKind: kind,
     });
+    await notifyCustomerOfShopCancel(ctx, booking, { kind: "no_show" });
+    return result;
   },
 });
 
@@ -5139,7 +5190,7 @@ async function enqueueWalkinClientUpdate(
     const jobActual = await getLatestJobActualForBooking(ctx, booking._id);
     const partsUsed = Array.isArray(jobActual?.parts_used)
       ? jobActual.parts_used.map((p: any) => ({
-          part_name: p.part_name ?? null,
+          part_name: partDisplayName(p),
           brand: p.brand ?? null,
           oem_number: p.oem_number ?? null,
           cost: typeof p.cost === "number" ? p.cost : null,
@@ -5633,11 +5684,12 @@ export function normalizePartsUsed(parts: Array<{
       };
     })
     .filter(
+      // A priced row with no name/identity is the blank-"test part" bug — drop
+      // it here (the canonical normalizer feeding job_actuals.parts_used) so it
+      // is never billed or rendered. Customer-supplied ($0) and "not used" rows
+      // carry meaning even when unpriced, so keep them.
       (part) =>
-        hasText(part.part_name) ||
-        hasText(part.oem_number) ||
-        hasText(part.brand) ||
-        part.cost > 0 ||
+        isNamedPart(part) ||
         part.supplied_by === "customer" ||
         part.not_used === true
     );
@@ -5703,7 +5755,10 @@ async function recordPartSnapshotsForBooking(
   const fallbackServiceId = booking.service_ids?.[0] as Id<"services"> | undefined;
 
   for (const part of parts) {
-    if (!hasText(part.part_name) && !hasText(part.oem_number)) continue;
+    // Drop a priced-but-nameless non-tire row rather than snapshot it under its
+    // OEM number as a pseudo-name (the blank-"test part" bug). Tire rows carry
+    // a synthesized name and pass via isNamedPart.
+    if (!isNamedPart(part)) continue;
 
     // Per-part service_id wins; fall back to the booking's primary service
     // for legacy rows. Skip rather than throw if neither is present so a
@@ -5726,7 +5781,7 @@ async function recordPartSnapshotsForBooking(
 
       service_id: serviceId,
 
-      part_name: part.part_name || part.oem_number,
+      part_name: partDisplayName(part),
       oem_part_number: hasText(part.oem_number) ? part.oem_number : undefined,
       brand: hasText(part.brand) ? (part.brand as string) : undefined,
       part_tier: part.part_tier ?? "oem",
@@ -9974,10 +10029,23 @@ export async function applyBookingStatusTransition(
     live_stage?: string;
     cancellation_fee_cents?: number;
     cancellation_kind?: string;
+    cancelled_at_ms?: number;
+    cancelled_by_role?: string;
   } = {
     status: newStatus,
     updated_at: Date.now(),
   };
+  // Stamp when/who cancelled so the customer app can keep a "Cancelled" card
+  // visible for 24h. Role is derived rather than passed so every cancel path
+  // (shop, customer, cron) gets it without touching each caller.
+  if (newStatus === "cancelled" || newStatus === "declined") {
+    patch.cancelled_at_ms = patch.updated_at;
+    patch.cancelled_by_role = !changedBy
+      ? "system"
+      : booking.user_id && String(changedBy) === String(booking.user_id)
+        ? "customer"
+        : "shop";
+  }
   if (
     (newStatus === "cancelled" || newStatus === "no_show") &&
     typeof cancellationFeeCents === "number"
@@ -10106,6 +10174,15 @@ export async function applyBookingStatusTransition(
     const fresh = await ctx.db.get(booking._id);
     if (fresh) await enqueueWalkinClientUpdate(ctx, fresh, walkinCategory);
   }
+
+  // App-customer lifecycle notifications — the happy-path milestones the
+  // customer never used to hear about (accept → check-in → work start →
+  // completion). Every lifecycle path funnels through this transition, so this
+  // is the single place to raise them. Deliberately scoped to those four
+  // statuses: cancel/no-show route through notifyCustomerOfShopCancel, and
+  // reschedule/approval/re-auth prompts enqueue at their own call sites — so
+  // none of them are raised here (that would double-send).
+  await notifyCustomerOfLifecycleMilestone(ctx, booking, newStatus);
 
   await syncBookingAssignments(ctx, [
     {
@@ -11473,7 +11550,7 @@ export const getJobDetail = query({
             const qty = Math.max(1, Number(p.quantity ?? 1));
             const unitCents = Math.round((Number(p.cost) || 0) * 100);
             return {
-              part_name: p.part_name ?? "Part",
+              part_name: partDisplayName(p),
               oem_number: p.oem_number ?? "",
               brand: p.brand ?? undefined,
               part_tier: p.part_tier ?? undefined,
@@ -11502,8 +11579,11 @@ export const getJobDetail = query({
     // seeds the BASE line (base-only, not the conflated whole-approval total);
     // `recordedByKey` (custom-job id → hours) seeds each custom line, gated
     // below on "not touched since the agreement".
-    const { baseHours: recordedBaseLaborHours, byLineKey: recordedByKey } =
-      parseAgreedLaborAllocations(agreedApproval?.labor_allocations);
+    const {
+      baseHours: recordedBaseLaborHours,
+      byLineKey: recordedByKey,
+      byServiceId: recordedByServiceId,
+    } = parseAgreedLaborAllocations(agreedApproval?.labor_allocations);
     const effectiveEstimatedLaborMinutes: number | null =
       typeof recordedBaseLaborHours === "number"
         ? hoursToMinutes(recordedBaseLaborHours)
@@ -11519,12 +11599,14 @@ export const getJobDetail = query({
     const perServiceLaborBaseServices: Array<{
       name: string;
       catalogHours: number | null;
+      serviceId: string;
     }> = [];
     for (const sid of booking.service_ids ?? []) {
       const svc: any = await ctx.db.get(sid);
       if (!svc) continue;
       perServiceLaborBaseServices.push({
         name: svc.name ?? "Service",
+        serviceId: String(sid),
         catalogHours:
           typeof svc.default_labor_hours === "number"
             ? svc.default_labor_hours
@@ -11741,14 +11823,24 @@ export const getJobDetail = query({
         all_in_low_cents: shopLine?.all_in_low_cents ?? null,
         all_in_high_cents: shopLine?.all_in_high_cents ?? null,
         all_in_default_cents: shopLine?.all_in_default_cents ?? null,
-        // The booked labor (single-service) wins so the estimate opens at the
-        // agreed time; else the engine projection, else the vehicle/catalog
-        // labor-time fallback so shop-priced rows pre-fill how long it takes.
+        // The AGREED per-service time from an estimate-cycle approval wins, so a
+        // re-quote (mid-job added scope, pre-job revise) opens at what the
+        // customer approved instead of snapping back to the estimate. Then the
+        // booked labor (single-service); else the engine projection, else the
+        // vehicle/catalog labor-time fallback so shop-priced rows pre-fill.
         est_labor_minutes:
+          (recordedByServiceId.has(key)
+            ? hoursToMinutes(recordedByServiceId.get(key)!)
+            : null) ??
           (singleService ? effectiveEstimatedLaborMinutes : null) ??
           estLaborMinutesById.get(key) ??
           fallbackLaborMinutesById.get(key) ??
           null,
+        // What the customer APPROVED for this service (null = never agreed), so
+        // a re-quote can flag a labor move instead of changing it silently.
+        agreed_labor_minutes: recordedByServiceId.has(key)
+          ? hoursToMinutes(recordedByServiceId.get(key)!)
+          : null,
       };
     });
 
@@ -12446,6 +12538,10 @@ export async function ensureWalkInCashPayment(
 
   const laborDollars =
     laborRate != null ? (laborMinutes / 60) * laborRate : 0;
+  // Cap the walk-in labor charge (minutes × rate) at the same $10,000 per-line
+  // ceiling — this is the one direct-bill path that never passes through the
+  // estimate approval flow (performSubmission), so it needs its own guard.
+  assertPriceWithinCap(laborDollars, "Labor");
   const totalDollars =
     Math.round((Number(partsDollars || 0) + laborDollars) * 100) / 100;
 
@@ -12982,40 +13078,22 @@ export const attachRecommendedService = mutation({
     if (!note) throw new Error("Add a short note explaining the finding.");
     assertFlaggedItemsHaveNotes(booking);
 
-    // Validate proposed slot against blocked time on the mechanic's lane.
-    if (
-      args.scheduledDate &&
-      args.scheduledTime &&
-      booking.mechanic_id
-    ) {
-      const durationMin = Math.round(
-        ((service as any).default_labor_hours ?? 1) * 60,
-      );
-      const blocks = (
-        await getManualBlockedSlotsForShop(
-          ctx,
-          booking.shop_id,
-          args.scheduledDate,
-        )
-      ).filter(
-        (s: any) => String(s.mechanic_id) === String(booking.mechanic_id),
-      );
-      const toMin = (hhmm: string) => {
-        const [h, m] = hhmm.split(":").map(Number);
-        return h * 60 + m;
-      };
-      const ps = toMin(args.scheduledTime);
-      const pe = ps + durationMin;
-      const blocked = (blocks as any[]).some((blk) => {
-        const bs = toMin(blk.start_time);
-        const be = toMin(blk.end_time);
-        return bs < pe && be > ps;
-      });
-      if (blocked) {
-        throw new Error(
-          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
-        );
+    // Validate the proposed slot against shop hours AND blocked time — the
+    // same check the customer-decision step re-runs before confirming.
+    if (args.scheduledDate || args.scheduledTime) {
+      if (!args.scheduledDate || !args.scheduledTime) {
+        throw new Error("Pick both a date and a time for the recommended service.");
       }
+      await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+        shopId: booking.shop_id,
+        date: args.scheduledDate,
+        startTime: args.scheduledTime,
+        durationMinutes: Math.round(
+          ((service as any).default_labor_hours ?? 1) * 60,
+        ),
+        mechanicId: booking.mechanic_id,
+        action: "Pick a different slot:",
+      });
     }
 
     const now = Date.now();
@@ -13126,27 +13204,24 @@ export const customerDecideRecommendation = mutation({
           booking.estimated_labor_minutes ?? 0,
         );
 
-    // For schedule-for-later, hard-reject if the proposed slot overlaps a
-    // mechanic break / blocked window. For right-after, silently advance past
-    // any blocks so the follow-up lands on the first clear gap.
-    if (scheduledForLater) {
-      const proposalStart = toMinutes(rawFollowUpStart);
-      const proposalEnd = proposalStart + followUpMinutes;
-      const blocked = (blocksForDay as any[]).some((blk) => {
-        const bs = toMinutes(blk.start_time);
-        const be = toMinutes(blk.end_time);
-        return bs < proposalEnd && be > proposalStart;
-      });
-      if (blocked) {
-        throw new Error(
-          "Proposed slot overlaps blocked time on the mechanic's lane. Pick a different slot.",
-        );
-      }
-    }
-
+    // For right-after, advance past any blocks so the follow-up lands on the
+    // first clear gap. Either way the final window must sit inside shop hours
+    // and clear of blocked time — re-checked here because hours/blocks can
+    // change between the shop proposing and the customer deciding.
     const followUpStart = scheduledForLater
       ? rawFollowUpStart
       : advancePastBlocks(rawFollowUpStart, followUpMinutes);
+
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: followUpDate ?? "",
+      startTime: followUpStart,
+      durationMinutes: followUpMinutes,
+      mechanicId: booking.mechanic_id,
+      action: scheduledForLater
+        ? "The proposed time is no longer available — pick a different slot."
+        : "There's no room left today — schedule the follow-up for later.",
+    });
 
     const followUpId = await ctx.db.insert("bookings", {
       user_id: booking.user_id,
@@ -13196,11 +13271,18 @@ export const customerDecideRecommendation = mutation({
             toMinutes(a.scheduled_time) - toMinutes(b.scheduled_time),
         );
 
+      const dayHours = await getShopHoursForDate(ctx, booking.shop_id, followUpDate ?? "");
+      const closeMinutes = dayHours?.close_time
+        ? toMinutes(dayHours.close_time)
+        : Number.POSITIVE_INFINITY;
       let cursor = addMinutesToHHMM(followUpStart, followUpMinutes);
       for (const b of laneBookings) {
         const duration = b.estimated_labor_minutes ?? 60;
         const safeCursor = advancePastBlocks(cursor, duration);
         if (toMinutes(b.scheduled_time ?? "") >= toMinutes(safeCursor)) break;
+        // Never push a booking past closing. Leave it where it is — the lane
+        // overlap surfaces for the shop to reschedule by hand.
+        if (toMinutes(safeCursor) + duration > closeMinutes) break;
         await ctx.db.patch(b._id, {
           scheduled_time: safeCursor,
           updated_at: now,
@@ -13683,7 +13765,10 @@ export const createByShop = mutation({
     ) {
       const rows: PricedPartSnapshotRow[] = [];
       for (const m of args.mechanicPartEntries!) {
-        if (!m.part_name.trim() && !m.oem_number.trim()) continue;
+        // Drop a priced-but-nameless non-tire row (an oem_number alone is not a
+        // name — see the blank-"test part" bug). Tire rows pass via their
+        // TIRE-{size} sentinel / is_tire flag.
+        if (!isNamedPart(m)) continue;
         const qty =
           m.quantity != null && m.quantity > 0 ? Math.round(m.quantity) : 1;
         const unit =
@@ -13699,7 +13784,7 @@ export const createByShop = mutation({
           // format. Mirrors the client's tidyOem — authoritative even if a
           // caller bypasses the drawer.
           oem_number: m.oem_number.trim().toUpperCase().replace(/\s+/g, " "),
-          part_name: m.part_name.trim(),
+          part_name: m.part_name.trim() || partDisplayName(m),
           brand: m.brand?.trim() || undefined,
           source_url: m.source_url?.trim() || undefined,
           quantity: qty,
@@ -14769,11 +14854,51 @@ export const accept = mutation({
       );
     }
 
+    // Hours or blocked time may have changed since the request came in (or the
+    // request slipped past a check). Never confirm a window the shop is closed
+    // for — the shop proposes a new time instead.
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes: booking.estimated_labor_minutes ?? 60,
+      mechanicId: booking.mechanic_id,
+      action: "Can't accept — propose a new time instead.",
+    });
+
     return await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "confirmed",
       changedBy: user._id,
       reason: "accepted_by_shop",
+    });
+  },
+});
+
+/**
+ * Why `accept` would refuse this booking's window (closed / past close /
+ * blocked), or null. Lets the drawer warn and disable Accept up front; the
+ * mutation re-runs the same check.
+ */
+export const getAcceptWindowIssue = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, args) => {
+    const user = await getCurrentUserOrNull(ctx);
+    if (!user) return null;
+    const booking = await ctx.db.get(args.bookingId);
+    if (!booking) return null;
+    if (!["pending", "pending_shop_acceptance"].includes(booking.status)) return null;
+    try {
+      await requireShopStaff(ctx, user._id, booking.shop_id);
+    } catch {
+      return null;
+    }
+    return await checkBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes: booking.estimated_labor_minutes ?? 60,
+      mechanicId: booking.mechanic_id,
     });
   },
 });
@@ -14874,14 +14999,194 @@ export const cancel = mutation({
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
-    return await applyBookingStatusTransition(ctx, {
+    const reason = args.reason ?? "cancelled_by_shop";
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "cancelled",
       changedBy: user._id,
-      reason: args.reason ?? "cancelled_by_shop",
+      reason,
     });
+    await notifyCustomerOfShopCancel(ctx, booking, { kind: "cancelled", reason });
+    return result;
   },
 });
+
+/**
+ * Push the customer when the SHOP ends their booking (cancel/decline or a
+ * manual no-show). Without this the booking silently vanished from the app.
+ * Walk-ins (no user_id) have nobody to push. Dedupe is per booking, so a retry
+ * of the same mutation can't double-send.
+ */
+async function notifyCustomerOfShopCancel(
+  ctx: any,
+  booking: any,
+  { kind, reason }: { kind: "cancelled" | "no_show"; reason?: string },
+) {
+  if (!booking.user_id) return;
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopName = (shop as any)?.name ?? "The shop";
+  const { ymm, vin } = await resolveVehicleDisplay(ctx, booking.vin);
+  const dateLabel = booking.scheduled_date ?? "";
+  const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+  const whenLabel = dateLabel
+    ? ` on ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+    : "";
+  const vehiclePart = ymm ? ` for your ${ymm}` : "";
+  const reasonLabel = customerCancelReasonLabel(reason);
+
+  const title =
+    kind === "no_show" ? "Booking marked as a no-show" : "Your booking was cancelled";
+  const body =
+    kind === "no_show"
+      ? `${shopName} marked your appointment${vehiclePart}${whenLabel} as a no-show.`
+      : `${shopName} cancelled your appointment${vehiclePart}${whenLabel}.${
+          reasonLabel ? ` Reason: ${reasonLabel}.` : ""
+        } Any card hold has been released.`;
+
+  await enqueueNotificationOutbox(ctx, {
+    userId: booking.user_id,
+    bookingId: booking._id,
+    shopId: booking.shop_id,
+    channel: "push",
+    category: kind === "no_show" ? "booking_no_show_by_shop" : "booking_cancelled_by_shop",
+    dedupeKey: `booking-${kind}-by-shop:${String(booking._id)}`,
+    payload: buildCustomerPushPayload({
+      title,
+      body,
+      bookingId: booking._id,
+      vehicleLabel: ymm,
+      vin,
+      extra: {
+        scheduledDate: booking.scheduled_date,
+        scheduledTime: booking.scheduled_time,
+        shopName,
+        reasonLabel,
+      },
+    }),
+  });
+}
+
+/**
+ * Notify the app customer at the four happy-path milestones — accept
+ * (`confirmed`), check-in (`vehicle_at_shop`), work start (`in_progress`), and
+ * completion (`completed`). These previously produced NO customer notification:
+ * applyBookingStatusTransition ran every side effect but never told the
+ * customer their booking moved, so nothing appeared in the in-app feed or as a
+ * push. One `push` row raises BOTH surfaces (getMyNotifications reads the outbox
+ * by user_id, channel-agnostic).
+ *
+ * Scope is exactly these four statuses. Cancel / no-show go through
+ * notifyCustomerOfShopCancel; reschedule proposals and approval / re-auth
+ * prompts enqueue at their own call sites — raising any of them here too would
+ * double-send. Walk-ins (no user_id) have nobody to push. Dedupe is per
+ * booking + milestone, so a booking that re-enters `confirmed` after a
+ * reschedule won't re-spam while the first card is still open.
+ */
+async function notifyCustomerOfLifecycleMilestone(
+  ctx: any,
+  booking: any,
+  newStatus: string,
+) {
+  if (!booking.user_id) return;
+  if (
+    newStatus !== "confirmed" &&
+    newStatus !== "vehicle_at_shop" &&
+    newStatus !== "in_progress" &&
+    newStatus !== "completed"
+  ) {
+    return;
+  }
+
+  const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
+  const shopName = (shop as any)?.name ?? "The shop";
+  const { ymm, vin } = await resolveVehicleDisplay(ctx, booking.vin);
+  const dateLabel = booking.scheduled_date ?? "";
+  const timeLabel = booking.scheduled_time ? formatTime(booking.scheduled_time) : "";
+  const whenLabel = dateLabel
+    ? ` on ${dateLabel}${timeLabel ? ` at ${timeLabel}` : ""}`
+    : "";
+  const vehiclePart = ymm ? ` your ${ymm}` : " your car";
+
+  let category: string;
+  let title: string;
+  let body: string;
+  switch (newStatus) {
+    case "confirmed":
+      category = "booking_confirmed_for_customer";
+      title = "Booking confirmed";
+      body = `${shopName} accepted your appointment for${vehiclePart}${whenLabel}.`;
+      break;
+    case "vehicle_at_shop":
+      category = "booking_vehicle_checked_in";
+      title = "We've got your car";
+      body = `${shopName} checked in${vehiclePart}. We'll let you know when work starts.`;
+      break;
+    case "in_progress":
+      category = "booking_work_started";
+      title = "Work has started";
+      body = `${shopName} started working on${vehiclePart}.`;
+      break;
+    case "completed":
+      category = "booking_service_completed";
+      title = "Service complete";
+      // Deliberately NOT "your car is ready" — that's the pickup_released
+      // message (the car-handoff moment). This is the work-finished moment.
+      body = `${shopName} finished the work on${vehiclePart}. Your final invoice is being wrapped up.`;
+      break;
+    default:
+      return;
+  }
+
+  await enqueueNotificationOutbox(ctx, {
+    userId: booking.user_id,
+    bookingId: booking._id,
+    shopId: booking.shop_id,
+    channel: "push",
+    category,
+    dedupeKey: `${category}:${String(booking._id)}`,
+    payload: buildCustomerPushPayload({
+      title,
+      body,
+      bookingId: booking._id,
+      vehicleLabel: ymm,
+      vin,
+      extra: {
+        scheduledDate: booking.scheduled_date,
+        scheduledTime: booking.scheduled_time,
+        shopName,
+      },
+    }),
+  });
+}
+
+/**
+ * In-app acknowledgement of the customer's OWN booking submission. No push —
+ * the app already shows a success screen; this is the durable feed record so
+ * the submit step isn't missing from the journey. channel:"in_app" has no
+ * dispatcher (see notificationOutbox.ts CHANNEL_DISPATCHER), so the row surfaces
+ * via getMyNotifications but never fires an Expo push.
+ */
+async function notifyCustomerOfRequestSent(
+  ctx: any,
+  { userId, shopId, bookingId }: { userId?: any; shopId?: any; bookingId: any },
+) {
+  if (!userId) return;
+  const shop = shopId ? await ctx.db.get(shopId) : null;
+  const shopName = (shop as any)?.name ?? "the shop";
+  await enqueueNotificationOutbox(ctx, {
+    userId,
+    shopId,
+    bookingId,
+    channel: "in_app",
+    category: "booking_request_sent",
+    dedupeKey: `booking-request-sent:${String(bookingId)}`,
+    payload: buildCustomerPushPayload({
+      title: "Request sent",
+      body: `We sent your request to ${shopName}. You'll hear back once they accept.`,
+      bookingId,
+    }),
+  });
+}
 
 async function proposeRescheduleImpl(
   ctx: any,
@@ -15174,6 +15479,15 @@ export const customerApproveReschedule = mutation({
     const originalMechanicId = booking.previous_mechanic_id ?? currentMechanicId;
     const isManualReschedule = getScheduleChangeMode(booking) === "manual_reschedule";
     const now = Date.now();
+
+    await assertBookingWindowAgainstHoursAndBlocks(ctx, {
+      shopId: booking.shop_id,
+      date: booking.scheduled_date ?? "",
+      startTime: booking.scheduled_time ?? "",
+      durationMinutes,
+      mechanicId: currentMechanicId,
+      action: "This time is no longer available — ask the shop for another time.",
+    });
 
     if (isManualReschedule) {
       await resetVisitForAcceptedManualReschedule(ctx, booking, now);
@@ -18671,14 +18985,18 @@ export const getReceipt = query({
     // AGREED split lives in resolveAgreedLaborLines (the single reader shared
     // with the post-job Labor step's seeding), so both derive per-line labor
     // from the same canonical source instead of a hand-rolled copy that drifts.
-    const baseServices: Array<{ name: string; catalogHours: number | null }> =
-      [];
+    const baseServices: Array<{
+      name: string;
+      catalogHours: number | null;
+      serviceId: string;
+    }> = [];
     if (Array.isArray(booking.service_ids)) {
       for (const sid of booking.service_ids) {
         const svc: any = await ctx.db.get(sid);
         if (!svc) continue;
         baseServices.push({
           name: svc.name ?? "Service",
+          serviceId: String(sid),
           catalogHours:
             typeof svc.default_labor_hours === "number"
               ? svc.default_labor_hours
@@ -18753,13 +19071,19 @@ export const getReceipt = query({
           ? (jobActual!.parts_used as any[])
           : [];
     const partLines: PartLine[] = partsLineSource
+      // Intentionally NOT billablePart here: a legacy blank-name row is already
+      // baked into this booking's FROZEN parts_subtotal_cents, so dropping it
+      // from the lines would make them stop summing to that aggregate. Keep it
+      // and let partDisplayName give it a name ("Unnamed part") instead. New
+      // bookings never reach here with a blank row — performSubmission strips
+      // them before the snapshot is frozen.
       .filter((p: any) => p?.not_used !== true && p?.supplied_by !== "customer")
       .map((p: any) => {
         const unit = typeof p.cost === "number" ? p.cost : null;
         const qty = Math.max(0, typeof p.quantity === "number" ? p.quantity : 1);
         return {
           type: "part" as const,
-          name: p.part_name ?? "Part",
+          name: partDisplayName(p),
           oem_number: p.oem_number ?? null,
           quantity: qty,
           unit_cost: unit,
@@ -18832,8 +19156,20 @@ export const getReceipt = query({
         total_cents: a.mechanic_set_price_cents,
       }));
 
+    // Two identifiers, shown as two labelled lines on the receipt:
+    //  - booking_number: the stable OTP-<last8> order code the customer may have
+    //    referenced before capture; always present.
+    //  - invoice_number: the real billing number (INV-YYYY-NNNNNN, allocated in
+    //    invoices.ts, matches the web receipt); null until the job is captured.
+    const bookingNumber = `OTP-${booking._id.slice(-8).toUpperCase()}`;
+
     return {
-      receipt_number: `OTP-${booking._id.slice(-8).toUpperCase()}`,
+      booking_number: bookingNumber,
+      invoice_number: payment?.invoice_number ?? null,
+      // Back-compat: the single field the receipt renders today. Prefer the
+      // invoice number, fall back to the booking code — so nothing breaks until
+      // the app renders the two fields above as "Booking #" / "Invoice #".
+      receipt_number: payment?.invoice_number ?? bookingNumber,
       service_date: booking.scheduled_date ?? null,
       completed_at: jobActual?.completed_at_ms ?? booking.completed_at_ms ?? null,
       shop: shop
@@ -18912,7 +19248,7 @@ export const getReceipt = query({
                   ? Math.round(unit * qty * 100) / 100
                   : null;
             return {
-              name: (p.part_name ?? "Part") as string,
+              name: partDisplayName(p),
               oem_number: (p.oem_number ?? null) as string | null,
               quantity: qty,
               unit_cost: unit,
@@ -18931,15 +19267,41 @@ export const getReceipt = query({
       payment: payment
         ? {
             method: (payment as any).payment_method ?? null,
-            card_last4: null, // not stored; populate from Stripe payload if needed
+            card_brand: (payment as any).card_brand ?? null,
+            card_last4: (payment as any).card_last4 ?? null,
             amount: (payment as any).amount,
             status: (payment as any).status,
             stripe_intent_id:
               (payment as any).stripe_payment_intent_id ?? null,
             charged_at: (payment as any).updated_at ?? (payment as any).created_at ?? null,
             invoice_storage_id: (payment as any).invoice_storage_id ?? null,
+            // Cumulative refunded total in CENTS. shopPaymentRefunds recomputes
+            // this as SUM(payment_refunds) on every settle, so it's authoritative
+            // and never double-counts our own write vs. the inbound webhook.
+            refunded_amount_cents: (payment as any).refunded_amount_cents ?? 0,
+            last_refunded_at_ms: (payment as any).last_refunded_at_ms ?? null,
           }
         : null,
+      // Refund summary for the Past Services receipt — null until money has been
+      // returned on this booking. `is_full` drives the "Refunded" vs "Partially
+      // refunded" label; `net_paid_cents` is what the customer ultimately paid.
+      refund:
+        payment && ((payment as any).refunded_amount_cents ?? 0) > 0
+          ? (() => {
+              const refunded = (payment as any).refunded_amount_cents as number;
+              const captured = (payment as any).captured_amount_cents ?? null;
+              const isFull =
+                (payment as any).status === "refunded" ||
+                (captured != null && refunded >= captured);
+              return {
+                amount_cents: refunded,
+                refunded_at_ms: (payment as any).last_refunded_at_ms ?? null,
+                is_full: isFull,
+                net_paid_cents:
+                  captured != null ? Math.max(0, captured - refunded) : null,
+              };
+            })()
+          : null,
     };
   },
 });

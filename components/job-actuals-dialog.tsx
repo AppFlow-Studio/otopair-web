@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
+import { MAX_PRICE_DOLLARS, clampPriceDollarsInput } from "@/lib/price-cap";
 
 type JobActualPart = {
   part_name: string;
@@ -112,6 +113,7 @@ export default function JobActualsDialog({
   open,
   mode,
   estimatedLaborMinutes,
+  laborRateCents,
   jobActuals,
   prefillData,
   onClose,
@@ -122,6 +124,10 @@ export default function JobActualsDialog({
   open: boolean;
   mode: "complete" | "edit";
   estimatedLaborMinutes?: number | null;
+  /** Shop labor rate (cents/hr) for this booking's tier — from getJobDetail's
+   *  `shopLaborRateCents`. Powers the live $10,000 labor-charge warning; the
+   *  walk-in cash path bills hours × this rate and rejects over the cap. */
+  laborRateCents?: number | null;
   jobActuals: JobActualDetails;
   prefillData: PrefillData;
   onClose: () => void;
@@ -176,6 +182,19 @@ export default function JobActualsDialog({
       : "Update or finalize the booking details recorded for this booking.";
 
   const actionDisabled = activeAction !== null;
+
+  // Live $10,000 labor-charge guard for the walk-in cash path: this dialog's
+  // hours become minutes × the shop rate at billing (ensureWalkInCashPayment),
+  // which rejects over the cap. Surface it here and block the billing actions
+  // (Complete / Finalize) so the mechanic fixes the hours before submitting.
+  const laborHoursParsed = parseHoursInput(laborHoursText);
+  const laborChargeDollars =
+    laborHoursParsed != null &&
+    typeof laborRateCents === "number" &&
+    laborRateCents > 0
+      ? laborHoursParsed * (laborRateCents / 100)
+      : 0;
+  const laborOverCap = laborChargeDollars > MAX_PRICE_DOLLARS;
 
   const vehicleSummary = useMemo(() => {
     const serviceName = prefillData?.serviceName;
@@ -252,9 +271,21 @@ export default function JobActualsDialog({
               onChange={(event) =>
                 setLaborHoursText(event.target.value.replace(/[^0-9.]/g, ""))
               }
-              className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
+              className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary ${
+                laborOverCap ? "border-amber-400" : "border-border"
+              }`}
               placeholder={estimatedLaborMinutes != null ? formatHoursValue(estimatedLaborMinutes) : "Auto"}
             />
+            {laborOverCap ? (
+              <span className="block text-[11px] font-medium text-amber-700">
+                Labor is ${laborChargeDollars.toLocaleString("en-US", {
+                  maximumFractionDigits: 2,
+                })}{" "}
+                at ${((laborRateCents ?? 0) / 100).toFixed(2)}/hr — over the $
+                {MAX_PRICE_DOLLARS.toLocaleString()} max. Lower the hours to
+                continue.
+              </span>
+            ) : null}
           </label>
 
           <label className="space-y-1.5">
@@ -262,9 +293,10 @@ export default function JobActualsDialog({
             <input
               type="number"
               min="0"
+              max={MAX_PRICE_DOLLARS}
               step="0.01"
               value={partsCost}
-              onChange={(event) => setPartsCost(event.target.value)}
+              onChange={(event) => setPartsCost(clampPriceDollarsInput(event.target.value))}
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
               placeholder="Optional"
             />
@@ -366,9 +398,12 @@ export default function JobActualsDialog({
                   <input
                     type="number"
                     min="0"
+                    max={MAX_PRICE_DOLLARS}
                     step="0.01"
                     value={part.cost}
-                    onChange={(event) => updatePart(index, { cost: event.target.value })}
+                    onChange={(event) =>
+                      updatePart(index, { cost: clampPriceDollarsInput(event.target.value) })
+                    }
                     className="rounded-md border border-border bg-card px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary"
                     placeholder="Cost"
                   />
@@ -387,7 +422,13 @@ export default function JobActualsDialog({
           )}
         </div>
 
-        <div className="mt-5 flex flex-wrap justify-end gap-2">
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+          {laborOverCap ? (
+            <p className="mr-auto text-xs font-medium text-amber-700" role="status">
+              Labor is over the ${MAX_PRICE_DOLLARS.toLocaleString()} max — lower the
+              hours to continue.
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
@@ -400,7 +441,7 @@ export default function JobActualsDialog({
             <button
               type="button"
               onClick={() => void runAction("complete", onCompleteOnly)}
-              disabled={actionDisabled}
+              disabled={actionDisabled || laborOverCap}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
             >
               {activeAction === "complete" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -420,7 +461,7 @@ export default function JobActualsDialog({
           <button
             type="button"
             onClick={() => void runAction("finalize", onFinalize)}
-            disabled={actionDisabled}
+            disabled={actionDisabled || laborOverCap}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {activeAction === "finalize" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

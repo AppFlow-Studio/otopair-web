@@ -2197,6 +2197,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // vehicle_configs row in STAGE 4 so future VIN decodes can dedup against
     // it BEFORE Haiku engine code resolution. See vehicleEnrichment/types.ts.
     nhtsaVinKey: v.optional(v.string()),
+    // Canonical transmission family (automatic|manual|cvt|dct) threaded from the
+    // confirm actions. Folded into config_key so an automatic and a manual of the
+    // same engine never collapse into one cached config. Absent on paths that
+    // don't carry it (director backfill, ymmt) — STEP 3a re-derives it from the
+    // resolved transmission and reconciles the key before the write.
+    transmissionFamily: v.optional(v.string()),
     // Director per-config backfill knobs (additive — default behavior is
     // byte-identical to the signup path which passes neither). See
     // directorConfigBackfills.ts.
@@ -2233,6 +2239,9 @@ export const enrichVehicleBatchV3 = internalAction({
       trim: args.trim,
       engineCode: args.engineCode,
       displacement: args.displacement,
+      // Seeded from the caller (signup/shop pass it). STEP 3a re-derives from the
+      // resolved transmission and reconciles the key for paths that don't.
+      transmissionFamily: args.transmissionFamily,
     };
     let configKey = buildEngineKey(vehicle);
     console.log(`[v8] Starting enrichment for ${configKey}`);
@@ -2732,6 +2741,24 @@ export const enrichVehicleBatchV3 = internalAction({
       // else: link already points at a real row — leave it untouched.
     }
 
+    // STEP 3a-tx: Fold the AUTHORITATIVE transmission into the config identity.
+    // transmissionId was just resolved/healed above, so derive its canonical
+    // family and rebuild config_key. This (a) covers paths that didn't pass
+    // args.transmissionFamily (director backfill, ymmt), and (b) reconciles the
+    // seeded family to the healed transmission — so an automatic and a manual of
+    // the same engine land on DIFFERENT config_keys and never clobber each other
+    // in upsertVehicleConfig. Unknown transmission ⇒ family drops out ⇒ key
+    // unchanged from the legacy transmission-less form.
+    if (transmissionId) {
+      const txDoc = await ctx.runQuery(api.transmissions.getById, { id: transmissionId });
+      const resolvedFamily = await canonicalizeTransmissionType(txDoc?.transmission_type ?? null);
+      if (resolvedFamily && resolvedFamily !== vehicle.transmissionFamily) {
+        vehicle.transmissionFamily = resolvedFamily;
+        configKey = buildEngineKey(vehicle);
+        console.log(`[v8] config_key reconciled to transmission family "${resolvedFamily}" → ${configKey}`);
+      }
+    }
+
     // STEP 3b: Fuzzy dedup — if a config with the same engine+year+make exists
     // under a slightly different key, reuse it instead of creating a duplicate.
     // SKIPPED when pinning (targetConfigId): the dedup keys on the vehicle's
@@ -2740,7 +2767,13 @@ export const enrichVehicleBatchV3 = internalAction({
     if (!args.targetConfigId) {
       const possibleDupe = await ctx.runQuery(
         internal.vehicleEnrichment.v3queries.findSimilarConfig,
-        { engine_id: vehicleDoc.engine_id, year: args.year, make_id: makeDoc._id },
+        {
+          engine_id: vehicleDoc.engine_id,
+          year: args.year,
+          make_id: makeDoc._id,
+          // Never fuzzy-merge across transmission families — see findSimilarConfig.
+          transmission_id: transmissionId ?? undefined,
+        },
       );
       if (possibleDupe && possibleDupe.config_key !== configKey) {
         console.log(`[v8] Dedup: using existing key "${possibleDupe.config_key}" instead of "${configKey}"`);
@@ -7187,6 +7220,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       internal.vehicleEnrichment.v3queries.getVehicleConfigById,
       { vehicleConfigId: args.vehicleConfigId },
     );
+
+    // The stored config_key encodes the transmission family (STEP 3a-tx). This
+    // poll body rebuilt `vehicle` from vehicleArgs, which carries no transmission,
+    // so re-derive the family from the config's own resolved transmission BEFORE
+    // the key comparison below. Otherwise the migration would compare against a
+    // transmission-less desiredKey, rename the config back to it, and re-collapse
+    // an automatic and a manual of the same engine. A legitimate engine-code
+    // migration still fires — the rebuilt desiredKey just also keeps the
+    // (unchanged) transmission token.
+    const finalTxId = currentVcForFinal?.transmission_id ?? args.transmissionId;
+    if (finalTxId) {
+      const finalTxDoc = await ctx.runQuery(api.transmissions.getById, { id: finalTxId });
+      vehicle.transmissionFamily = await canonicalizeTransmissionType(finalTxDoc?.transmission_type ?? null);
+    }
 
     // Config-key migration (batch-2 audit, Jul 2026): when this run holds a
     // REAL engine code (verified resolution threaded through args, or a

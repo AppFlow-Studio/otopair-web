@@ -17,7 +17,9 @@ import {
 } from "@/components/fluid-catalog-select-field";
 import {
   Camera,
+  CarFront,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -25,6 +27,7 @@ import {
   Copy,
   Download,
   EyeOff,
+  Gauge,
   Info,
   Loader2,
   Plus,
@@ -48,6 +51,7 @@ import SurveyDialogShell from "@/components/survey-dialog-shell";
 import { Combobox } from "@/components/ui/combobox";
 import MonthPicker from "@/components/ui/month-picker";
 import { TireSizeInput } from "@/components/ui/tire-size-input";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import {
   Select,
   SelectItem,
@@ -57,6 +61,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
+import {
+  isMileageConfirmRequired,
+  mileageConfirmCopy,
+} from "@/lib/mileage-audit";
 import {
   classifyInspectionMeasure,
   cornerCopyPatch,
@@ -72,8 +80,10 @@ import {
   deriveTierInspectionScope,
   isBrakeDetailFieldRelevant,
   canMarkFieldUnavailable,
+  completeInspectionPhaseForDevelopment,
   isNysSafetyField,
   isFieldApplicableToZone,
+  isZoneDoneForPhase,
   isFieldRequiredForZone,
   isSpecPrefillField,
   normalizeTireSize,
@@ -96,6 +106,7 @@ import {
   type CornerZoneId,
   type FieldUnavailableStatus,
   type InspectionField,
+  type InspectionPhase,
   type InspectionState,
   type RotorMinByAxle,
   type SpecPrefillEntry,
@@ -163,6 +174,7 @@ export type InspectionInputPayload = {
   zones: Array<{
     zone_id: string;
     done: boolean;
+    done_phase?: InspectionPhase;
     measures?: Record<string, string>;
     tri?: Record<string, TriValue>;
     descriptors?: Record<string, string[]>;
@@ -262,7 +274,7 @@ const TRI_DOT: Record<TriValue, string> = {
   r: "bg-red-500 border-red-500",
 };
 
-// Matches the green/blue/red answer-choice palette in pre-job-survey-dialog.tsx
+// Shared green/blue/red answer-choice palette for inspection responses.
 // (ConditionButtons' conditionPalette), used for tri fields rendered as pills.
 const TRI_PILL_ACTIVE_CLASS: Record<TriValue, string> = {
   g: "border-emerald-300 bg-emerald-50 text-emerald-700",
@@ -412,9 +424,13 @@ export default function MultiPointInspectionDialog(props: {
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -431,6 +447,10 @@ export default function MultiPointInspectionDialog(props: {
     inspection: InspectionInputPayload,
   ) => Promise<void>;
 }) {
+  // The inspection holds a local working copy. Unmount it while closed so a
+  // reopened booking always initializes from the latest persisted data.
+  if (!props.open) return null;
+
   return (
     <MultiPointInspectionDialogBody
       key={`${props.passportData?.vin ?? "no-vin"}-${props.bookingId ?? "no-booking"}`}
@@ -445,7 +465,7 @@ function MultiPointInspectionDialogBody({
   bookingLabel,
   bookingSubLabel,
   bookingServices = [],
-  jobInProgress = false,
+  phase,
   tireReplacementPositions = [],
   passportData,
   prefillData,
@@ -459,9 +479,13 @@ function MultiPointInspectionDialogBody({
   bookingLabel: string;
   bookingSubLabel: string;
   bookingServices?: string[];
-  /** True once the booking is in_progress. Gates "Add to this job" —
-   *  addMidJobCustomService refuses work on a job that isn't running. */
-  jobInProgress?: boolean;
+  /**
+   * Which half of the split inspection to show (Spec v2 §1.1). "pre" is the
+   * ground-level walkaround before Start Job; "mpi" is the on-lift half after
+   * it. Also gates "Add to this job" — addMidJobCustomService refuses work on
+   * a job that isn't running, and the job is only running in the MPI phase.
+   */
+  phase: InspectionPhase;
   tireReplacementPositions?: BookedTirePosition[];
   passportData: VehiclePassportData | null | undefined;
   prefillData?: PreJobSurveyPayload | null;
@@ -519,6 +543,11 @@ function MultiPointInspectionDialogBody({
   const undoInspectionRec = useMutation(
     api.jobRecommendations.confirmFromPreJob,
   );
+  // The job clock starts at Start Job, which is also what opens the MPI phase,
+  // so "the job is running" and "we are in the MPI half" are the same instant.
+  // Kept as a named const because the mid-job mutations read as a job-state
+  // question, not a phase one.
+  const jobInProgress = phase === "mpi";
   const addToJob = useMutation(api.customJobs.addMidJobCustomService);
   // Pre-start sibling of addToJob: appends the same line to a booking that
   // hasn't been started, to be sent as a PRE-job estimate the customer confirms
@@ -575,6 +604,29 @@ function MultiPointInspectionDialogBody({
       },
     );
   }, [bookingId, passportData, ensureVehicleTireOptions]);
+
+  // Real vehicle thumbnail for the header card. The /api/vehicle-image route
+  // resolves on-demand (VDB) and caches to vehicles/vehicle_configs.image_url,
+  // so a photo appears even when it wasn't pre-fetched. Failures are silent —
+  // the card falls back to a car glyph. (Same pattern as the flagship cards.)
+  const [vehicleImg, setVehicleImg] = useState<string | null>(null);
+  useEffect(() => {
+    const vin = passportData?.vin;
+    if (!vin) return;
+    let cancelled = false;
+    setVehicleImg(null);
+    fetch(`/api/vehicle-image?vin=${encodeURIComponent(vin)}`)
+      .then((r) => (r.ok ? r.json() : { imageUrl: null }))
+      .then((d) => {
+        if (!cancelled && d?.imageUrl) setVehicleImg(d.imageUrl as string);
+      })
+      .catch(() => {
+        // non-fatal — the card keeps its fallback glyph
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [passportData?.vin]);
 
   const prepareInspectionPhotoUpload = useMutation(
     prepareInspectionPhotoUploadRef,
@@ -678,6 +730,10 @@ function MultiPointInspectionDialogBody({
   // Global header fields that don't belong to a single wheel.
   const [mileage, setMileage] = useState("");
   const [mileageError, setMileageError] = useState("");
+  // Soft-confirm for a lower / far-off odometer (never a hard block). The
+  // pending action is remembered so "Save anyway" resumes the same submit.
+  const [mileageConfirmOpen, setMileageConfirmOpen] = useState(false);
+  const pendingSubmitActionRef = useRef<SubmitIntent | null>(null);
   const [liftStatus, setLiftStatus] = useState<"yes" | "no" | "">("");
   const [inspectionStatus, setInspectionStatus] = useState<
     InspectionStatus | ""
@@ -714,22 +770,27 @@ function MultiPointInspectionDialogBody({
     });
   }, []);
 
-  const requiredZones = useMemo(
-    () => requiredZonesForBooking(bookingServices),
-    [bookingServices],
-  );
-  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
+  // The "current mileage" baseline is the last STORED reading on the passport —
+  // what a new reading is compared against for the soft confirm. Prefer it over
+  // prefillData.mileage, which is the mechanic's own saved DRAFT
+  // (jobActuals.prejobReport): using the draft made the field compare against
+  // itself and hid a stale stored value the mechanic may be correcting (e.g. a
+  // bogus 300,000 on file while they read 66,000). The server compares against
+  // this same stored value, so client + server now agree.
   const baselineMileage =
-    prefillData?.mileage ?? passportData?.passport.mileage ?? null;
-  // An odometer physically can't run backwards, so a new reading below the
-  // vehicle's stored mileage is always an error — enforced live as the mechanic
-  // types and again as a hard gate on every "continue" path (submit + save).
-  const odometerBelowBaseline = (value: string) =>
-    typeof baselineMileage === "number" &&
-    value.trim() !== "" &&
-    Number(value) < baselineMileage;
-  const odometerTooLowMessage = () =>
-    `Odometer can't be below the current ${(baselineMileage as number).toLocaleString()} mi reading.`;
+    passportData?.passport.mileage ?? prefillData?.mileage ?? null;
+  // A lower / far-off odometer no longer hard-blocks (odometers CAN legitimately
+  // read low after a cluster swap or a wrong value on file). When the new
+  // reading is anomalous the mechanic gets a soft confirm on save and the change
+  // is audited server-side. This muted hint previews that as they type.
+  const mileageNeedsConfirm =
+    mileage.trim() !== "" &&
+    isMileageConfirmRequired(baselineMileage, Number(mileage));
+  const mileageSoftHint = !mileageNeedsConfirm
+    ? ""
+    : typeof baselineMileage === "number" && Number(mileage) < baselineMileage
+      ? `Lower than the last reading (${baselineMileage.toLocaleString()} mi) — you'll confirm on save.`
+      : `Big jump from the last reading — you'll confirm on save.`;
   const brakeScope = useMemo<BrakeAxleScope>(
     () =>
       savedBrakeScope?.hasBrakeWork
@@ -749,6 +810,7 @@ function MultiPointInspectionDialogBody({
   );
   const completionContext = useMemo(
     () => ({
+      phase,
       serviceNames: bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -768,6 +830,7 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     }),
     [
+      phase,
       bookingServices,
       brakeScope,
       tireReplacementPositions,
@@ -777,6 +840,15 @@ function MultiPointInspectionDialogBody({
       liftStatus,
     ],
   );
+
+  // Which zones gate THIS phase. Derived from the context so it tracks both the
+  // booked services and the phase — the pre-check never demands the underbody,
+  // and the MPI half only demands the corners whose wheel actually comes off.
+  const requiredZones = useMemo(
+    () => requiredZonesForBooking(completionContext),
+    [completionContext],
+  );
+  const requiredSet = useMemo(() => new Set(requiredZones), [requiredZones]);
 
   useEffect(() => {
     photoPreviewsRef.current = photoPreviews;
@@ -811,6 +883,7 @@ function MultiPointInspectionDialogBody({
         const base = defaultZoneState(INSPECTION_ZONES_BY_ID[id]);
         next.zones[id] = {
           done: !!z.done,
+          donePhase: z.done_phase === "mpi" ? "mpi" : "pre",
           dirty: false,
           measures: { ...base.measures, ...(z.measures ?? {}) },
           tri: { ...base.tri, ...(z.tri ?? {}) },
@@ -919,9 +992,9 @@ function MultiPointInspectionDialogBody({
   const zoneNeedsSpecReview = useCallback(
     (zoneId: ZoneId) =>
       (specPrefill[zoneId]?.length ?? 0) > 0 &&
-      !state.zones[zoneId]?.done &&
+      !isZoneDoneForPhase(state.zones[zoneId], phase) &&
       !confirmedSpecZones.has(zoneId),
-    [specPrefill, state, confirmedSpecZones],
+    [specPrefill, state, confirmedSpecZones, phase],
   );
 
   // ---- helpers -----------------------------------------------------------
@@ -954,9 +1027,11 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
-  // Mirror a corner's readings onto its same-axle sibling (FL↔FR, RL↔RR). The
-  // two corners share an identical field set, so this is a straight overwrite;
-  // the mechanic then only fixes the few values that differ. No-op if the source
+  // Mirror a corner onto its same-axle sibling (FL↔FR, RL↔RR). Only identity
+  // fields travel, and which ones depends on the phase — sidewall data during
+  // the pre-check, pad brand and rotor presence during the MPI half. Every
+  // measured value stays put: mirroring tread or pressure is how a staggered
+  // setup gets recorded as the same psi on both axles. No-op if the source
   // corner is still blank (guards against wiping the sibling with empties).
   const copyCornerToOpposite = useCallback(
     (sourceId: ZoneId) => {
@@ -964,12 +1039,12 @@ function MultiPointInspectionDialogBody({
       if (!opposite) return;
       const source = zoneState(sourceId);
       if (!zoneHasInput(sourceId, source)) return;
-      patchZone(opposite, cornerCopyPatch(source));
+      patchZone(opposite, cornerCopyPatch(source, zoneState(opposite), phase));
       // The copied values equal the already-reviewed source, so don't force a
       // redundant "Specs match" re-confirm on the sibling.
       markSpecReviewed(opposite);
     },
-    [zoneState, patchZone, markSpecReviewed],
+    [zoneState, patchZone, markSpecReviewed, phase],
   );
 
   const photoUrl = useCallback(
@@ -988,8 +1063,10 @@ function MultiPointInspectionDialogBody({
   );
 
   const doneCount = useMemo(
-    () => requiredZones.filter((id) => state.zones[id]?.done).length,
-    [requiredZones, state],
+    () =>
+      requiredZones.filter((id) => isZoneDoneForPhase(state.zones[id], phase))
+        .length,
+    [requiredZones, state, phase],
   );
 
   // Every required zone graded, with no zone left holding un-saved readings.
@@ -1001,10 +1078,26 @@ function MultiPointInspectionDialogBody({
   const inspectionComplete = useMemo(
     () =>
       requiredZones.length > 0 &&
-      requiredZones.every((id) => state.zones[id]?.done) &&
+      requiredZones.every((id) => isZoneDoneForPhase(state.zones[id], phase)) &&
       getDirtyIncompleteZones(state).length === 0,
-    [requiredZones, state],
+    [requiredZones, state, phase],
   );
+
+  const completeCurrentPhaseForDevelopment = useCallback(() => {
+    setState((prev) =>
+      completeInspectionPhaseForDevelopment(prev, {
+        ...completionContext,
+        inspectionState: prev,
+      }),
+    );
+    if (typeof baselineMileage === "number") setMileage(String(baselineMileage));
+    if (phase === "mpi") setLiftStatus("yes");
+    setConfirmedSpecZones((prev) => new Set([...prev, ...requiredZones]));
+    setFieldErrors({});
+    setError("");
+    setCopyPromptFor(null);
+    setActiveZone(null);
+  }, [baselineMileage, completionContext, phase, requiredZones]);
 
   // Findings + suggestions are evaluated from COMPLETED zones only, so a finding
   // surfaces the moment its zone is marked complete (not after the whole
@@ -1120,6 +1213,7 @@ function MultiPointInspectionDialogBody({
       zones: Object.entries(state.zones).map(([zone_id, zs]) => ({
         zone_id,
         done: zs!.done,
+        done_phase: zs!.donePhase ?? "pre",
         measures: zs!.measures,
         tri: zs!.tri,
         descriptors: zs!.descriptors,
@@ -1385,7 +1479,7 @@ function MultiPointInspectionDialogBody({
 
   function handleToggleZone(zoneId: ZoneId) {
     const current = zoneState(zoneId);
-    if (current.done) {
+    if (isZoneDoneForPhase(current, phase)) {
       patchZone(zoneId, { done: false });
       setCopyPromptFor(null);
       return;
@@ -1406,12 +1500,14 @@ function MultiPointInspectionDialogBody({
       return;
     }
     setError("");
-    patchZone(zoneId, { done: true });
+    // Record which half completed it: a corner signed off during the
+    // pre-check must re-open when the wheel comes off.
+    patchZone(zoneId, { done: true, donePhase: phase });
     // Locked rule: offer the same-axle copy only now that this corner is fully
     // complete, and only when the sibling isn't already done (nothing to mirror
     // onto a finished corner). Non-corner zones have no opposite → no prompt.
     const opposite = OPPOSITE_CORNER[zoneId as CornerZoneId];
-    if (opposite && !zoneState(opposite).done) {
+    if (opposite && !isZoneDoneForPhase(zoneState(opposite), phase)) {
       setCopyPromptCopied(false);
       setCopyPromptFor(zoneId as CornerZoneId);
     } else {
@@ -1453,7 +1549,9 @@ function MultiPointInspectionDialogBody({
       return false;
     }
     if (action === "start") {
-      const incomplete = requiredZones.find((id) => !state.zones[id]?.done);
+      const incomplete = requiredZones.find(
+        (id) => !isZoneDoneForPhase(state.zones[id], phase),
+      );
       if (incomplete) {
         setError(
           `Mark ${INSPECTION_ZONES_BY_ID[incomplete].label} complete before submitting.`,
@@ -1464,7 +1562,8 @@ function MultiPointInspectionDialogBody({
       }
     }
     for (const zone of INSPECTION_ZONES) {
-      if (zone.dynamic || !state.zones[zone.id]?.done) continue;
+      if (zone.dynamic || !isZoneDoneForPhase(state.zones[zone.id], phase))
+        continue;
       const result = validateZoneForCompletion(
         state,
         zone.id,
@@ -1484,25 +1583,19 @@ function MultiPointInspectionDialogBody({
       );
       return false;
     }
-    if (action === "start" && !liftStatus) {
+    // Only asked in the MPI half. During the ground-level pre-check the answer
+    // is "no" by definition, so requiring it there is a question with one
+    // possible answer (Spec v2 §4.1 wanted it deleted outright; kept because
+    // the mechanic can put the car up early and we want that recorded).
+    if (action === "start" && phase === "mpi" && !liftStatus) {
       setError("Select whether the vehicle is on a lift before submitting.");
       requestAnimationFrame(() =>
         document.getElementById("inspection-lift-yes")?.focus(),
       );
       return false;
     }
-    // A backwards odometer is invalid on every continue path — block both
-    // "Submit" and "Save & close" whenever a reading has been entered (an empty
-    // reading is only required for "start", handled above).
-    if (odometerBelowBaseline(mileage)) {
-      const message = odometerTooLowMessage();
-      setError(message);
-      setMileageError(message);
-      requestAnimationFrame(() =>
-        document.getElementById("inspection-odometer")?.focus(),
-      );
-      return false;
-    }
+    // A lower / far-off odometer is NOT blocked here — handleSubmit shows a
+    // soft confirm (never a wall) and the change is audited server-side.
     setMileageError("");
     return true;
   }
@@ -1516,6 +1609,19 @@ function MultiPointInspectionDialogBody({
     }
     pendingSaveRef.current = null;
     if (!validateBeforePersistence(action)) return;
+    // Soft confirm for a lower / far-off odometer — asks once, never blocks.
+    if (
+      mileage.trim() !== "" &&
+      isMileageConfirmRequired(baselineMileage, Number(mileage))
+    ) {
+      pendingSubmitActionRef.current = action;
+      setMileageConfirmOpen(true);
+      return;
+    }
+    await runSubmit(action);
+  }
+
+  async function runSubmit(action: SubmitIntent) {
     await persistOwnerAnswers();
     const { prejob, inspection } = buildPayloads();
     try {
@@ -1658,7 +1764,7 @@ function MultiPointInspectionDialogBody({
    * sent, no money moves, and the customer isn't notified. How it later reaches
    * the customer depends on whether the job is running:
    *   - pre-job (the usual inspection case): the added scope goes out as part of
-   *     "Submit → Vehicle Health" — commitInspectionAndAwaitEstimate opens the
+   *     "Submit" — commitInspectionAndAwaitEstimate opens the
    *     pre-job estimate in the booking panel. There is NO send button here.
    *   - mid-job: the running job has no such submit step, so each line keeps its
    *     own "Price & send" → mid-job change.
@@ -1913,13 +2019,28 @@ function MultiPointInspectionDialogBody({
   const totalRequired = requiredZones.length;
   const pct = totalRequired ? doneCount / totalRequired : 0;
   const ringDash = 138.2;
+  // Compact "2.4L · I4 · AWD" line for the header card; fall back to the older
+  // engine/trim/chassis label when the richer line isn't populated yet.
+  const vehicleSpecLine =
+    passportData?.vehicle_spec_line ??
+    passportData?.vehicle_spec_label ??
+    null;
 
   const footer = (
-    <div className="flex items-center justify-between gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-3">
       <span className="hidden text-[11px] text-primary sm:inline-flex sm:items-center sm:gap-1.5">
         <Camera className="h-3.5 w-3.5" /> Verify a measurement with a photo →
         rating boost
       </span>
+      {process.env.NODE_ENV === "development" ? (
+        <button
+          type="button"
+          onClick={completeCurrentPhaseForDevelopment}
+          className="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-[10px] font-semibold text-amber-800 hover:bg-amber-100"
+        >
+          Dev: complete {phase}
+        </button>
+      ) : null}
       <div className="flex flex-1 items-center justify-end gap-2">
         <button
           type="button"
@@ -1936,7 +2057,7 @@ function MultiPointInspectionDialogBody({
           className="inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isSubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-          Submit → Vehicle Health
+          Submit
         </button>
       </div>
     </div>
@@ -1952,7 +2073,7 @@ function MultiPointInspectionDialogBody({
           flushPendingSave();
           onClose();
         }}
-        title="Multi-point inspection"
+        title={phase === "pre" ? "Vehicle pre-check" : "Multi-point inspection"}
         description={bookingSubLabel}
         maxWidthClassName="max-w-2xl"
         mobileFullBleed
@@ -2011,34 +2132,111 @@ function MultiPointInspectionDialogBody({
           </div>
         ) : (
           <div className="space-y-4 pt-4 sm:pt-5">
-            {/* vehicle + odometer bar */}
-            <div className="flex flex-wrap items-end gap-x-6 gap-y-3 rounded-xl border border-primary/10 bg-primary/[0.03] px-4 py-3">
-              <div>
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Vehicle
+            {/* vehicle summary — identity · current mileage · progress.
+                Transparent (no card fill/border) so it doesn't double-box
+                against the dialog; the column dividers keep it legible. */}
+            <div className="px-0.5">
+              <div className="flex items-center gap-3 sm:gap-4">
+                {/* identity: thumbnail + name + spec line */}
+                <div className="flex min-w-0 flex-1 items-center gap-3">
+                  <div className="flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-primary/10 bg-muted">
+                    {vehicleImg ? (
+                      // Plain <img>: the VDB render is served from an external
+                      // host, so it skips next/image's domain allow-list (same
+                      // as the inspection-photo thumbnails below).
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={vehicleImg}
+                        alt={bookingLabel}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <CarFront className="h-6 w-6 text-muted-foreground/50" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="truncate text-[14px] font-semibold text-foreground">
+                      {bookingLabel}
+                    </div>
+                    {vehicleSpecLine ? (
+                      <div className="truncate text-[12px] text-muted-foreground">
+                        {vehicleSpecLine}
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="text-[13px] font-medium text-foreground">
-                  {bookingLabel}
-                </div>
-              </div>
-              <div>
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
-                  Current odometer
-                </div>
-                <div className="mt-0.5 flex items-baseline gap-1">
-                  <div className="w-24 rounded-lg border border-primary/15 bg-muted/50 px-2 py-1 text-[14px] tabular-nums text-muted-foreground">
+
+                {/* current mileage (read-only baseline / last known) */}
+                <div className="hidden shrink-0 border-l border-primary/10 pl-4 sm:block">
+                  <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                    <Gauge className="h-3.5 w-3.5" />
+                    Current mileage
+                  </div>
+                  <div className="mt-0.5 text-[15px] font-semibold tabular-nums text-foreground">
                     {typeof baselineMileage === "number"
                       ? baselineMileage.toLocaleString()
                       : "—"}
+                    <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+                      mi
+                    </span>
                   </div>
-                  <span className="text-[11px] text-muted-foreground">mi</span>
+                </div>
+
+                {/* progress ring */}
+                <div className="flex shrink-0 items-center gap-3 border-l border-primary/10 pl-3 sm:pl-4">
+                  <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
+                    <circle
+                      cx="29"
+                      cy="29"
+                      r="22"
+                      fill="none"
+                      stroke="currentColor"
+                      className="text-primary/15"
+                      strokeWidth="6"
+                    />
+                    <circle
+                      cx="29"
+                      cy="29"
+                      r="22"
+                      fill="none"
+                      stroke="currentColor"
+                      className="text-primary"
+                      strokeWidth="6"
+                      strokeLinecap="round"
+                      strokeDasharray={ringDash}
+                      strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
+                      transform="rotate(-90 29 29)"
+                    />
+                    <text
+                      x="29"
+                      y="33.5"
+                      textAnchor="middle"
+                      fontSize="13"
+                      fontWeight="600"
+                      className="fill-foreground"
+                    >
+                      {doneCount}/{totalRequired}
+                    </text>
+                  </svg>
+                  <div className="hidden leading-tight sm:block">
+                    <div className="text-[13px] font-semibold text-foreground">
+                      {doneCount} of {totalRequired}
+                    </div>
+                    <div className="text-[11px] text-muted-foreground">
+                      zones inspected
+                    </div>
+                  </div>
                 </div>
               </div>
+            </div>
+
+            {/* odometer entry + lift status + save state / color legend */}
+            <div className="flex flex-wrap items-end gap-x-5 gap-y-3">
               <label className="block">
-                <div className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-primary">
                   New reading <span className="text-red-500">*</span>
                 </div>
-                <div className="mt-0.5 flex items-baseline gap-1">
+                <div className="mt-1 flex items-baseline gap-1.5">
                   <input
                     id="inspection-odometer"
                     aria-invalid={!!mileageError}
@@ -2047,27 +2245,66 @@ function MultiPointInspectionDialogBody({
                     onChange={(e) => {
                       const next = e.target.value.replace(/[^0-9]/g, "");
                       setMileage(next);
-                      // Flag a backwards odometer the instant it's typed, so the
-                      // mechanic fixes it in place instead of hitting a wall at
-                      // submit time.
-                      setMileageError(
-                        odometerBelowBaseline(next)
-                          ? odometerTooLowMessage()
-                          : "",
-                      );
+                      // A lower / far-off reading is no longer an error — it's a
+                      // soft confirm on save (previewed by mileageSoftHint). Just
+                      // clear any stale server error while typing.
+                      if (mileageError) setMileageError("");
                     }}
+                    // Save on blur so the reading lands immediately, not only on
+                    // the 1s autosave debounce.
+                    onBlur={flushPendingSave}
                     placeholder="—"
-                    className="w-24 rounded-lg border border-primary/20 bg-card px-2 py-1 text-[14px] tabular-nums text-foreground focus:border-primary focus:outline-none"
+                    className="w-36 rounded-lg border-2 border-primary/50 bg-card px-3 py-2 text-[18px] font-bold tabular-nums text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/25"
                   />
-                  <span className="text-[11px] text-muted-foreground">mi</span>
+                  <span className="text-[12px] font-medium text-muted-foreground">
+                    mi
+                  </span>
                 </div>
                 {mileageError ? (
                   <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-red-600">
                     {mileageError}
                   </span>
+                ) : mileageSoftHint ? (
+                  <span className="mt-1 block text-[10px] font-medium normal-case tracking-normal text-amber-600">
+                    {mileageSoftHint}
+                  </span>
                 ) : null}
+                <ConfirmationDialog
+                  open={mileageConfirmOpen}
+                  zIndexClassName="z-[100]"
+                  title={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.title ?? "Confirm odometer"
+                  }
+                  description={
+                    mileageConfirmCopy(baselineMileage ?? 0, Number(mileage))
+                      ?.body
+                  }
+                  onClose={() => {
+                    pendingSubmitActionRef.current = null;
+                    setMileageConfirmOpen(false);
+                  }}
+                  secondaryAction={{
+                    label: "Go back",
+                    variant: "outline",
+                    onAction: () => {
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                    },
+                  }}
+                  primaryAction={{
+                    label: "Save anyway",
+                    variant: "primary",
+                    onAction: () => {
+                      const action = pendingSubmitActionRef.current ?? "close";
+                      pendingSubmitActionRef.current = null;
+                      setMileageConfirmOpen(false);
+                      void runSubmit(action);
+                    },
+                  }}
+                />
               </label>
-              <fieldset>
+              <fieldset className={phase === "mpi" ? undefined : "hidden"}>
                 <legend className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   Is the vehicle on a lift?{" "}
                   <span className="text-red-500">*</span>
@@ -2092,66 +2329,22 @@ function MultiPointInspectionDialogBody({
                   ))}
                 </div>
               </fieldset>
-            </div>
-
-            {/* progress ring */}
-            <div className="flex items-center gap-4">
-              <svg width="56" height="56" viewBox="0 0 58 58" aria-hidden>
-                <circle
-                  cx="29"
-                  cy="29"
-                  r="22"
-                  fill="none"
-                  stroke="currentColor"
-                  className="text-primary/15"
-                  strokeWidth="6"
+              <div className="ml-auto flex items-center gap-3 self-center">
+                <SaveStatusIndicator
+                  status={saveStatus}
+                  enabled={!!bookingId && !!onSaveDraft}
                 />
-                <circle
-                  cx="29"
-                  cy="29"
-                  r="22"
-                  fill="none"
-                  stroke="currentColor"
-                  className="text-primary"
-                  strokeWidth="6"
-                  strokeLinecap="round"
-                  strokeDasharray={ringDash}
-                  strokeDashoffset={(ringDash * (1 - pct)).toFixed(1)}
-                  transform="rotate(-90 29 29)"
-                />
-                <text
-                  x="29"
-                  y="33.5"
-                  textAnchor="middle"
-                  fontSize="13"
-                  fontWeight="600"
-                  className="fill-foreground"
-                >
-                  {doneCount}/{totalRequired}
-                </text>
-              </svg>
-              <div className="min-w-0 flex-1">
-                <div className="text-[13px] font-semibold text-foreground">
-                  {doneCount} of {totalRequired} required zones inspected
+                <div className="hidden items-center gap-3 sm:flex">
+                  {(["g", "y", "r"] as TriValue[]).map((c) => (
+                    <span
+                      key={c}
+                      className="flex items-center gap-1 text-[11px] text-muted-foreground"
+                    >
+                      <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
+                      {TRI_LABELS[c]}
+                    </span>
+                  ))}
                 </div>
-                <div className="text-[11px] text-muted-foreground">
-                  Tap a part of the car to inspect it
-                </div>
-              </div>
-              <SaveStatusIndicator
-                status={saveStatus}
-                enabled={!!bookingId && !!onSaveDraft}
-              />
-              <div className="hidden items-center gap-3 sm:flex">
-                {(["g", "y", "r"] as TriValue[]).map((c) => (
-                  <span
-                    key={c}
-                    className="flex items-center gap-1 text-[11px] text-muted-foreground"
-                  >
-                    <span className={cn("h-3 w-3 rounded-full", TRI_DOT[c])} />
-                    {TRI_LABELS[c]}
-                  </span>
-                ))}
               </div>
             </div>
 
@@ -2175,7 +2368,7 @@ function MultiPointInspectionDialogBody({
             <div id="inspection-car-diagram" className="flex justify-center scroll-mt-4">
               <CarDiagram
                 activeZone={activeZone === "PARTS" ? null : activeZone}
-                isDone={(id) => !!state.zones[id]?.done}
+                isDone={(id) => isZoneDoneForPhase(state.zones[id], phase)}
                 isRequired={(id) => requiredSet.has(id)}
                 onSelect={selectZone}
               />
@@ -2333,7 +2526,7 @@ function MultiPointInspectionDialogBody({
                   specConfirmed={confirmedSpecZones.has(activeZone)}
                   onConfirmSpecs={() => markSpecReviewed(activeZone)}
                   extraHeader={
-                    activeZone === "FRT" ? (
+                    activeZone === "FRT" && phase === "pre" ? (
                       <InspectionStickerFields
                         status={inspectionStatus}
                         expires={inspectionExpires}
@@ -2483,7 +2676,7 @@ function MultiPointInspectionDialogBody({
           the customer's confirmation. Opened from "Price & send" in the "Added
           to this job" box while the job is running (there's no inspection-submit
           step then to carry the estimate). A PRE-job inspection has no scope
-          dialog here at all — its added scope rides the "Submit → Vehicle Health"
+          dialog here at all — its added scope rides the "Submit"
           flow (commitInspectionAndAwaitEstimate opens the pre-job estimate in the
           booking panel), so the mechanic can't send before the check is done. */}
       <MidJobScopeDialog
@@ -3017,12 +3210,47 @@ function ZonePanel({
       zoneId === "RR") &&
     completionContext.tireReplacementPositions?.includes(zoneId);
   const applicableFields = zone.fields.filter((field) => {
+    // Phase first, ahead of both override sets below. Those exist to show
+    // wheel-off rows regardless of the booked axle scope, and between them they
+    // cover every wheel-off key — which is exactly why pad and rotor rows used
+    // to appear during the pre-check. A field from the other half of the
+    // inspection is not "always visible"; it is not visible at all yet.
+    if (field.phase !== completionContext.phase) return false;
     if (ALWAYS_VISIBLE_FIELDS.has(field.key)) return true;
     if (SCOPE_INDEPENDENT_BRAKE_DETAIL_FIELDS.has(field.key)) {
       return isBrakeDetailFieldRelevant(field.key, zs);
     }
     return isFieldApplicableToZone(zoneId, field.key, completionContext);
   });
+  // Spec v2 §5: at MPI the corner reopens showing its wheel-off rows, with what
+  // was recorded on the ground carried above them read-only. The mechanic under
+  // the car can see the tread they measured without being able to restate it —
+  // pre-check readings are settled once the clock starts.
+  const carriedPreRows =
+    completionContext.phase === "mpi"
+      ? zone.fields
+          .filter((field) => field.phase === "pre")
+          .map((field) => {
+            const status = zs.statuses[field.key];
+            if (status) return { key: field.key, label: field.label, value: "—" };
+            const raw =
+              field.type === "measure"
+                ? zs.measures[field.key]
+                : field.type === "tri"
+                  ? TRI_LABELS[zs.tri[field.key] as TriValue]
+                  : field.type === "descriptors"
+                    ? (zs.descriptors[field.key] ?? []).join(", ")
+                    : field.type === "select"
+                      ? zs.select[field.key]
+                      : zs.text[field.key];
+            const value = String(raw ?? "").trim();
+            return value ? { key: field.key, label: field.label, value } : null;
+          })
+          .filter((row): row is { key: string; label: string; value: string } =>
+            row !== null,
+          )
+      : [];
+
   const rotorPhotoRequired =
     (zoneId === "FL" ||
       zoneId === "FR" ||
@@ -3037,7 +3265,10 @@ function ZonePanel({
   // Per-field lookup of the seeded value/provenance for this zone.
   const specByKey = new Map(specPrefill.map((s) => [s.fieldKey, s]));
   const hasSpecPrefill = specPrefill.length > 0;
-  const needsSpecReview = hasSpecPrefill && !zs.done && !specConfirmed;
+  // Completion is per phase: a corner signed off during the pre-check reads as
+  // incomplete again once the MPI half opens its wheel-off rows.
+  const doneForPhase = isZoneDoneForPhase(zs, completionContext.phase);
+  const needsSpecReview = hasSpecPrefill && !doneForPhase && !specConfirmed;
   // Seeded specs that actually render here — the set the mechanic must check.
   const seededKeys = applicableFields
     .map((field) => field.key)
@@ -3095,7 +3326,7 @@ function ZonePanel({
           )}
         </h4>
         <div className="flex items-center gap-1">
-          {zs.done ? (
+          {doneForPhase ? (
             <span className="mr-1 inline-flex items-center gap-1 text-[12px] font-semibold text-emerald-600">
               <Check className="h-3.5 w-3.5" /> confirmed
             </span>
@@ -3177,6 +3408,24 @@ function ZonePanel({
           )
         : null}
 
+      {carriedPreRows.length > 0 ? (
+        <details className="mt-3 rounded-xl border border-primary/15 bg-primary/[0.03] px-3 py-2">
+          <summary className="cursor-pointer list-none text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            From the pre-check · {carriedPreRows.length} recorded
+          </summary>
+          <dl className="mt-2 space-y-1">
+            {carriedPreRows.map((row) => (
+              <div key={row.key} className="flex justify-between gap-3">
+                <dt className="text-[12px] text-muted-foreground">{row.label}</dt>
+                <dd className="text-[12px] font-medium tabular-nums text-foreground">
+                  {row.value}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </details>
+      ) : null}
+
       {applicableFields.map((field, i) => {
         const prevSection = i > 0 ? applicableFields[i - 1].section : undefined;
         const showSection = field.section && field.section !== prevSection;
@@ -3236,6 +3485,7 @@ function ZonePanel({
                   : undefined
               }
               prefill={specByKey.get(field.key)}
+              specChecked={specConfirmed || checkedSpecKeys.has(field.key)}
               onSpecEdited={() => markSpecChecked(field.key)}
               onPatch={(patch) => {
                 onFieldSaving(field.key);
@@ -3312,7 +3562,7 @@ function ZonePanel({
         <InlineFieldError message={fieldError.message} />
       ) : null}
 
-      {!zs.done && zs.dirty ? (
+      {!doneForPhase && zs.dirty ? (
         <p className="mt-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
           You&apos;ve entered readings here — tap{" "}
           <span className="font-semibold">Mark zone complete</span> so they
@@ -3359,12 +3609,12 @@ function ZonePanel({
           onClick={onToggleDone}
           className={cn(
             "ml-auto rounded-xl px-4 py-2 text-[13px] font-semibold transition-colors",
-            zs.done
+            doneForPhase
               ? "border border-primary/20 bg-card text-muted-foreground hover:bg-primary/5"
               : "bg-primary text-primary-foreground hover:bg-primary/90",
           )}
         >
-          {zs.done ? "Mark incomplete" : "Mark zone complete"}
+          {doneForPhase ? "Mark incomplete" : "Mark zone complete"}
         </button>
       </div>
     </div>
@@ -3454,6 +3704,7 @@ function FieldRow({
   required,
   errorMessage,
   prefill,
+  specChecked,
   onSpecEdited,
   onPatch,
   onSharedText,
@@ -3472,7 +3723,10 @@ function FieldRow({
   errorMessage?: string;
   /** Seeded passport value/provenance for this field, when it's a spec field. */
   prefill?: SpecPrefillEntry;
-  /** Called when the mechanic edits a pre-filled spec field (marks reviewed). */
+  /** True once this seeded spec has been reviewed (tapped, edited, or the whole
+   *  zone confirmed) — drives the inline "Confirm spec → Spec confirmed" state. */
+  specChecked?: boolean;
+  /** Called when the mechanic edits or confirms a pre-filled spec (marks reviewed). */
   onSpecEdited?: () => void;
   onPatch: (patch: Partial<ZoneState>) => void;
   onSharedText: (key: string, value: string) => void;
@@ -3486,6 +3740,16 @@ function FieldRow({
     return statuses;
   };
   const unavailable = !!zs.statuses[field.key];
+  // Inline "Confirm spec" control for passport-seeded fields — the in-place
+  // alternative to tapping the floating rail. Rendered next to the existing
+  // provenance tag in each seeded-field branch below.
+  const specControl =
+    prefill && !unavailable ? (
+      <SpecConfirmControl
+        confirmed={!!specChecked}
+        onConfirm={() => onSpecEdited?.()}
+      />
+    ) : null;
   // NYS safety items (e.g. horn) are mandatory — the mechanic can't mark them
   // unavailable to skip them, so drop the toggle entirely for those fields.
   const skippable = canMarkFieldUnavailable(zoneId, field.key);
@@ -3495,9 +3759,20 @@ function FieldRow({
       active={unavailable}
       onToggle={() => {
         const statuses = { ...zs.statuses };
-        if (unavailable) delete statuses[field.key];
-        else statuses[field.key] = "not_applicable";
-        onPatch({ statuses });
+        if (unavailable) {
+          delete statuses[field.key];
+          onPatch({ statuses });
+          return;
+        }
+        statuses[field.key] = "not_applicable";
+        // Marking a field unavailable has to clear whatever was typed into it.
+        // Leaving both behind reads as "the pad measures 5mm AND could not be
+        // seen" — the reading then counts as answered while claiming it was
+        // never taken (Aug 24 bug, Spec v2 §10).
+        onPatch({
+          statuses,
+          measures: { ...zs.measures, [field.key]: "" },
+        });
       }}
     />
   ) : null;
@@ -3870,6 +4145,7 @@ function FieldRow({
                   className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none"
                 />
               ) : null}
+              {specControl}
               {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
             </div>
           </div>
@@ -3910,6 +4186,9 @@ function FieldRow({
               placeholder="Search or select"
               otherPlaceholder={`Enter ${field.label.toLowerCase()}`}
             />
+            {specControl ? (
+              <div className="flex justify-end">{specControl}</div>
+            ) : null}
             {showFluidPrefillTag ? (
               <div className="flex justify-end">
                 <SpecSourceTag source={prefill!.source} />
@@ -3981,6 +4260,7 @@ function FieldRow({
               onChange={(event) => setText(event.target.value)}
               className="w-full rounded-lg border border-primary/20 bg-card px-2 py-1.5 text-[13px] text-foreground focus:border-primary focus:outline-none disabled:cursor-not-allowed disabled:opacity-50"
             />
+            {specControl}
             {showPrefillTag ? <SpecSourceTag source={prefill!.source} /> : null}
           </div>
           {rotorNotConfirmed ? null : unavailableControl}
@@ -4035,6 +4315,9 @@ function FieldRow({
               />
             )
           ) : null}
+          {specControl ? (
+            <div className="flex justify-end">{specControl}</div>
+          ) : null}
           {showPrefillTag ? (
             <div className="flex justify-end">
               <SpecSourceTag source={prefill!.source} />
@@ -4045,6 +4328,41 @@ function FieldRow({
       </Row>
       {errorMessage ? <InlineFieldError message={errorMessage} /> : null}
     </div>
+  );
+}
+
+/**
+ * Inline confirm control for a passport-seeded spec — an in-place alternative to
+ * tapping the field's amber pill in the floating rail. Clicking runs the same
+ * `markSpecChecked(fieldKey)` path (via `onConfirm`), so once every seeded field
+ * in the zone is confirmed the zone auto-confirms, and the copy-to-other-side
+ * flow (which whole-zone-confirms via `markSpecReviewed`) flips these to green
+ * automatically.
+ */
+function SpecConfirmControl({
+  confirmed,
+  onConfirm,
+}: {
+  confirmed: boolean;
+  onConfirm: () => void;
+}) {
+  if (confirmed) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+        <CheckCircle2 className="h-3.5 w-3.5" />
+        Spec confirmed
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={onConfirm}
+      className="inline-flex items-center gap-1 cursor-pointer rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700 transition-colors hover:bg-amber-100"
+    >
+      <Check className="h-3.5 w-3.5" />
+      Confirm spec
+    </button>
   );
 }
 
@@ -4843,9 +5161,18 @@ function PartsVerifyRow({
       </div>
 
       {item.current ? (
-        <p className="mb-2 text-[11px] text-muted-foreground">
-          Current guess: {item.current.name} · {item.current.oemNumber} (
-          {Math.round(item.current.confidence * 100)}% confidence)
+        <p className="mb-2 flex flex-wrap items-center gap-x-1 text-[11px] text-muted-foreground">
+          <span>
+            Current guess: {item.current.name}
+            {item.current.oemNumber ? " ·" : ""}
+          </span>
+          {item.current.oemNumber ? (
+            <CopyableOemNumber
+              value={item.current.oemNumber}
+              className="text-[11px] text-muted-foreground"
+            />
+          ) : null}
+          <span>({Math.round(item.current.confidence * 100)}% confidence)</span>
         </p>
       ) : null}
 
@@ -5179,7 +5506,7 @@ function ResultsScreen({
    *  the inspection SUBMIT, not a button here. */
   onOpenScope: () => void;
   /** The booking is already running. Pre-job (false): the added scope is sent as
-   *  part of "Submit → Vehicle Health" (commitInspectionAndAwaitEstimate opens
+   *  part of "Submit" (commitInspectionAndAwaitEstimate opens
    *  the estimate), so there's NO "Price & send" here — just a note that submit
    *  will prompt it. Mid-job (true): the job's underway with no such submit step,
    *  so the line keeps its own "Price & send" → mid-job change. */
@@ -5296,7 +5623,7 @@ function ResultsScreen({
             // mechanic that's where it happens. No standalone send button.
             <p className="mb-2 flex items-center gap-1.5 rounded-lg bg-primary/[0.06] px-2.5 py-1.5 text-[11px] font-medium text-primary">
               <Wrench className="h-3.5 w-3.5 flex-shrink-0" />
-              Ready — &ldquo;Submit → Vehicle Health&rdquo; will prompt you to
+              Ready — &ldquo;Submit&rdquo; will prompt you to
               price and send this added scope for the customer&apos;s
               confirmation.
             </p>
@@ -5312,7 +5639,7 @@ function ResultsScreen({
                 </span>
                 {/* Mid-job only: the running job has no inspection-submit step to
                     carry the estimate, so each line keeps its own send. A pre-job
-                    inspection sends everything through "Submit → Vehicle Health". */}
+                    inspection sends everything through "Submit". */}
                 {jobInProgress ? (
                   <button
                     type="button"

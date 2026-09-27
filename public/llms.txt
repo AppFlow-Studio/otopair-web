@@ -36,10 +36,10 @@
 - https://otopair.com/partner-with-us: Shop partnership overview
 - https://otopair.com/apply: Shop application form
 - https://otopair.com/trust-and-safety: How the price, the money and the reviews are protected
-- https://otopair.com/how-shops-are-verified: The verification standard, including what is not checked
+- https://otopair.com/trust: How we choose shops: the checks every shop passes before it goes live
 - https://otopair.com/vehicle-health-score: The 0–100 score, what it tracks and what it does not
-- https://otopair.com/cancellation-policy: Cancellation, reschedule and no-show rules
-- https://otopair.com/warranty: What Otopair does and does not warrant
+- https://otopair.com/cancellation: Cancellations and no-shows
+- https://otopair.com/warranties: Warranties and service issues: who stands behind the work
 - https://otopair.com/security: What is in place, and what is not claimed yet
 - https://otopair.com/help: Answer-first help articles (one question per page under /help/)
 - https://otopair.com/download: Get the app

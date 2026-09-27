@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { useQuery } from "convex/react";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import {
   AlertCircle,
   Calendar,
@@ -66,6 +67,8 @@ interface VehiclePassportCardJob {
   vin: string;
   vehicle: string;
   serviceNames: string[];
+  /** Per-service agreed labor hours, matched to `serviceNames` by name. */
+  perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   totalCost: number;
   laborCost: number;
   partsCost: number;
@@ -113,16 +116,12 @@ function formatCents(cents: number | null | undefined): string {
   return formatCurrency(cents / 100);
 }
 
-function formatLaborHours(minutes?: number | null): string {
-  if (typeof minutes !== "number" || !Number.isFinite(minutes) || minutes <= 0) {
+/** Decimal-hour labor display, e.g. 75 min → "1.25 hr", 0.75 hr → "0.75 hr". */
+function formatHoursDecimal(hours?: number | null): string {
+  if (typeof hours !== "number" || !Number.isFinite(hours) || hours <= 0) {
     return "—";
   }
-  const total = Math.round(minutes);
-  if (total < 60) return `${total} min`;
-  const h = Math.floor(total / 60);
-  const m = total - h * 60;
-  if (m === 0) return `${h} hr`;
-  return `${h} hr ${m} min`;
+  return `${hours.toFixed(2)} hr`;
 }
 
 function formatLaborMinutes(minutes?: number | null): string {
@@ -279,6 +278,20 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
   const wasAdjusted =
     effectiveQuote != null && originalTotalCents !== totalCents;
 
+  // Agreed labor hours per service, keyed by name so each SERVICES row can show
+  // its own time. First value wins on the rare duplicate name.
+  const laborHoursByService = new Map<string, number>();
+  for (const line of job.perServiceLabor ?? []) {
+    if (
+      line?.name &&
+      typeof line.laborHours === "number" &&
+      line.laborHours > 0 &&
+      !laborHoursByService.has(line.name)
+    ) {
+      laborHoursByService.set(line.name, line.laborHours);
+    }
+  }
+
   return (
     <div className="space-y-4 text-sm">
       <div>
@@ -289,11 +302,22 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
           {job.serviceNames.length === 0 ? (
             <li className="text-muted-foreground">No services on file.</li>
           ) : (
-            job.serviceNames.map((name, i) => (
-              <li key={`${name}-${i}`} className="text-foreground">
-                {name}
-              </li>
-            ))
+            job.serviceNames.map((name, i) => {
+              const hrs = laborHoursByService.get(name);
+              return (
+                <li
+                  key={`${name}-${i}`}
+                  className="flex items-baseline justify-between gap-3 text-foreground"
+                >
+                  <span className="min-w-0">{name}</span>
+                  {typeof hrs === "number" ? (
+                    <span className="shrink-0 tabular-nums text-xs text-muted-foreground">
+                      {formatHoursDecimal(hrs)}
+                    </span>
+                  ) : null}
+                </li>
+              );
+            })
           )}
         </ul>
       </div>
@@ -322,10 +346,20 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
                   <p className="truncate font-medium text-foreground">
                     {p.part_name}
                   </p>
-                  <p className="truncate text-xs text-muted-foreground">
-                    {p.oem_number}
-                    {p.brand ? ` · ${p.brand}` : ""}
-                    {p.quantity > 1 ? ` · ×${p.quantity}` : ""}
+                  <p className="flex min-w-0 items-center text-xs text-muted-foreground">
+                    <CopyableOemNumber
+                      value={p.oem_number}
+                      className="text-xs text-muted-foreground"
+                      emptyFallback=""
+                    />
+                    {p.brand ? (
+                      <span className="truncate">&nbsp;· {p.brand}</span>
+                    ) : null}
+                    {p.quantity > 1 ? (
+                      <span className="whitespace-nowrap">
+                        &nbsp;· ×{p.quantity}
+                      </span>
+                    ) : null}
                   </p>
                 </div>
                 <p className="shrink-0 tabular-nums text-foreground">
@@ -346,7 +380,13 @@ function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
         </div>
         <div className="mt-1 flex items-center justify-between text-sm">
           <span className="text-muted-foreground">
-            Labor ({formatLaborHours(job.estimatedLaborMinutes)})
+            Labor (
+            {formatHoursDecimal(
+              job.estimatedLaborMinutes != null
+                ? job.estimatedLaborMinutes / 60
+                : null,
+            )}
+            )
           </span>
           <span className="tabular-nums text-foreground">
             {formatCents(laborCents)}

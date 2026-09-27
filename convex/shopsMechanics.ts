@@ -13,6 +13,7 @@ import {
   listNextAvailableWindowsForShop,
 } from "./lib/timeSlotAvailability";
 import { SLOT_GRID_MINUTES } from "./lib/schedule_overlap";
+import { billablePart } from "./lib/parts";
 import {
   enrichReviews,
   resolveVehicleDisplay,
@@ -354,7 +355,9 @@ export const detail = query({
           minutes: j.actual_labor_minutes ?? null,
           est_minutes: b?.estimated_labor_minutes ?? null,
           parts_cost: j.actual_parts_cost ?? null,
-          parts_count: Array.isArray(j.parts_used) ? j.parts_used.length : null,
+          parts_count: Array.isArray(j.parts_used)
+            ? j.parts_used.filter(billablePart).length
+            : null,
           difficulty: j.difficulty_rating ?? null,
           mileage_in: j.odometer_in ?? null,
           mileage_out: j.completion_mileage ?? null,

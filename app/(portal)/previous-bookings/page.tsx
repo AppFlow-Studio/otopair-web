@@ -1,5 +1,6 @@
 "use client";
 
+import { notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -13,6 +14,7 @@ import RescheduleConfirmationDialog, {
 } from "@/components/reschedule-confirmation-dialog";
 import { StatusPill } from "@/components/status-pill";
 import { formatJobDate } from "../bookings/booking-list-shared";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 type Segment = "bookings" | "quotes";
 
@@ -229,7 +231,7 @@ export default function PreviousBookingsPage() {
                 }}
                 onRequestRescheduleConfirmation={handleProposeReschedule}
                 onClose={() => setSelectedJobId(null)}
-                onSuccess={setSuccessMessage}
+                onSuccess={(msg) => notify.success(msg)}
                 hideDisclosedRange
               />
             </div>
@@ -326,7 +328,7 @@ function BookingsTable({
                 </td>
                 <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
                 <td className="max-w-56 truncate px-3 py-4 text-foreground">
-                  {job.serviceNames.join(", ")}
+                  {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                 </td>
                 <td className="px-3 py-4">
                   <StatusPill status={job.status} />

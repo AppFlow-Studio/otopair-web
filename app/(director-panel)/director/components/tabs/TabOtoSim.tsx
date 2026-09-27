@@ -8,6 +8,7 @@ import { Button, Input, Card, Badge, IconSearch, IconCar } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { summarizeRenderDirectives, type RenderDirectiveRow } from './renderDirectiveSummary'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 type QuickReply = { id?: string; text: string; value?: string; variant?: string }
 type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[]; render?: RenderDirectiveRow[] }
@@ -45,8 +46,8 @@ function rejectionMessage(res: TruthResult): string {
 // Applied-success summary line.
 function appliedMessage(res: TruthResult): string {
   return `✓ Applied${res.mileageUpdated ? ' · mileage' : ''}` +
-    `${res.servicesCompleted?.length ? ` · recorded done ${res.servicesCompleted.join(', ')}` : ''}` +
-    `${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.join(', ')}` : ''}` +
+    `${res.servicesCompleted?.length ? ` · recorded done ${res.servicesCompleted.map(formatServiceDisplayName).join(', ')}` : ''}` +
+    `${res.servicesFlagged?.length ? ` · flagged ${res.servicesFlagged.map(formatServiceDisplayName).join(', ')}` : ''}` +
     `${res.faultLightsAdded?.length ? ` · lights ${res.faultLightsAdded.join(', ')}` : ''}`
 }
 

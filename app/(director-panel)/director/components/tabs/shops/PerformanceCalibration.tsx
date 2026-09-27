@@ -7,6 +7,7 @@ import { DirectorSessionCtx } from '../../DirectorSessionCtx'
 import { Badge } from '../../Primitives'
 import { LoadingBlock } from './shopsUi'
 import type { CalibrationService } from '@/convex/shopsPerformance'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // Labor variance calibration — median predicted-vs-actual per service.
 // Data lives in spec_variances (0 rows live today; empty state is honest).
@@ -69,7 +70,7 @@ export const PerformanceCalibration = () => {
             {services.map((svc, i) => (
               <tr key={svc.service} style={{ borderTop: i > 0 ? '1px solid var(--slate-100)' : undefined }}>
                 <td style={{ padding: '10px 14px', color: 'var(--slate-800)', fontWeight: 500 }}>
-                  {svc.service}
+                  {formatServiceDisplayName(svc.service)}
                 </td>
                 <td style={{ textAlign: 'right', padding: '10px 14px', color: 'var(--slate-500)' }}>
                   {svc.n}

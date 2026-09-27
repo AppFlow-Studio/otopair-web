@@ -24,6 +24,7 @@ export type InfoCardPayload = {
   pros?: string[];
   cons?: string[];
   footnote?: string;
+  link?: { url: string; label: string };
 };
 
 /** Coerce to a single-line, length-capped string (empty if not a string). */
@@ -94,6 +95,18 @@ export function sanitizeInfoCard(raw: unknown): InfoCardPayload | null {
     else if (pros?.length || cons?.length) layout = "compare";
   }
 
+  let link: { url: string; label: string } | undefined;
+  if (r.link && typeof r.link === "object") {
+    const rawLink = r.link as Record<string, unknown>;
+    const url = str(rawLink.url, 120);
+    const label = str(rawLink.label, 60);
+    if (url && label) link = { url, label };
+  } else if (typeof r.url === "string" && r.url) {
+    const url = str(r.url, 120);
+    const label = str(r.link_label ?? r.linkLabel ?? "View Page", 60);
+    if (url) link = { url, label: label || "View Page" };
+  }
+
   return {
     title,
     summary: str(r.summary, 160) || undefined,
@@ -104,5 +117,6 @@ export function sanitizeInfoCard(raw: unknown): InfoCardPayload | null {
     pros,
     cons,
     footnote: str(r.footnote, 200) || undefined,
+    link,
   };
 }

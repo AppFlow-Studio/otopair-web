@@ -125,8 +125,8 @@ export default function TermsPage() {
           dispute in the app. Otopair reviews the job record, the approvals and the messages, and can
           withhold or reverse a payout to the shop while it does. Any warranty on parts or labor is
           the shop&rsquo;s own, on the shop&rsquo;s terms; Otopair does not itself warrant repairs.
-          See the <Link href="/warranty">warranty page</Link> and the{" "}
-          <Link href="/cancellation-policy">cancellation policy</Link>.
+          See the <Link href="/warranties">warranty page</Link> and the{" "}
+          <Link href="/cancellation">cancellation policy</Link>.
         </p>
       </Section>
 

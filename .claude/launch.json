@@ -15,6 +15,12 @@
       "port": 3001
     },
     {
+      "name": "otopair-web-policies",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "../otopair-web-policies", "run", "dev", "--", "-p", "3002"],
+      "port": 3002
+    },
+    {
       "name": "otopair-web-prod",
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "start"],

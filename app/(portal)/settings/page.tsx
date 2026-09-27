@@ -134,7 +134,6 @@ function SettingsInner() {
   const [overrunAutoApplyMinutes, setOverrunAutoApplyMinutes] = useState(DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
   const [bufferMinutes, setBufferMinutes] = useState(10);
   const [maxPerMechanic, setMaxPerMechanic] = useState(2);
-  const [entityLabelMode, setEntityLabelMode] = useState<"mechanic" | "bay">("mechanic");
   const [reminderLeadMinutes, setReminderLeadMinutes] = useState(0);
   const [timezone, setTimezone] = useState("");
   const [timezoneHint, setTimezoneHint] = useState("");
@@ -150,7 +149,6 @@ function SettingsInner() {
     setOverrunAutoApplyMinutes(shop.overrun_auto_apply_minutes ?? DEFAULT_OVERRUN_AUTO_APPLY_MINUTES);
     setBufferMinutes(shop.buffer_minutes ?? 10);
     setMaxPerMechanic(shop.max_bookings_per_mechanic_rolling_hour ?? 2);
-    setEntityLabelMode(shop.entity_label_mode === "bay" ? "bay" : "mechanic");
     setReminderLeadMinutes(Number(shop.appointment_reminder_lead_minutes ?? 0));
   }, [shop]);
 
@@ -189,7 +187,6 @@ function SettingsInner() {
       overrunExtensionFloorMinutes: overrunFloor,
       bufferMinutes,
       maxBookingsPerMechanicRollingHour: maxPerMechanic,
-      entityLabelMode,
       appointmentReminderLeadMinutes: reminderLeadMinutes,
       overrunEscalationMinutes,
       overrunAutoApplyMinutes,
@@ -201,7 +198,6 @@ function SettingsInner() {
     overrunFloor,
     bufferMinutes,
     maxPerMechanic,
-    entityLabelMode,
     reminderLeadMinutes,
     overrunEscalationMinutes,
     overrunAutoApplyMinutes,
@@ -217,7 +213,6 @@ function SettingsInner() {
       overrunAutoApplyMinutes !== (shop.overrun_auto_apply_minutes ?? DEFAULT_OVERRUN_AUTO_APPLY_MINUTES) ||
       bufferMinutes !== (shop.buffer_minutes ?? 10) ||
       maxPerMechanic !== (shop.max_bookings_per_mechanic_rolling_hour ?? 2) ||
-      entityLabelMode !== (shop.entity_label_mode === "bay" ? "bay" : "mechanic") ||
       reminderLeadMinutes !== Number(shop.appointment_reminder_lead_minutes ?? 0));
 
   useRegisterSaveable("tz", "General", timezoneDirty, saveTimezone, () =>
@@ -507,23 +502,6 @@ function SettingsInner() {
                     />
                     <span className={schedFieldHelp}>
                       Soft cap on jobs per mechanic in any rolling 60-minute window.
-                    </span>
-                  </label>
-
-                  <label className="block">
-                    <span className={schedFieldLabel}>Booking entity label</span>
-                    <select
-                      value={entityLabelMode}
-                      onChange={(event) =>
-                        setEntityLabelMode(event.target.value as "mechanic" | "bay")
-                      }
-                      className={schedFieldInput}
-                    >
-                      <option value="mechanic">Mechanic (John, Mike, Sarah)</option>
-                      <option value="bay">Bay (Bay 1, Bay 2, Bay 3)</option>
-                    </select>
-                    <span className={schedFieldHelp}>
-                      How customer-visible UI refers to bookable slots.
                     </span>
                   </label>
 

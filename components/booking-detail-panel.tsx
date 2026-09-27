@@ -13,6 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { notify } from "@/lib/feedback";
 import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
@@ -23,6 +24,7 @@ import PostjobReportSection from "@/components/booking/postjob-report-section";
 import SendReceiptCard from "@/components/booking/send-receipt-card";
 import VinRepairPrompt from "@/components/booking/vin-repair-prompt";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { BookingMessagesDrawer } from "@/components/messages/booking-messages-drawer";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import {
@@ -35,12 +37,17 @@ import JobStepRing from "@/components/job-step-ring";
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
+import type { InspectionPhase } from "@/lib/inspection-template";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import RecommendServiceDrawer from "@/components/recommend-service-drawer";
 import EarlyArrivalConfirmDialog from "@/components/early-arrival-confirm-dialog";
 import EndCurrentJobConfirmDialog from "@/components/end-current-job-confirm-dialog";
-import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import {
+  splitDiagnosticServices,
+  templateForSystem,
+} from "@/lib/diagnostic-checklist-templates";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -69,7 +76,10 @@ import {
   drawerSelectTriggerClassName,
   DrawerFieldLabel,
 } from "@/components/drawer-panel-styles";
-import BookingTimelineModal from "@/components/booking/booking-timeline-modal";
+import BookingTimeline from "@/components/booking/booking-timeline";
+import BookingPickupPanel from "@/components/pickup/booking-pickup-panel";
+import ElapsedTimer from "@/components/mechanic/elapsed-timer";
+import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import {
   type ActivityEvent,
@@ -528,7 +538,7 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
         ) : null}
       </div>
       <div className="text-sm font-semibold">
-        {job.recommendedServiceName ?? "Recommended service"}
+        {formatServiceDisplayName(job.recommendedServiceName) || "Recommended service"}
       </div>
       {job.recommendedServiceNote ? (
         <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed opacity-90">
@@ -637,6 +647,8 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  /** Per-service agreed labor hours, matched to `serviceNames` by name. */
+  perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   tireSpecs?: {
     size: string;
     type: string;
@@ -680,6 +692,13 @@ export interface JobDetailData {
   assignmentPreference?: "any" | "specific_mechanic";
   vehicleArrivedAtMs?: number | null;
   vehicleArrivedByUserId?: Id<"users"> | null;
+  // Pickup ("request to cancel & pick up car") round trip — drives the in-drawer
+  // pickup panel so the request stays actionable after it drops off the board.
+  cancelRequestedAtMs?: number | null;
+  cancelRequestReason?: string | null;
+  pickupResponse?: "acknowledged" | "bringing_out" | "declined" | null;
+  pickupRespondedAtMs?: number | null;
+  pickupRequestResolvedAtMs?: number | null;
   history: Array<{
     _id: Id<"booking_status_history">;
     changed_at: number;
@@ -687,6 +706,12 @@ export interface JobDetailData {
     new_status: string;
     reason?: string;
   }>;
+  latestLifecycleEvent?: {
+    status: string;
+    reason: string | null;
+    actor: "customer" | "shop_member" | "unknown";
+    actorName: string | null;
+  } | null;
   // Reschedule fields
   previousScheduledDate?: string | null;
   previousScheduledTime?: string | null;
@@ -703,6 +728,8 @@ export interface JobDetailData {
     _id: Id<"job_actuals">;
     status: "draft" | "finalized";
     startedAt?: number | null;
+    mpiStartedAt?: number | null;
+    mpiCompletedAt?: number | null;
     completedAtMs?: number | null;
     loggedAtMs?: number | null;
     finalizedAtMs?: number | null;
@@ -830,12 +857,40 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
     const [actionError, setActionError] = useState("");
+
+    // Success already toasts through each parent's onSuccess handler, but a
+    // failed action only set inline `actionError` before — surface it as a toast
+    // too so every action reacts. The assign-mechanic conflict text is a
+    // pre-click "why blocked" hint (shown inline by the button), not a failure,
+    // so it's excluded here.
+    useEffect(() => {
+      if (actionError && !actionError.startsWith("Cannot assign this mechanic")) {
+        notify.error(actionError);
+      }
+    }, [actionError]);
     const [showDeclineModal, setShowDeclineModal] = useState(false);
-    const [showTimelineModal, setShowTimelineModal] = useState(false);
+    const [activeTab, setActiveTab] = useState<"details" | "timeline">("details");
     const [nowMs, setNowMs] = useState(() => Date.now());
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
     const [declineOtherText, setDeclineOtherText] = useState("");
     const [showPrejobDialog, setShowPrejobDialog] = useState(false);
+    // Which half of the split inspection this booking is on. Keyed on status,
+    // not on mpiStartedAt — that timestamp used to be the signal, but it gets
+    // written by more than one server mutation, and a booking still waiting on
+    // a customer's pre-job estimate approval (status still vehicle_at_shop)
+    // must never read as "mpi", no matter what any timestamp says. status is
+    // the one field with a single, guarded writer.
+    const inspectionPhase: InspectionPhase =
+      job?.status === "in_progress" ? "mpi" : "pre";
+    // True while the on-lift half is still gating: the job has genuinely
+    // started but the last required MPI item hasn't landed. The job can't be
+    // completed and the labor clock hasn't started. Requires status ===
+    // in_progress on top of the timestamps as defense in depth — this is
+    // exactly the pair of fields a past bug let drift out of sync.
+    const mpiGateOpen =
+      job?.status === "in_progress" &&
+      job?.jobActuals?.mpiStartedAt != null &&
+      job?.jobActuals?.mpiCompletedAt == null;
     const [showPostjobDialog, setShowPostjobDialog] = useState(false);
     const [showPrejobEstimateDialog, setShowPrejobEstimateDialog] = useState(false);
     const [showMidJobDialog, setShowMidJobDialog] = useState(false);
@@ -845,6 +900,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     >(null);
     const [isEditingActuals, setIsEditingActuals] = useState(false);
     const [showCancelConfirm, setShowCancelConfirm] = useState(false);
+    // Cancel + decline are two-step: pick a reason, then an explicit "are you
+    // sure" summary. Only one of the two dialogs is ever open, so they share it.
+    const [endBookingStep, setEndBookingStep] = useState<"reason" | "confirm">("reason");
+    useEffect(() => {
+      if (!showCancelConfirm && !showDeclineModal) setEndBookingStep("reason");
+    }, [showCancelConfirm, showDeclineModal]);
     const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
@@ -916,6 +977,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const cancelJob = useMutation(api.bookings.cancel);
     const updateJob = useMutation(api.bookings.update);
     const markVehicleAtShop = useMutation(api.bookings.markVehicleAtShop);
+    const updateStatus = useMutation(api.bookings.updateStatus);
     const markPostThresholdNoShow = useMutation(api.bookings.markPostThresholdNoShow);
     const markNoShow = useMutation(api.bookings.markNoShow);
     const shopCancelReschedule = useMutation(api.bookings.shopCancelReschedule);
@@ -924,6 +986,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     const commitInspectionAndAwaitEstimate = useMutation(
       api.bookings.commitInspectionAndAwaitEstimate,
     );
+    const completeMpiPhase = useMutation(api.bookings.completeMpiPhase);
     const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
     const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
     const finalizeActuals = useMutation(api.job_actuals.finalizeByBooking);
@@ -1017,6 +1080,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     // we know the conflicting id immediately. Fetch its summary directly so
     // the dialog renders accurate copy without waiting for the reactive
     // `activeJobConflict` query to catch up.
+    // Server-side reason Accept would refuse (closed / past close / blocked).
+    const acceptWindowIssue = useQuery(
+      api.bookings.getAcceptWindowIssue,
+      job?._id &&
+        (job.status === "pending" || job.status === "pending_shop_acceptance")
+        ? { bookingId: job._id }
+        : "skip"
+    );
     const raceConflictSummary = useQuery(
       api.bookings.getActiveJobSummaryById,
       raceConflictBookingId ? { bookingId: raceConflictBookingId } : "skip"
@@ -1065,7 +1136,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       markNotificationsRead({ bookingId: jobId }).catch(() => {});
     }, [jobId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Sync assign dropdown with job's current mechanic
+    // Reset booking-scoped UI only when navigating to a different booking.
     useEffect(() => {
       if (!jobId) return;
       setActionError("");
@@ -1074,14 +1145,34 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowEarlyArrivalDialog(false);
       setShowEndCurrentJobDialog(false);
       setRaceConflictBookingId(null);
-      setAssigningMechanicId(currentAssignmentKey);
       setIsEditingActuals(false);
+      setActiveTab("details");
       setCopiedField(null);
       if (copyEmailTimeoutRef.current !== null) {
         window.clearTimeout(copyEmailTimeoutRef.current);
         copyEmailTimeoutRef.current = null;
       }
+    }, [jobId]);
+
+    // A live reassignment updates the selector but must not close an active
+    // workflow: its BookingWorkflowGuard needs to show any acknowledgement.
+    useEffect(() => {
+      if (!jobId) return;
+      setAssigningMechanicId(currentAssignmentKey);
     }, [jobId, currentAssignmentKey]);
+
+    // Spec v2 §2 step 3: once the job is running, the on-lift half opens by
+    // itself rather than waiting to be found. Dismissible — §2.1 is explicit
+    // that the modal never gates, the job state does — but it comes back on
+    // the next visit to this booking while the gate is still open. Keyed by
+    // booking so dismissing it doesn't re-trigger on every render.
+    const autoOpenedMpiFor = useRef<string | null>(null);
+    useEffect(() => {
+      if (!jobId || !mpiGateOpen) return;
+      if (autoOpenedMpiFor.current === String(jobId)) return;
+      autoOpenedMpiFor.current = String(jobId);
+      setShowPrejobDialog(true);
+    }, [jobId, mpiGateOpen]);
 
     // Reset decline modal state when it closes
     useEffect(() => {
@@ -1129,6 +1220,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         );
         return;
       }
+      if (acceptWindowIssue) {
+        setActionError(`Can't accept — ${acceptWindowIssue} Propose a new time instead.`);
+        return;
+      }
       setActionError("");
       setIsActioning(true);
       try {
@@ -1158,7 +1253,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowDeclineModal(false);
         setDeclineReason(DECLINE_REASONS[0]);
         setDeclineOtherText("");
-        onSuccess?.("Booking declined");
+        onSuccess?.(
+          !isWalkIn
+            ? "Booking declined — the customer has been notified"
+            : "Booking declined",
+        );
       } catch (err: unknown) {
         setActionError(
           err instanceof Error ? err.message : "Could not decline booking.",
@@ -1192,7 +1291,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowCancelConfirm(false);
         const shouldOpenNew = createNewAfterCancel;
         setCreateNewAfterCancel(false);
-        onSuccess?.(isNoShow ? "Booking marked no-show" : "Booking cancelled");
+        onSuccess?.(
+          isNoShow
+            ? "Booking marked no-show"
+            : !isWalkIn
+              ? "Booking cancelled — the customer has been notified"
+              : "Booking cancelled",
+        );
         if (shouldOpenNew && onRequestNewBookingAfterCancel) {
           onRequestNewBookingAfterCancel({
             mechanicId: job.mechanicId ?? null,
@@ -1210,6 +1315,42 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       } finally {
         setIsActioning(false);
       }
+    }
+
+    // Step-2 "are you sure" body for the cancel / decline dialogs: restates
+    // exactly which booking ends, why, and what the customer will see.
+    function endBookingSummary(
+      kind: "cancelled" | "declined" | "no_show",
+      reason: string,
+    ) {
+      if (!job) return null;
+      const services = job.serviceNames.map(formatServiceDisplayName).join(", ");
+      const consequence =
+        kind === "no_show"
+          ? "The booking closes as a no-show and any no-show fee in your policy is charged."
+          : isWalkIn
+            ? "The booking is removed from your schedule and the time slot is freed."
+            : `${job.customerName || "The customer"} gets a push notification that the booking was ${kind}, and their card hold is released.`;
+      return (
+        <div className="mb-2 space-y-3">
+          <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm">
+            <p className="font-medium text-foreground">
+              {services || "Booking"}
+              {job.customerName ? ` · ${job.customerName}` : ""}
+            </p>
+            <p className="mt-0.5 text-muted-foreground">
+              {job.vehicle ? `${job.vehicle} · ` : ""}
+              {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+            </p>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Reason: <span className="text-foreground">{reason}</span>
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {consequence} This can&apos;t be undone.
+          </p>
+        </div>
+      );
     }
 
     async function handleCancelReschedule() {
@@ -1358,6 +1499,43 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       setShowPrejobDialog(true);
     }
 
+    // Dedicated "Start job": begins an at-shop booking whose estimate is already
+    // settled (customer-confirmed, or declined-and-continuing at original scope).
+    // The estimate popup only CONFIRMS now — it never starts — so starting the
+    // labor clock is this explicit action. The transition itself is exactly what
+    // the popup used to do (updateStatus -> in_progress); the FSM's in_progress
+    // guard already blocks any not-yet-approved state.
+    async function handleBeginJob() {
+      if (!job?._id || !job.mechanicId) return;
+      if (job.status !== "vehicle_at_shop") {
+        setActionError("Mark the vehicle here before starting work.");
+        return;
+      }
+      setActionError("");
+      if (activeJobConflict) {
+        setShowEndCurrentJobDialog(true);
+        return;
+      }
+      setIsActioning(true);
+      try {
+        await updateStatus({
+          bookingId: job._id,
+          newStatus: "in_progress",
+          reason: "job_started",
+        });
+        onSuccess?.("Job started");
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "";
+        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+          setShowEndCurrentJobDialog(true);
+        } else {
+          setActionError(message || "Could not start the job.");
+        }
+      } finally {
+        setIsActioning(false);
+      }
+    }
+
     async function handleVehicleAtShop() {
       if (!job?._id) return;
       setActionError("");
@@ -1432,7 +1610,17 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             inspection,
           });
           setShowPrejobDialog(false);
-          onSuccess?.("Pre-job inspection saved");
+          onSuccess?.("Inspection saved");
+        } else if (inspectionPhase === "mpi") {
+          // The job is already running — submitting here closes the on-lift
+          // half, which ends the inspection window and starts the labor clock.
+          await completeMpiPhase({
+            bookingId: job._id,
+            prejob: payload,
+            inspection,
+          });
+          setShowPrejobDialog(false);
+          onSuccess?.("Inspection complete — job clock started");
         } else if (isNewCycle) {
           await commitInspectionAndAwaitEstimate({
             bookingId: job._id,
@@ -1447,7 +1635,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             prejob: payload,
             inspection,
           });
-          setShowPrejobDialog(false);
+          // Deliberately not closing here: the job just started, so the
+          // on-lift half is the very next thing to fill in. Once the
+          // reactive job query catches up, status flips to in_progress and
+          // this same dialog re-renders straight into the mpi phase — no
+          // visible close-then-reopen flash, no separate tap required.
           onSuccess?.("Booking started");
         }
       } catch (err: unknown) {
@@ -1467,8 +1659,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           setActionError(
             message ||
               (action === "close"
-                ? "Could not save the pre-job vehicle check."
-                : "Could not start booking."),
+                ? "Could not save the vehicle check."
+                : inspectionPhase === "mpi"
+                  ? "Could not submit the on-lift inspection."
+                  : "Could not start booking."),
           );
           throw err;
         }
@@ -1691,10 +1885,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             return true;
           }
           if (e.key === "d" || e.key === "Enter") {
-            handleDecline();
+            // Enter/d only advances one step — a single keypress never declines.
+            if (endBookingStep === "reason") setEndBookingStep("confirm");
+            else handleDecline();
             return true;
           }
-          if (e.key === "c") {
+          if (e.key === "Backspace" && endBookingStep === "confirm") {
+            setEndBookingStep("reason");
+            return true;
+          }
+          if (e.key === "k") {
             setShowDeclineModal(false);
             return true;
           }
@@ -1724,7 +1924,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             return true;
           }
           if (e.key === "c" || e.key === "Enter") {
-            handleCancelJob();
+            // Enter/c only advances one step — a single keypress never cancels.
+            if (endBookingStep === "reason") setEndBookingStep("confirm");
+            else handleCancelJob();
+            return true;
+          }
+          if (e.key === "Backspace" && endBookingStep === "confirm") {
+            setEndBookingStep("reason");
             return true;
           }
           if (e.key === "e") {
@@ -1782,7 +1988,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     /* ---- Render ---- */
 
     const title = job
-      ? `${job.serviceNames.join(", ")} — ${job.customerName}`
+      ? `${job.serviceNames.map(formatServiceDisplayName).join(", ")} — ${job.customerName}`
       : "Booking Detail";
 
     // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
@@ -1800,9 +2006,38 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     s === "pending" || s === "pending_shop_acceptance";
                   const canAccept = isPendingIncoming && !quoteAwaitingCustomer;
                   const canAdjustQuote = isPendingIncoming && !quoteAwaitingCustomer;
-                  const canComplete = s === "in_progress" && !quoteAwaitingCustomer;
+                  // The on-lift half has to land before the job can close —
+                  // Vehicle Health computes off the union of both phases, and
+                  // half the brake inputs are missing until then (Spec v2 §7.3).
+                  const canComplete =
+                    s === "in_progress" && !quoteAwaitingCustomer && !mpiGateOpen;
+                  const canOpenMpi = s === "in_progress" && !quoteAwaitingCustomer;
                   const canMarkVehicleHere = s === "confirmed" && !quoteAwaitingCustomer;
-                  const canStartJob = s === "vehicle_at_shop" && !quoteAwaitingCustomer;
+                  const pasState = (job as any).paymentApprovalState as
+                    | string
+                    | undefined;
+                  const hasSubmittedEstimate =
+                    (job as any).hasDisclosedRange &&
+                    pasState != null &&
+                    pasState !== "none";
+                  // Customer confirmed (or auto in-range) → the job is ready to
+                  // begin via the dedicated Start Job button. The estimate popup
+                  // only confirms now; it never starts.
+                  const canBeginJob =
+                    s === "vehicle_at_shop" &&
+                    !quoteAwaitingCustomer &&
+                    (job as any).hasDisclosedRange &&
+                    (pasState === "in_range" || pasState === "pre_job_approved");
+                  // Open-vehicle-check (inspection) is for at-shop bookings that
+                  // still need the pre-job check: legacy non-range bookings, or
+                  // range bookings that haven't submitted an estimate yet. Once
+                  // an estimate exists, Start Job (approved) or the estimate
+                  // dialog (pending/declined) takes over.
+                  const canStartJob =
+                    s === "vehicle_at_shop" &&
+                    !quoteAwaitingCustomer &&
+                    !canBeginJob &&
+                    !hasSubmittedEstimate;
                   const canMarkNoShow = s === "confirmed" && !quoteAwaitingCustomer;
                   const canDecline = isPendingIncoming && !quoteAwaitingCustomer;
                   const canCancel =
@@ -1828,6 +2063,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     !canAccept &&
                     !canAdjustQuote &&
                     !canMarkVehicleHere &&
+                    !canBeginJob &&
+                    !canStartJob &&
                     !canComplete &&
                     !canDecline &&
                     !canCancel &&
@@ -1847,13 +2084,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           fixed price in the shop&apos;s service catalog.
                         </div>
                       ) : null}
+                      {canAccept && acceptWindowIssue ? (
+                        <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-900">
+                          <span className="font-semibold">Outside available hours.</span>{" "}
+                          {acceptWindowIssue} Propose a new time instead of accepting.
+                        </div>
+                      ) : null}
                       <div className="flex flex-wrap items-center gap-2">
                         {canAccept && (
                           <button
                             onClick={() =>
                               handleStatusAction("accept")
                             }
-                            disabled={isActioning}
+                            disabled={isActioning || !!acceptWindowIssue}
                             className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
                           >
                             {isActioning && (
@@ -1875,6 +2118,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             )}
                           </button>
                         )}
+                        {canBeginJob && (
+                          <button
+                            onClick={handleBeginJob}
+                            disabled={!job.mechanicId || isActioning}
+                            title={
+                              !job.mechanicId
+                                ? "Assign a mechanic first"
+                                : "Estimate confirmed — begin the job and start the clock."
+                            }
+                            className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                          >
+                            {isActioning ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : null}
+                            Start job
+                          </button>
+                        )}
                         {canStartJob && (
                           <button
                             onClick={handleStartJob}
@@ -1889,6 +2149,60 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             Open vehicle check
                           </button>
                         )}
+                        {canOpenMpi &&
+                          (mpiGateOpen ? (
+                            <button
+                              onClick={() => {
+                                setActionError("");
+                                setShowPrejobDialog(true);
+                              }}
+                              disabled={isActioning}
+                              title="Measurements that need the car on the lift. The job can't be completed until these are in."
+                              className={`${drawerPrimaryButtonClassName} flex-1 py-2.5`}
+                            >
+                              Continue inspection
+                            </button>
+                          ) : (
+                            // Inspection is in — the on-lift half is no longer
+                            // gating. The mechanic's attention is now the running
+                            // job, so this slot surfaces the live labor clock and
+                            // pops the active-job pill (bottom-left of the
+                            // schedule) rather than reopening the inspection.
+                            <button
+                              type="button"
+                              onClick={() =>
+                                window.dispatchEvent(
+                                  new CustomEvent(OPEN_ACTIVE_JOB_EVENT, {
+                                    detail: { bookingId: job._id },
+                                  }),
+                                )
+                              }
+                              disabled={isActioning}
+                              title="Open the active-job pill — live timer, full-screen view, and overrun controls."
+                              className={`${drawerSecondaryButtonClassName} py-2.5`}
+                            >
+                              <span
+                                className={`inline-flex h-2 w-2 shrink-0 rounded-full ${
+                                  jobPaused
+                                    ? "bg-amber-500"
+                                    : "animate-pulse bg-emerald-500"
+                                }`}
+                              />
+                              <span>Open active job</span>
+                              <ElapsedTimer
+                                startedAtMs={job.jobActuals?.startedAt}
+                                paused={jobPaused}
+                                blockedMs={
+                                  (jobBlockers?.blockedMinutes ?? 0) * 60_000
+                                }
+                                className={`font-mono text-xs font-semibold tabular-nums ${
+                                  jobPaused
+                                    ? "text-amber-600"
+                                    : "text-foreground"
+                                }`}
+                              />
+                            </button>
+                          ))}
                         {canMarkVehicleHere && (
                           <button
                             onClick={handleVehicleAtShop}
@@ -1932,13 +2246,23 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               }
                               disabled={isActioning}
                               className={drawerSecondaryButtonClassName}
-                              title="View pending customer confirmation"
+                              title={
+                                (job as any).paymentApprovalState === "pre_job_declined"
+                                  ? "Customer declined — revise, continue with the original services, or release the vehicle."
+                                  : (job as any).paymentApprovalState === "sla_expired"
+                                    ? "No response in time — revise, continue with the original services, or release the vehicle."
+                                    : "View pending customer confirmation"
+                              }
                             >
                               {(job as any).paymentApprovalState === "post_job_pending"
                                 ? "Customer reviewing final billing"
                                 : (job as any).paymentApprovalState === "mid_job_pending"
                                   ? "Mid-job pending confirmation"
-                                  : "Open pending estimate"}
+                                  : (job as any).paymentApprovalState === "pre_job_declined"
+                                    ? "Review declined estimate"
+                                    : (job as any).paymentApprovalState === "sla_expired"
+                                      ? "Review expired estimate"
+                                      : "Open pending estimate"}
                             </button>
                           )}
                         {canComplete && job.status === "in_progress" && (
@@ -2040,6 +2364,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               destructive: true,
                             });
                           }
+                          if (canOpenMpi && !mpiGateOpen) {
+                            overflow.push({
+                              key: "edit-inspection",
+                              label: "Edit inspection",
+                              onSelect: () => setShowPrejobDialog(true),
+                            });
+                          }
                           if (canCancel) {
                             overflow.push({
                               key: "cancel",
@@ -2125,7 +2456,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   >
                     <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                        {job.serviceNames.join(", ")}
+                        {job.serviceNames.map(formatServiceDisplayName).join(", ")}
                         {job.customerName ? ` · ${job.customerName}` : ""}
                       </p>
                       {/* Renders only when this booking's car is on a placeholder
@@ -2224,10 +2555,34 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                     sentLabel={holdApproval.relativeSentLabel}
                     slaLabel={holdApproval.slaCountdownLabel}
                     addedServiceNames={pendingAddedServiceNames}
-                    onWithdraw={holdApproval.onWithdraw}
+                    onWithdraw={async () => {
+                      await holdApproval.onWithdraw();
+                      notify.success("Approval request withdrawn");
+                    }}
                   />
                 ) : null}
                 {actionBar}
+              </div>
+            ) : null}
+            {job ? (
+              <div className="flex items-center gap-1 border-t border-border px-3">
+                {(["details", "timeline"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={`relative px-3 py-2.5 text-[13px] font-semibold transition-colors ${
+                      activeTab === tab
+                        ? "text-foreground"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {tab === "details" ? "Details" : "Timeline"}
+                    {activeTab === tab ? (
+                      <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+                    ) : null}
+                  </button>
+                ))}
               </div>
             ) : null}
           </div>
@@ -2251,8 +2606,27 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               <p className="text-sm text-muted-foreground">
                 Booking not found.
               </p>
+            ) : activeTab === "timeline" ? (
+              <BookingTimeline
+                activityLog={activityLog}
+                hideDisclosedRange={hideDisclosedRange}
+              />
             ) : (
               <div className="divide-y divide-border">
+                {/* Pickup request — pinned to the top so the mechanic can
+                    always act on it from the booking itself, even after it
+                    drops off the schedule board / dashboard alert. Renders
+                    nothing (no DOM node, so divide-y skips it) unless the car's
+                    here and a pickup was requested — see BookingPickupPanel. */}
+                <BookingPickupPanel
+                  bookingId={job._id as Id<"bookings">}
+                  status={job.status}
+                  cancelRequestedAtMs={job.cancelRequestedAtMs ?? null}
+                  cancelRequestReason={job.cancelRequestReason ?? null}
+                  pickupResponse={job.pickupResponse ?? null}
+                  pickupRespondedAtMs={job.pickupRespondedAtMs ?? null}
+                />
+
                 <VehiclePassportCard
                   job={job}
                   passport={vehiclePassport ?? null}
@@ -2529,7 +2903,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   </p>
                   <button
                     type="button"
-                    onClick={() => setShowTimelineModal(true)}
+                    onClick={() => setActiveTab("timeline")}
                     className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary transition-opacity hover:opacity-80"
                   >
                     Full timeline
@@ -2653,36 +3027,49 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
         />
 
-        <MultiPointInspectionDialog
+        <BookingWorkflowGuard
+          open={showPrejobDialog}
+          booking={job}
+          allowedStatuses={[inspectionPhase === "mpi" ? "in_progress" : "vehicle_at_shop"]}
+          onAcknowledge={() => setShowPrejobDialog(false)}
+        >
+          <MultiPointInspectionDialog
           open={showPrejobDialog}
           bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
               : ""
           }
-          bookingServices={job?.serviceNames ?? []}
-          jobInProgress={job?.status === "in_progress"}
+          bookingServices={job?.serviceNames?.map(formatServiceDisplayName) ?? []}
+          phase={inspectionPhase}
           tireReplacementPositions={job?.tireSpecs?.positions ?? []}
           passportData={vehiclePassport ?? null}
           prefillData={job?.jobActuals?.prejobReport ?? null}
           isSubmitting={isSubmittingPrejob}
           onClose={() => setShowPrejobDialog(false)}
           onSubmit={handleStartWithPrejob}
-          onSaveDraft={handleSaveInspectionDraft}
-        />
+            onSaveDraft={handleSaveInspectionDraft}
+          />
+        </BookingWorkflowGuard>
 
-        <DiagnosticChecklistDialog
+        <BookingWorkflowGuard
           open={showDiagnosticDialog}
+          booking={job}
+          allowedStatuses={["in_progress"]}
+          onAcknowledge={() => setShowDiagnosticDialog(false)}
+        >
+          <DiagnosticChecklistDialog
+            open={showDiagnosticDialog}
           bookingId={job?._id ?? null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2703,10 +3090,25 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           recommendedServiceNote={job?.recommendedServiceNote ?? null}
           followupState={job?.diagnosticFollowupState ?? null}
           awaitingInfoNote={job?.awaitingInfoNote ?? null}
+          isDiagnosticOnly={
+            splitDiagnosticServices(job?.serviceNames ?? []).additional.length ===
+            0
+          }
+          additionalServiceNames={splitDiagnosticServices(
+            job?.serviceNames ?? [],
+          ).additional.map(formatServiceDisplayName)}
           onClose={() => setShowDiagnosticDialog(false)}
-          onCompleted={() => {
+          onCompleted={(msg) => {
             setShowDiagnosticDialog(false);
-            onSuccess?.("Diagnostic completed");
+            onSuccess?.(msg ?? "Diagnostic completed");
+          }}
+          onContinueToPostJob={() => {
+            setShowDiagnosticDialog(false);
+            setShowPostjobDialog(true);
+          }}
+          onAddWorkNow={() => {
+            setShowDiagnosticDialog(false);
+            setShowMidJobDialog(true);
           }}
           onError={(msg) => setActionError(msg)}
           onOpenScheduler={(ctx) => {
@@ -2726,6 +3128,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             });
           }}
         />
+        </BookingWorkflowGuard>
 
         <RecommendServiceDrawer
           open={recommendDrawerCtx !== null}
@@ -2738,13 +3141,19 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onError={(msg) => setActionError(msg)}
         />
 
-        <PostJobSurveyDialog
+        <BookingWorkflowGuard
           open={showPostjobDialog}
+          booking={job}
+          allowedStatuses={["in_progress"]}
+          onAcknowledge={() => setShowPostjobDialog(false)}
+        >
+          <PostJobSurveyDialog
+            open={showPostjobDialog}
           bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2760,6 +3169,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onClose={() => setShowPostjobDialog(false)}
           onSubmit={handleCompleteWithPostjob}
           layoverNotes={[
+            // Diagnostic worksheet findings seed the post-job findings step so a
+            // diagnostic wrapping up here doesn't retype what the mechanic already
+            // wrote on the checklist.
+            (job as any)?.diagnosticFindingsNote ?? "",
             job?.jobActuals?.inProgressNotes ?? "",
             // The "why the added scope / why this adjustment" reasons the
             // mechanic already gave for agreed changes — folded in so they seed
@@ -2786,17 +3199,29 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           quotedParts={lockedQuoteParts}
           lockedQuote={lockedQuote}
           isFixedPrice={job?.isFixedPrice}
-          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
-        />
+            fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            bookingServiceLines={(job as any)?.bookingServiceLines ?? null}
+          />
+        </BookingWorkflowGuard>
 
         {/* Pre-Job Approval — auto-chained from the inspection dialog. */}
-        <PostJobSurveyDialog
+        <BookingWorkflowGuard
           open={showPrejobEstimateDialog}
+          booking={job}
+          allowedStatuses={["pending", "pending_shop_acceptance", "vehicle_at_shop", "pending_customer_acceptance"]}
+          onAcknowledge={() => setShowPrejobEstimateDialog(false)}
+        >
+          <PostJobSurveyDialog
+            open={showPrejobEstimateDialog}
           bookingId={job ? String(job._id) : null}
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -2804,6 +3229,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           }
           passportData={vehiclePassport ?? null}
           estimatedLaborMinutes={job?.estimatedLaborMinutes ?? null}
+          customLaborOverridesMinutes={
+            (job as any)?.customLaborOverridesMinutes ?? null
+          }
           prefillData={actualsPrefill ?? null}
           isSubmitting={false}
           onClose={() => setShowPrejobEstimateDialog(false)}
@@ -2820,8 +3248,14 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           shopZip={(job as any)?.shopZip ?? null}
           quotedParts={scopedQuotedParts}
           isFixedPrice={job?.isFixedPrice}
-          fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
-        />
+            fixedBaseCents={(job as any)?.fixedContractBaseCents ?? null}
+            hasShopPriceRange={(job as any)?.hasShopPriceRange ?? false}
+            shopSetBandLowCents={(job as any)?.shopSetBandLowCents ?? null}
+            shopSetBandHighCents={(job as any)?.shopSetBandHighCents ?? null}
+            shopSetBaseDefaultCents={(job as any)?.shopSetBaseDefaultCents ?? null}
+            bookingServiceLines={(job as any)?.bookingServiceLines ?? null}
+          />
+        </BookingWorkflowGuard>
 
         {/* Mid-Job Approval — "Add unforeseen scope" while in_progress.
             The seeding logic (approved quote over catalog prefill, preserving
@@ -2849,23 +3283,53 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
         <ConfirmationDialog
           open={showDeclineModal}
-          title="Decline this booking?"
-          description="Select a reason for declining:"
+          title={endBookingStep === "confirm" ? "Are you sure you want to decline?" : "Decline this booking?"}
+          description={
+            endBookingStep === "confirm"
+              ? undefined
+              : "Select a reason for declining:"
+          }
           onClose={() => setShowDeclineModal(false)}
           enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
-            onAction: () => setShowDeclineModal(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Declining..." : <ShortcutLabel text="Confirm decline" shortcutKey="d" />,
-            onAction: handleDecline,
-            disabled: isActioning,
-            variant: "destructive",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
+          secondaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: "Go back",
+                  onAction: () => setEndBookingStep("reason"),
+                  disabled: isActioning,
+                }
+              : {
+                  label: <ShortcutLabel text="Keep booking" shortcutKey="k" />,
+                  onAction: () => setShowDeclineModal(false),
+                  disabled: isActioning,
+                }
+          }
+          primaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: isActioning ? "Declining..." : <ShortcutLabel text="Yes, decline booking" shortcutKey="d" />,
+                  onAction: handleDecline,
+                  disabled: isActioning,
+                  variant: "destructive",
+                  leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+                }
+              : {
+                  label: <ShortcutLabel text="Continue" shortcutKey="d" />,
+                  onAction: () => setEndBookingStep("confirm"),
+                  disabled: isActioning,
+                  variant: "destructive",
+                }
+          }
         >
+          {endBookingStep === "confirm" ? (
+            endBookingSummary(
+              "declined",
+              declineReason === "Other"
+                ? declineOtherText.trim() || "Other"
+                : declineReason,
+            )
+          ) : (
+          <>
           <div className="space-y-2.5 mb-4">
             {DECLINE_REASONS.map((r) => (
               <label
@@ -2901,27 +3365,78 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
           )}
+          </>
+          )}
         </ConfirmationDialog>
 
         <ConfirmationDialog
           open={showCancelConfirm}
-          title="Cancel this booking?"
-          description="Select a reason for cancelling. The customer will be notified of the cancellation."
+          title={
+            endBookingStep === "confirm"
+              ? cancelReason === "Customer no-show"
+                ? "Are you sure you want to mark a no-show?"
+                : "Are you sure you want to cancel?"
+              : "Cancel this booking?"
+          }
+          description={
+            endBookingStep === "confirm"
+              ? undefined
+              : "Select a reason for cancelling."
+          }
           onClose={() => setShowCancelConfirm(false)}
           enableShortcuts={false}
-          secondaryAction={{
-            label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
-            onAction: () => setShowCancelConfirm(false),
-            disabled: isActioning,
-          }}
-          primaryAction={{
-            label: isActioning ? "Cancelling..." : <ShortcutLabel text="Cancel job" shortcutKey="c" />,
-            onAction: handleCancelJob,
-            disabled: isActioning,
-            variant: "destructive",
-            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
-          }}
+          secondaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: "Go back",
+                  onAction: () => setEndBookingStep("reason"),
+                  disabled: isActioning,
+                }
+              : {
+                  label: <ShortcutLabel text="Keep booking" shortcutKey="e" />,
+                  onAction: () => setShowCancelConfirm(false),
+                  disabled: isActioning,
+                }
+          }
+          primaryAction={
+            endBookingStep === "confirm"
+              ? {
+                  label: isActioning
+                    ? cancelReason === "Customer no-show"
+                      ? "Marking no-show..."
+                      : "Cancelling..."
+                    : (
+                      <ShortcutLabel
+                        text={
+                          cancelReason === "Customer no-show"
+                            ? "Yes, mark no-show"
+                            : "Yes, cancel booking"
+                        }
+                        shortcutKey="c"
+                      />
+                    ),
+                  onAction: handleCancelJob,
+                  disabled: isActioning,
+                  variant: "destructive",
+                  leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+                }
+              : {
+                  label: <ShortcutLabel text="Continue" shortcutKey="c" />,
+                  onAction: () => setEndBookingStep("confirm"),
+                  disabled: isActioning,
+                  variant: "destructive",
+                }
+          }
         >
+          {endBookingStep === "confirm" ? (
+            endBookingSummary(
+              cancelReason === "Customer no-show" ? "no_show" : "cancelled",
+              cancelReason === "Other"
+                ? cancelOtherText.trim() || "Other"
+                : cancelReason,
+            )
+          ) : (
+          <>
           {onRequestReschedule &&
             job?.status !== "in_progress" &&
             job?.status !== "vehicle_at_shop" ? (
@@ -2999,6 +3514,8 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               className="w-full text-sm px-3 py-2 rounded-lg border border-border bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary resize-none"
             />
           )}
+          </>
+          )}
         </ConfirmationDialog>
 
         {!isForcedDelayPending ? (
@@ -3051,16 +3568,6 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 setIsActioning(false);
               }
             }}
-          />
-        ) : null}
-
-        {job ? (
-          <BookingTimelineModal
-            open={showTimelineModal}
-            onClose={() => setShowTimelineModal(false)}
-            history={job.history}
-            activityLog={activityLog}
-            hideDisclosedRange={hideDisclosedRange}
           />
         ) : null}
       </>

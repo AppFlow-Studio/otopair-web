@@ -39,7 +39,7 @@ export const PART_SUBCATEGORY_GROUP_LABELS: Record<PartSubcategoryGroup, string>
   engine_oil:         "Engine & Oil",
   filters:            "Filters",
   ignition:           "Ignition & Spark",
-  timing_belt:        "Timing Belt",
+  timing_belt:        "Drive Belt",
   cooling:            "Cooling System",
   transmission:       "Transmission",
   tires_wheels:       "Tires & Wheels",
@@ -83,8 +83,8 @@ export const PART_SUBCATEGORIES: PartSubcategoryEntry[] = [
   { code: "ignition_coils",            group: "ignition",   label: "Ignition Coils" },
   { code: "intake_manifold_gasket",    group: "ignition",   label: "Intake Manifold Gasket",           hint: "Engines needing manifold removal" },
 
-  // Timing Belt
-  { code: "timing_belt",               group: "timing_belt", label: "Timing Belt" },
+  // Drive Belt
+  { code: "timing_belt",               group: "timing_belt", label: "Drive Belt" },
   { code: "belt_tensioner",            group: "timing_belt", label: "Belt Tensioner" },
   { code: "idler_pulley",              group: "timing_belt", label: "Idler Pulley" },
   { code: "camshaft_seal",             group: "timing_belt", label: "Camshaft Seal" },

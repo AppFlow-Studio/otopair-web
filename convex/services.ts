@@ -416,31 +416,29 @@ export const listBookableForVehicle = query({
         continue;
       }
 
-      // tire_replacement is parts-required but the parts come from the
-      // /(tire-booking) picker, not part_fitments. Coverage = whether the
-      // enrichment captured OEM tire data on `trim_specs` for this config:
-      // either a tire size (front/rear) or any tire_options entries.
-      // (config is non-null here — the blocked_by_enrichment branch above
-      // catches null configs and continues, but TS doesn't narrow across
-      // the per-service control flow inside the loop.)
-      if (slug === "tire_replacement" && config) {
-        const trimSpecs = await ctx.db
-          .query("trim_specs")
-          .withIndex("by_vehicle_config", (q) =>
-            q.eq("vehicle_config_id", config._id),
-          )
-          .first();
-        const hasTireData = Boolean(
-          trimSpecs?.tire_size_front ||
-            trimSpecs?.tire_size_rear ||
-            (Array.isArray(trimSpecs?.tire_options) &&
-              trimSpecs.tire_options.length > 0),
-        );
-        out.push({
-          service_id: service._id,
-          slug,
-          state: hasTireData ? "bookable" : "missing_data",
-        });
+      // tire_replacement is parts-required, but the parts come from the
+      // /(tire-booking) picker rather than part_fitments — and it is a QUOTE
+      // flow: the driver chooses size, type and quality tier on that screen
+      // and shops answer with prices. Nothing here needs OEM tire data to be
+      // on file first, and no price is rendered, so the "never show From $0"
+      // rule that justifies hiding other parts-required services does not
+      // apply.
+      //
+      // This used to gate on trim_specs.tire_size_front/rear/tire_options for
+      // the config and report missing_data otherwise, which hid the service
+      // ENTIRELY. In practice no config in the dev deployment carries that
+      // data, so Tire replacement was invisible on every vehicle and the flow
+      // had no entry point at all — you could only reach it by deep link.
+      // That also contradicts the taxonomy, which marks this slug
+      // `variant: "quote"` with `showsForLabel: "All — quote flow"`.
+      //
+      // The picker already handles an empty size list by falling back to
+      // MOCK_OEM_SIZES_BY_MAKE / DEFAULT_OEM_SIZES, so the screen is usable
+      // with or without enrichment. See the note on that fallback: showing
+      // generic sizes as if they were this car's OEM fitment is a separate
+      // product question and is tracked apart from this gate.
+      if (slug === "tire_replacement") {
+        out.push({ service_id: service._id, slug, state: "bookable" });
         continue;
       }
 

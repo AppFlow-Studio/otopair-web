@@ -12,6 +12,7 @@ import {
 import { money, fmtDate, fmtDateTime } from './Charts'
 import { DirectorNotesPanel } from './DirectorNotesPanel'
 import { gotoEntity } from './directorNav'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 /**
  * BookingDetailModal — drill-down used by TabBookings and ShopModal.
@@ -177,7 +178,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
         {detail.refundReason && <Badge tone="purple">Refund tagged</Badge>}
       </>}
       statusBadge={detail && <StatusBadge status={detail.status} />}
-      title={detail?.services.map(s => s.name).join(', ') ?? ''}
+      title={detail?.services.map(s => formatServiceDisplayName(s.name)).join(', ') ?? ''}
       headerRight={<>
         <AuditButton onClick={() => setAuditOpen(o => !o)} count={auditEntries?.length} />
         {detail?.payment?.stripePaymentIntentId && (
@@ -190,7 +191,7 @@ export const BookingDetailModal = ({ bookingId, onClose }: Props) => {
       auditDrawer={{
         open: auditOpen, onClose: () => setAuditOpen(false),
         title: 'Booking audit log',
-        subtitle: detail ? `${detail.invoiceNumber ?? String(detail.id).slice(-8)} · ${detail.services.map(s => s.name).join(', ')}` : '',
+        subtitle: detail ? `${detail.invoiceNumber ?? String(detail.id).slice(-8)} · ${detail.services.map(s => formatServiceDisplayName(s.name)).join(', ')}` : '',
         entries: auditEntries,
       }}
       footer={<Button onClick={onClose}>Close</Button>}>
@@ -298,7 +299,7 @@ const OverviewTab = ({ detail, bookingId }: { detail: any; bookingId: Id<'bookin
                 <div key={String(s.id)} style={{ background:'#fff', border:`1px solid ${isCatch ? '#FED7AA' : isCorrected ? '#A7F3D0' : s.isCustom ? '#99F6E4' : 'var(--slate-200)'}`, borderRadius:8, padding:'8px 12px' }}>
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:8, flexWrap:'wrap' }}>
                     <div style={{ display:'flex', alignItems:'center', gap:6, flexWrap:'wrap' }}>
-                      <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{s.name}</span>
+                      <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{formatServiceDisplayName(s.name)}</span>
                       {s.isCustom && <Badge tone="teal">Custom</Badge>}
                       {s.isCustom && s.customSource && s.customSource !== 'booking' && (
                         <Badge tone="slate">{String(s.customSource).replace(/_/g, ' ')}</Badge>
@@ -312,7 +313,7 @@ const OverviewTab = ({ detail, bookingId }: { detail: any; bookingId: Id<'bookin
                     </div>
                     {s.category && <Badge tone="slate">{s.category}</Badge>}
                   </div>
-                  {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{s.description}</div>}
+                  {s.description && <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:3 }}>{formatServiceDisplayName(s.description)}</div>}
                   {partsLow != null && partsHigh != null && (
                     <div style={{ fontSize:11, color:'var(--slate-500)', marginTop:4, fontFamily:'var(--mono)' }}>
                       Engine parts band {fmt(partsLow)}–{fmt(partsHigh)}
@@ -358,7 +359,7 @@ const OverviewTab = ({ detail, bookingId }: { detail: any; bookingId: Id<'bookin
             <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
               {detail.selectedOptions.map((o: any, i: number) => (
                 <div key={i} style={{ background:'#fff', border:'1px solid var(--slate-200)', borderRadius:8, padding:'8px 12px', display:'flex', justifyContent:'space-between', alignItems:'center', gap:8 }}>
-                  <span style={{ fontSize:12, color:'var(--slate-500)' }}>{o.serviceName}</span>
+                  <span style={{ fontSize:12, color:'var(--slate-500)' }}>{formatServiceDisplayName(o.serviceName)}</span>
                   <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{o.label}</span>
                   {o.type && <Badge tone="indigo">{o.type}</Badge>}
                 </div>
@@ -712,7 +713,7 @@ const CompletionTab = ({ token, id }: { token: string; id: Id<'bookings'> }) => 
           <Field label="System" value={data.diagnosticSystem ?? '—'} />
           <Field label="Checklist completed" value={data.diagnosticChecklistCompletedAtMs ? fmtTs(data.diagnosticChecklistCompletedAtMs) : '—'} />
           {data.recommendationState && data.recommendationState !== 'none' && (
-            <Field label="Recommendation" value={`${data.recommendedServiceName ?? 'service'} · ${data.recommendationState.replace(/_/g, ' ')}`} />
+            <Field label="Recommendation" value={`${formatServiceDisplayName(data.recommendedServiceName) || 'service'} · ${data.recommendationState.replace(/_/g, ' ')}`} />
           )}
         </div>
         {data.diagnosticFindingsNote && <div style={{ marginBottom:12, fontSize:12, color:'var(--slate-600)' }}>{data.diagnosticFindingsNote}</div>}
@@ -747,7 +748,7 @@ const CompletionTab = ({ token, id }: { token: string; id: Id<'bookings'> }) => 
               <div key={r.id} style={{ borderRadius:8, border:'1px solid var(--slate-100)', padding:12 }}>
                 <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8 }}>
                   <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-800)' }}>
-                    {r.service ?? r.freeformText ?? 'Recommendation'}
+                    {formatServiceDisplayName(r.service) || r.freeformText || 'Recommendation'}
                   </span>
                   <span style={{ display:'flex', alignItems:'center', gap:6 }}>
                     <Badge tone={r.urgency === 'soon' ? 'red' : r.urgency === 'within_3_months' ? 'yellow' : 'slate'}>{r.urgency.replace(/_/g, ' ')}</Badge>

@@ -15,6 +15,7 @@ import {
   humanizeSubcategoryCode,
   type PartSubcategoryGroup,
 } from '@/convex/lib/partSubcategories'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // ── types ───────────────────────────────────────────────────────────────────
 
@@ -345,7 +346,7 @@ const PartsRuleModal = ({ mode, onClose, usage, serviceCategories }: {
   )
 
   const isCreate = mode.kind === 'create'
-  const title = isCreate ? 'New service' : `Edit · ${mode.row.service.name}`
+  const title = isCreate ? 'New service' : `Edit · ${formatServiceDisplayName(mode.row.service.name)}`
 
   const submit = async () => {
     setError(null)
@@ -627,7 +628,7 @@ export const TabServiceParts = () => {
               return (
                 <tr key={String(r.service.id)}>
                   <td style={tableStyles.td}>
-                    <div style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.service.name}</div>
+                    <div style={{ fontWeight:500, color:'var(--slate-900)' }}>{formatServiceDisplayName(r.service.name)}</div>
                     {r.service.slug && <div style={{ fontSize:11, color:'var(--slate-500)', fontFamily:'monospace' }}>{r.service.slug}</div>}
                   </td>
                   <td style={tableStyles.td}>{r.service.category_name ?? '—'}</td>

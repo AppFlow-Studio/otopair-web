@@ -7,6 +7,7 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
 import { Card, Badge } from '../../Primitives'
 import { Field, Loading, MicroLabel, fmtDate, statusTone } from './usersUi'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const RecordBox = ({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) => (
   <div style={{ borderRadius:8, background:'var(--slate-50)', padding:12, fontSize:12 }}>
@@ -58,7 +59,7 @@ const VehicleRecordsPanel = ({ userId, ownerId, vin, onOpenBooking }:
                 </RecordBox>
                 <RecordBox title="Service states" count={data.serviceStates.length}>
                   {data.serviceStates.length === 0 ? <p style={{ margin:0, color:'var(--slate-400)' }}>None surfaced.</p>
-                    : <ul style={{ margin:0, padding:0, listStyle:'none', color:'var(--slate-600)' }}>{data.serviceStates.slice(0, 8).map((s, i) => <li key={i}>{s.service}{s.urgency ? ` · ${s.urgency}` : ''}{s.dueAtMileage != null ? ` · due ${s.dueAtMileage.toLocaleString()} mi` : ''}</li>)}</ul>}
+                    : <ul style={{ margin:0, padding:0, listStyle:'none', color:'var(--slate-600)' }}>{data.serviceStates.slice(0, 8).map((s, i) => <li key={i}>{formatServiceDisplayName(s.service)}{s.urgency ? ` · ${s.urgency}` : ''}{s.dueAtMileage != null ? ` · due ${s.dueAtMileage.toLocaleString()} mi` : ''}</li>)}</ul>}
                 </RecordBox>
                 <RecordBox title="Check-ins" count={data.checkins.length}>
                   {data.checkins.length === 0 ? <p style={{ margin:0, color:'var(--slate-400)' }}>No check-ins.</p>

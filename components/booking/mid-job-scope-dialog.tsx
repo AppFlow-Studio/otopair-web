@@ -25,7 +25,10 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { JobActualPartPayload } from "@/lib/vehicle-passport";
+import type { BookingWorkflowBooking } from "@/lib/booking-workflow-state";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 function formatWhen(date?: string | null, time?: string | null) {
   if (!date) return "";
@@ -150,13 +153,19 @@ export default function MidJobScopeDialog({
   const j = job as any;
 
   return (
-    <PostJobSurveyDialog
+    <BookingWorkflowGuard
+      open={open}
+      booking={job as BookingWorkflowBooking}
+      allowedStatuses={["in_progress"]}
+      onAcknowledge={onClose}
+    >
+      <PostJobSurveyDialog
       open={open}
       bookingId={String(bookingId)}
       bookingLabel={j.vehicle ?? "Vehicle"}
       bookingSubLabel={[
         j.customerName,
-        (j.serviceNames ?? []).join(", "),
+        (j.serviceNames ?? []).map(formatServiceDisplayName).join(", "),
         formatWhen(j.scheduledDate, j.scheduledTime),
       ]
         .filter(Boolean)
@@ -166,6 +175,7 @@ export default function MidJobScopeDialog({
       // narrowly here rather than adding another silent error to the pile.
       passportData={(vehiclePassport ?? null) as never}
       estimatedLaborMinutes={j.estimatedLaborMinutes ?? null}
+      customLaborOverridesMinutes={j.customLaborOverridesMinutes ?? null}
       prefillData={actualsPrefill ?? null}
       isSubmitting={false}
       onClose={onClose}
@@ -183,6 +193,12 @@ export default function MidJobScopeDialog({
       quotedParts={lockedQuoteParts}
       isFixedPrice={j.isFixedPrice}
       fixedBaseCents={j.fixedContractBaseCents ?? null}
-    />
+      hasShopPriceRange={(j as any).hasShopPriceRange ?? false}
+      shopSetBandLowCents={(j as any).shopSetBandLowCents ?? null}
+      shopSetBandHighCents={(j as any).shopSetBandHighCents ?? null}
+      shopSetBaseDefaultCents={(j as any).shopSetBaseDefaultCents ?? null}
+      bookingServiceLines={(j as any).bookingServiceLines ?? null}
+      />
+    </BookingWorkflowGuard>
   );
 }

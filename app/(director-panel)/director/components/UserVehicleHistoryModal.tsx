@@ -5,6 +5,7 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Modal, Button, Badge, StatusBadge, IconCar } from './Primitives'
 import { fmtDate } from './Charts'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 /**
  * UserVehicleHistoryModal
@@ -100,7 +101,7 @@ export const UserVehicleHistoryModal = ({ userId, vehicleId, onClose }: Props) =
                     fontSize:12, color:'var(--slate-700)',
                   }}>
                     <span className="mono">{fmtDate(b.scheduled)}</span>
-                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.join(', ') || '—'}</span>
+                    <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.services.map(formatServiceDisplayName).join(', ') || '—'}</span>
                     <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{b.shop}</span>
                     <span><StatusBadge status={b.status} /></span>
                     <span className="mono" style={{ textAlign:'right' }}>{fmtCurrency(b.total)}</span>

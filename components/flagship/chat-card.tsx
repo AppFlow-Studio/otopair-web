@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "motion/react";
 import type { ChatMessage } from "./oto-flow";
 import VoiceBar, { Waveform } from "./voice-bar";
@@ -11,6 +12,86 @@ interface ChatCardProps {
   listening?: boolean;
   onSend: (text: string) => void;
   onMic: () => void;
+}
+
+function parseRawUrls(plain: string): React.ReactNode {
+  const urlRegex = /(https?:\/\/[^\s]+|(?:^|\s)(?:otopair\.com\/[^\s.,!?)]*|\/(?:privacy|terms|shops|cancellation-policy|warranties|trust|how-it-works|pricing|about|services|apply)(?=[.,!?\s]|$)))/gi;
+  const parts = plain.split(urlRegex);
+  if (parts.length <= 1) return plain;
+
+  return parts.map((part, i) => {
+    const trimmed = part.trim();
+    if (/^https?:\/\//i.test(trimmed)) {
+      return (
+        <Link
+          key={i}
+          href={trimmed}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-medium text-[#5299fe] underline decoration-[#5299fe]/40 underline-offset-2 transition-colors hover:text-[#3d87ef] hover:decoration-[#3d87ef]"
+        >
+          {part}
+        </Link>
+      );
+    }
+    if (/^otopair\.com/i.test(trimmed)) {
+      const href = "/" + trimmed.replace(/^otopair\.com\/?/i, "");
+      return (
+        <Link
+          key={i}
+          href={href}
+          className="font-medium text-[#5299fe] underline decoration-[#5299fe]/40 underline-offset-2 transition-colors hover:text-[#3d87ef] hover:decoration-[#3d87ef]"
+        >
+          {part}
+        </Link>
+      );
+    }
+    if (/^\/(?:privacy|terms|shops|cancellation-policy|warranties|trust|how-it-works|pricing|about|services|apply)/i.test(trimmed)) {
+      return (
+        <Link
+          key={i}
+          href={trimmed}
+          className="font-medium text-[#5299fe] underline decoration-[#5299fe]/40 underline-offset-2 transition-colors hover:text-[#3d87ef] hover:decoration-[#3d87ef]"
+        >
+          {part}
+        </Link>
+      );
+    }
+    return part;
+  });
+}
+
+function renderMessageWithLinks(text: string) {
+  const tokens: React.ReactNode[] = [];
+  const mdRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
+  let lastIdx = 0;
+  let match;
+
+  while ((match = mdRegex.exec(text)) !== null) {
+    if (match.index > lastIdx) {
+      tokens.push(parseRawUrls(text.slice(lastIdx, match.index)));
+    }
+    const label = match[1];
+    let href = match[2];
+    if (href.startsWith("otopair.com")) href = "https://" + href;
+    const isInternal = href.startsWith("/") || href.includes("otopair.com");
+    tokens.push(
+      <Link
+        key={`md-${match.index}`}
+        href={href}
+        className="font-medium text-[#5299fe] underline decoration-[#5299fe]/40 underline-offset-2 transition-colors hover:text-[#3d87ef] hover:decoration-[#3d87ef]"
+        {...(!isInternal ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+      >
+        {label}
+      </Link>
+    );
+    lastIdx = mdRegex.lastIndex;
+  }
+  if (lastIdx < text.length) {
+    tokens.push(parseRawUrls(text.slice(lastIdx)));
+  }
+
+  return tokens;
 }
 
 /**
@@ -36,19 +117,33 @@ export function Transcript({
   children?: React.ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    // Only auto-follow when the user is already near the bottom, so scrolling
-    // up to re-read isn't yanked back down as streamed tokens arrive.
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (!nearBottom) return;
-    const id = requestAnimationFrame(() =>
-      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" })
-    );
-    return () => cancelAnimationFrame(id);
-  }, [messages, thinking]);
+
+    const scrollToLatest = (behavior: ScrollBehavior = "smooth") => {
+      if (!scrollRef.current) return;
+      scrollRef.current.scrollTo({
+        top: scrollRef.current.scrollHeight,
+        behavior,
+      });
+    };
+
+    // Immediate scroll on render
+    const id = requestAnimationFrame(() => scrollToLatest("smooth"));
+
+    // Staggered scrolls to account for Framer Motion animations & layout shifts
+    const t1 = setTimeout(() => scrollToLatest("smooth"), 80);
+    const t2 = setTimeout(() => scrollToLatest("auto"), 320);
+
+    return () => {
+      cancelAnimationFrame(id);
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [messages, thinking, children]);
 
   // Bubble type 13.5 → 15px (a step under the input's rendered 16px) with a
   // touch more padding — sized up with the card itself (design feedback
@@ -77,7 +172,9 @@ export function Transcript({
             transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
             className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
           >
-            <p className={m.role === "user" ? userBubble : otoBubble}>{m.text}</p>
+            <p className={m.role === "user" ? userBubble : otoBubble}>
+              {m.role === "oto" ? renderMessageWithLinks(m.text) : m.text}
+            </p>
           </motion.div>
         ))}
       </AnimatePresence>
@@ -101,6 +198,7 @@ export function Transcript({
         </motion.div>
       )}
       {children}
+      <div ref={bottomRef} className="h-px w-full shrink-0" aria-hidden="true" />
     </div>
   );
 }

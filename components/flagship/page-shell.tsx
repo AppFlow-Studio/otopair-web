@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import PillNav from "./pill-nav";
+import PillNav, { type PillLink } from "./pill-nav";
+import { navMenu } from "./nav-menu";
 import FooterCta from "./landing/footer-cta";
 import { Reveal, serif, serifDisplay } from "./landing/reveal";
 import { Bezel } from "./bezel";
@@ -42,17 +43,13 @@ import { Breadcrumbs, type Crumb } from "@/components/seo/breadcrumbs";
  */
 
 // Off the home page the pill nav points at the Tier 1 URLs (the home page
-// itself keeps its in-page anchors — that design is settled).
-const SHELL_LINKS = [
-  { label: "How it works", href: "/how-it-works" },
-  { label: "For shops", href: "/for-shops" },
-  { label: "Coverage", href: "/coverage" },
-  { label: "Partner with us", href: "/partner-with-us" },
-];
+// itself keeps its in-page anchors — that design is settled). Each of the four
+// carries a hover panel of the pages underneath it; see nav-menu.ts.
+const SHELL_LINKS = navMenu();
 const SHELL_CTA = { label: "Get Oto", href: "/download" };
 
 export type TocItem = { id: string; title: string };
-export type ShellLink = { label: string; href: string };
+export type ShellLink = PillLink;
 
 export default function PageShell({
   eyebrow,

@@ -127,7 +127,7 @@ export default async function ShopsDirectoryPage() {
       hero={
         <div className="flex w-full flex-col items-start gap-4">
           <ShopSearch count={count} />
-          <TextLink href="/how-shops-are-verified">How shops are verified</TextLink>
+          <TextLink href="/trust">How shops are verified</TextLink>
         </div>
       }
       visual={
@@ -214,7 +214,7 @@ export default async function ShopsDirectoryPage() {
                   <p>
                     <Link href="/download">Get notified at launch</Link> · <Link href="/services">Every service you can book</Link>{" "}
                     · <Link href="/staten-island">Car repair in Staten Island</Link> ·{" "}
-                    <Link href="/how-shops-are-verified">The full verification standard</Link>
+                    <Link href="/trust">The full verification standard</Link>
                   </p>
                 </dd>
               </div>

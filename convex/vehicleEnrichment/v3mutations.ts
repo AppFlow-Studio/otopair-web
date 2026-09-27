@@ -22,6 +22,7 @@ import type { ExistenceVerdict } from "./partIndex";
 import { isRunStale, RUN_IN_PROGRESS_STATUSES, stripVerifiedFields } from "./runFence";
 import { WEAR_ITEM_SERVICE_SLUGS, parseFrontWiperSizes } from "./types";
 import { resolveTierForVehicle } from "../lib/tierResolver";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 
 /**
  * Family-aware make compatibility for WRITE paths. The strict id-equality
@@ -234,6 +235,23 @@ export const upsertVehicleConfig = internalMutation({
       .first();
 
     if (existing) {
+      // Defensive: config_key now encodes the transmission family, so a given key
+      // maps to exactly one trim+family and thus one transmission_id. Patching an
+      // existing row to a DIFFERENT transmission under the same key means some
+      // upstream path built the key without the family — surface it rather than
+      // silently re-collapsing an automatic and a manual. Non-fatal.
+      if (
+        existing.transmission_id &&
+        args.transmission_id &&
+        String(existing.transmission_id) !== String(args.transmission_id)
+      ) {
+        console.warn(
+          `[upsertVehicleConfig] transmission_id change under one config_key ` +
+          `"${args.config_key}": ${existing.transmission_id} → ${args.transmission_id}. ` +
+          `Should be impossible now that config_key carries the transmission family — ` +
+          `check the key-build path.`,
+        );
+      }
       const patch: Record<string, unknown> = {
         year: args.year,
         make_id: args.make_id,
@@ -1990,6 +2008,8 @@ export const createEnrichmentRun = internalMutation({
     vehicle_config_id: v.id("vehicle_configs"),
     version: v.string(),
     trigger: v.string(),
+    // Who triggered this run, when a human did (see lib/enrichmentActor).
+    actor: enrichmentActorValidator,
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -1997,6 +2017,13 @@ export const createEnrichmentRun = internalMutation({
       vehicle_config_id: args.vehicle_config_id,
       version: args.version,
       trigger: args.trigger,
+      ...(args.actor
+        ? {
+            actor_name: args.actor.name,
+            actor_id: args.actor.id,
+            actor_kind: args.actor.kind,
+          }
+        : {}),
       status: "started",
       started_at: now,
       created_at: now,
@@ -2436,6 +2463,121 @@ export const failEnrichmentRun = internalMutation({
       return { config_restored: true };
     }
     return { config_restored: false };
+  },
+});
+
+// ============================================================================
+// 12b. _alertEnrichmentErrorOut — ops alert on a batch-2 error-out
+// ============================================================================
+
+/**
+ * A batch-2 error-out (an ended `errored`/`expired` result, or the 3h timeout)
+ * used to surface only in the Deep-Dive console — the CR-V mellow-cat incident
+ * (147m in the Anthropic batch queue, then a 0-token `errored`, pricing silently
+ * dropped) was found by chance. This writes ONE deduped `notification_outbox`
+ * row per run, mirroring portalStats.evaluateSlo's `channel:"slack"` convention.
+ *
+ * DELIVERY CAVEAT: there is no Slack dispatcher in this codebase yet (see
+ * notifications.ts) — like the SLO-breach rows, this sits `pending` until one
+ * exists. It is the established ops-alert idiom + the audit trail, and goes live
+ * the moment a dispatcher drains `channel:"slack"`. Idempotent on dedupe_key.
+ */
+export const _alertEnrichmentErrorOut = internalMutation({
+  args: {
+    runId: v.id("enrichment_runs"),
+    vehicleConfigId: v.id("vehicle_configs"),
+    label: v.string(),
+    batchId: v.optional(v.string()),
+    error: v.string(),
+    quotabilityPct: v.optional(v.number()),
+    unpricedCoreRoles: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const dedupe_key = `enrich_errorout:${args.runId}`;
+    const dup = await ctx.db
+      .query("notification_outbox")
+      .withIndex("by_dedupe_key", (q) => q.eq("dedupe_key", dedupe_key))
+      .first();
+    if (dup) return { inserted: false };
+
+    // Self-fetch the run (patched with its terminal snapshot moments ago) and
+    // its config, so the alert carries the WHOLE story — who ran it, when, and
+    // the specific roles/flags/gaps behind the error-out — instead of a count.
+    const run = await ctx.db.get(args.runId);
+    const config = await ctx.db.get(args.vehicleConfigId);
+
+    // Per-service parts breakdown: which core roles lack a fitment vs. lack a
+    // trusted price. This is the "deeper issue" — a bare "7 unpriced" hides that
+    // it's, say, all 4 brake corners on one axle plus the oil filter.
+    const services = (run as any)?.quotability?.services ?? [];
+    const missingRolesByService = services
+      .map((s: any) => ({
+        slug: s.slug,
+        missingFitment: Array.isArray(s.missing_roles) ? s.missing_roles.slice(0, 12) : [],
+        unpricedCount: Math.max(0, (s.core_with_fitment ?? 0) - (s.core_with_price ?? 0)),
+        coreTotal: s.core_total ?? 0,
+      }))
+      .filter((s: any) => s.missingFitment.length > 0 || s.unpricedCount > 0)
+      .slice(0, 8);
+
+    // Sanity flags — rejects first (they blocked a value), then flags. Skip the
+    // "info" observability rows; they aren't a review signal.
+    const sanityFlags = ((run as any)?.sanity_flags ?? [])
+      .filter((f: any) => f?.severity === "reject" || f?.severity === "flag")
+      .sort((a: any, b: any) => (a.severity === "reject" ? -1 : 1) - (b.severity === "reject" ? -1 : 1))
+      .slice(0, 6)
+      .map((f: any) => ({ field: f.field, severity: f.severity, reason: f.reason }));
+
+    // Field gaps — why V4 fields ended empty (validation_dropped / never_asked …).
+    const fieldGaps = ((run as any)?.field_gaps ?? [])
+      .slice(0, 8)
+      .map((g: any) => ({ field: g.field, reason: g.reason }));
+
+    // Other errors[] on the run beyond the headline (batch2_result_error, part
+    // rejections, refutations …), deduped and shortened.
+    const headline = String(args.error ?? "");
+    const extraErrors = Array.from(new Set(((run as any)?.errors ?? []) as string[]))
+      .filter((e) => e && !headline.includes(e) && !e.includes(headline))
+      .slice(0, 6);
+
+    const startedAt = (run as any)?.started_at ?? (run as any)?.created_at ?? null;
+    const completedAt = (run as any)?.completed_at ?? null;
+
+    await ctx.db.insert("notification_outbox", {
+      channel: "slack",
+      category: "enrich_errorout",
+      status: "pending",
+      dedupe_key,
+      payload: {
+        // Identity / deep-link
+        runId: String(args.runId),
+        vehicleConfigId: String(args.vehicleConfigId),
+        configKey: (config as any)?.config_key ?? null,
+        label: args.label,
+        batchId: args.batchId,
+        // Who + when
+        trigger: (run as any)?.trigger ?? null,
+        actorName: (run as any)?.actor_name ?? null,
+        actorKind: (run as any)?.actor_kind ?? null,
+        startedAt,
+        completedAt,
+        durationMs:
+          (run as any)?.duration_ms ??
+          (startedAt && completedAt ? completedAt - startedAt : null),
+        // Headline + quality
+        error: args.error,
+        quotabilityPct: args.quotabilityPct ?? (run as any)?.quotability?.pct ?? null,
+        unpricedCoreRoles: args.unpricedCoreRoles,
+        fillPct: (run as any)?.applicable_fill_rate ?? (run as any)?.fill_rate ?? null,
+        // Deeper issues
+        missingRolesByService,
+        sanityFlags,
+        fieldGaps,
+        extraErrors,
+      },
+      created_at: Date.now(),
+    });
+    return { inserted: true };
   },
 });
 
@@ -4233,6 +4375,7 @@ export const notifyEnrichmentComplete = internalMutation({
     for (const vehicle of vehicles) {
       const vin = (vehicle as any).vin as string | undefined;
       if (!vin) continue;
+      const vehicleLabel = [year, make, model].filter(Boolean).join(" ") || vin;
       const owners = await ctx.db
         .query("vehicle_owners")
         .withIndex("by_vin", (q: any) => q.eq("vin", vin))
@@ -4259,7 +4402,24 @@ export const notifyEnrichmentComplete = internalMutation({
             model,
             trim,
             title: "Your car is ready",
-            body: `${[year, make, model].filter(Boolean).join(" ")} is set up — you can now book parts-dependent services.`,
+            body: `Your ${vehicleLabel} is set up — you can now book parts-dependent services.`,
+            // The device only receives payload.data, so mirror the vehicle
+            // fields there and deep-link to the garage pre-selected on THIS car.
+            // The app already opens the garage on a specific VIN (see the
+            // walk-in claim flow, which returns `vin` so the app can "open the
+            // garage ON that vehicle"), so we key by vin — not a vehicle id.
+            // `vin`/`vehicleLabel` also ride in data as the robust selector.
+            data: {
+              deepLink: `otopair://garage/${vin}`,
+              vin,
+              vehicleLabel,
+              vehicleId: String(vehicle._id),
+              vehicleConfigId: String(vehicle_config_id),
+              year,
+              make,
+              model,
+              trim,
+            },
           },
         });
         notified++;

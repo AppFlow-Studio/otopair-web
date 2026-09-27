@@ -31,6 +31,7 @@
 import { v } from "convex/values";
 import { internalAction } from "../_generated/server";
 import { internal, api } from "../_generated/api";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 
 // `@ts-expect-error TS2589` silences a known Convex+TypeScript quirk:
 // once this file is registered in api.d.ts as `internal.vehicleEnrichment.runHeadless.go`,
@@ -42,7 +43,13 @@ import { internal, api } from "../_generated/api";
 // false positive, so we know to drop the suppression. Same root cause
 // + remedy as `convex/oto/chat.ts:115`.
 export const go = internalAction({
-  args: { vin: v.string() },
+  args: {
+    vin: v.string(),
+    // Forwarded to the run so a walk-in claim / mechanic VIN capture is
+    // attributed to the person who submitted it. See lib/enrichmentActor.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
+  },
   handler: async (ctx, args): Promise<any> => {
     const vin = args.vin.toUpperCase().trim();
     console.log(`[runHeadless] VIN: ${vin}`);
@@ -89,6 +96,8 @@ export const go = internalAction({
         displacement: decoded.displacement ?? "",
         drivetrain: (decoded as any).drivetrain ?? undefined,
         nhtsaVinKey: (decoded as any).nhtsaVinKey ?? undefined,
+        trigger: args.trigger,
+        actor: args.actor,
       },
     );
 

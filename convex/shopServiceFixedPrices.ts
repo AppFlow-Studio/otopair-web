@@ -1,5 +1,5 @@
 /**
- * shopServiceFixedPrices.ts — per-(shop, service, tier) flat-price overrides.
+ * shopServiceFixedPrices.ts — per-(shop, service, tier) price overrides.
  *
  * When a row exists for (shop_id, service_id, tier), the v2 quote engine
  * (`buildQuote()` in lib/quoteEngine.ts) short-circuits its labor+parts math
@@ -14,15 +14,35 @@
 import { v } from "convex/values";
 import { Doc, Id } from "./_generated/dataModel";
 import { mutation, query, QueryCtx } from "./_generated/server";
-import { tierValidator, VEHICLE_TIERS, VehicleTier } from "./lib/vehicleTiers";
+import { VEHICLE_TIERS, VehicleTier } from "./lib/vehicleTiers";
 import { detectTier, resolveVehicleConfigFromVin } from "./lib/quoteEngine";
+import {
+  MAX_SHOP_SERVICE_PRICE_CENTS,
+  MIN_SHOP_SERVICE_PRICE_CENTS,
+  normalizeShopServicePrice,
+} from "./lib/shopServicePricing";
 
 const EDITOR_ROLES = new Set(["owner", "shop_owner", "admin", "manager"]);
 
 // Hard rails on the flat price: $1 — $100,000. Below $1 is almost certainly
 // a unit confusion (dollars vs cents); above $100k is a typo.
-const MIN_FIXED_PRICE_CENTS = 100;
-const MAX_FIXED_PRICE_CENTS = 10_000_000;
+const MIN_FIXED_PRICE_CENTS = MIN_SHOP_SERVICE_PRICE_CENTS;
+const MAX_FIXED_PRICE_CENTS = MAX_SHOP_SERVICE_PRICE_CENTS;
+
+const pricePairValidator = v.union(
+  v.object({ low_cents: v.number(), high_cents: v.number() }),
+  v.null(),
+);
+
+const tierPricePairsValidator = v.object({
+  T1: v.optional(pricePairValidator),
+  T2a: v.optional(pricePairValidator),
+  T2b: v.optional(pricePairValidator),
+  T2c: v.optional(pricePairValidator),
+  T3a: v.optional(pricePairValidator),
+  T3b: v.optional(pricePairValidator),
+  T4: v.optional(pricePairValidator),
+});
 
 async function requireShopEditor(
   ctx: { auth: QueryCtx["auth"]; db: QueryCtx["db"] },
@@ -72,8 +92,51 @@ export const listForShop = query({
     for (const row of rows) {
       const key = String(row.service_id);
       if (!byService[key]) byService[key] = {};
-      byService[key][row.tier as VehicleTier] = row.price_cents;
+      const price = normalizeShopServicePrice(row);
+      if (price?.isFixed) {
+        byService[key][row.tier as VehicleTier] = price.lowCents;
+      }
     }
+    return byService;
+  },
+});
+
+/** Full normalized pricing for the Offered Services settings editor. */
+export const listPricingForShop = query({
+  args: { shop_id: v.id("shops") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("shop_service_fixed_prices")
+      .withIndex("by_shop", (q) => q.eq("shop_id", args.shop_id))
+      .collect();
+
+    const byService: Record<
+      string,
+      {
+        mode: "fixed" | "range";
+        prices: Partial<
+          Record<VehicleTier, { low_cents: number; high_cents: number }>
+        >;
+      }
+    > = {};
+
+    for (const row of rows) {
+      const price = normalizeShopServicePrice(row);
+      if (!price) continue;
+      const key = String(row.service_id);
+      const isRangeRow =
+        row.price_low_cents !== undefined && row.price_high_cents !== undefined;
+      if (!byService[key]) {
+        byService[key] = { mode: isRangeRow ? "range" : "fixed", prices: {} };
+      } else if (isRangeRow) {
+        byService[key].mode = "range";
+      }
+      byService[key].prices[row.tier as VehicleTier] = {
+        low_cents: price.lowCents,
+        high_cents: price.highCents,
+      };
+    }
+
     return byService;
   },
 });
@@ -149,6 +212,8 @@ export const setFixedPricesForService = mutation({
       if (existing) {
         await ctx.db.patch(existing._id, {
           price_cents: cents,
+          price_low_cents: undefined,
+          price_high_cents: undefined,
           updated_at: now,
           updated_by_user_id: userId,
         });
@@ -181,6 +246,106 @@ export const setFixedPricesForService = mutation({
     }
 
     return { ok: true as const, applied };
+  },
+});
+
+/**
+ * Replaces one service's complete pricing snapshot. Saving a mode clears the
+ * inactive persisted fields; unsaved client drafts remain a UI concern.
+ */
+export const replacePricingForService = mutation({
+  args: {
+    shop_id: v.id("shops"),
+    service_id: v.id("services"),
+    mode: v.union(v.literal("fixed"), v.literal("range")),
+    prices: tierPricePairsValidator,
+  },
+  handler: async (ctx, args) => {
+    const shop = await ctx.db.get(args.shop_id);
+    if (!shop) throw new Error("Shop not found: " + args.shop_id);
+    const { userId, actor } = await requireShopEditor(ctx, shop);
+
+    const service = await ctx.db.get(args.service_id);
+    if (!service) throw new Error("Service not found: " + args.service_id);
+
+    const declined = new Set<string>(shop.declined_tiers ?? []);
+    const normalized: {
+      tier: VehicleTier;
+      low_cents: number;
+      high_cents: number;
+    }[] = [];
+
+    for (const tier of VEHICLE_TIERS) {
+      const pair = (
+        args.prices as Record<
+          string,
+          { low_cents: number; high_cents: number } | null | undefined
+        >
+      )[tier];
+      if (pair == null) continue;
+      if (declined.has(tier)) {
+        throw new Error(
+          `Tier ${tier} is declined on this shop's rate card — restore it before setting a price.`,
+        );
+      }
+
+      const low = Math.round(pair.low_cents);
+      const high = Math.round(pair.high_cents);
+      if (
+        low < MIN_FIXED_PRICE_CENTS ||
+        high > MAX_FIXED_PRICE_CENTS ||
+        low > high
+      ) {
+        throw new Error(
+          `Tier ${tier} requires prices from $${MIN_FIXED_PRICE_CENTS / 100} to $${MAX_FIXED_PRICE_CENTS / 100}, with minimum no greater than maximum.`,
+        );
+      }
+      if (args.mode === "fixed" && low !== high) {
+        throw new Error(`Tier ${tier} fixed pricing requires one price.`);
+      }
+      normalized.push({ tier, low_cents: low, high_cents: high });
+    }
+
+    const existing = await ctx.db
+      .query("shop_service_fixed_prices")
+      .withIndex("by_shop_service", (q) =>
+        q.eq("shop_id", args.shop_id).eq("service_id", args.service_id),
+      )
+      .collect();
+    for (const row of existing) await ctx.db.delete(row._id);
+
+    const now = Date.now();
+    for (const price of normalized) {
+      await ctx.db.insert("shop_service_fixed_prices", {
+        shop_id: args.shop_id,
+        service_id: args.service_id,
+        tier: price.tier,
+        ...(args.mode === "fixed"
+          ? { price_cents: price.low_cents }
+          : {
+              price_low_cents: price.low_cents,
+              price_high_cents: price.high_cents,
+            }),
+        updated_at: now,
+        updated_by_user_id: userId,
+      });
+    }
+
+    await ctx.db.insert("audit_log", {
+      entity_type: "shops",
+      entity_id: args.shop_id,
+      action: "shop_service_pricing_replaced",
+      actor,
+      detail: JSON.stringify({
+        service_id: args.service_id,
+        service_slug: service.slug ?? null,
+        mode: args.mode,
+        prices: normalized,
+      }),
+      created_at: now,
+    });
+
+    return { ok: true as const, mode: args.mode, prices: normalized };
   },
 });
 
@@ -224,7 +389,53 @@ export const getForBooking = query({
             .eq("tier", tier),
         )
         .unique();
-      if (row) result[String(service_id)] = row.price_cents;
+      const price = normalizeShopServicePrice(row);
+      if (price?.isFixed) result[String(service_id)] = price.lowCents;
+    }
+    return result;
+  },
+});
+
+/** Normalized booking lookup used by range-aware clients. */
+export const getPricingForBooking = query({
+  args: {
+    shop_id: v.id("shops"),
+    vehicle_owner_id: v.id("vehicle_owners"),
+    service_ids: v.array(v.id("services")),
+  },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db.get(args.vehicle_owner_id);
+    if (!owner) return {};
+
+    const cfg = await resolveVehicleConfigFromVin(ctx, owner.vin);
+    if (!cfg) return {};
+    const tier =
+      (cfg.pricing_tier as VehicleTier | undefined) ??
+      (await detectTier(ctx, cfg));
+    if (!tier) return {};
+
+    const result: Record<
+      string,
+      { low_cents: number; high_cents: number; is_fixed: boolean }
+    > = {};
+    for (const service_id of args.service_ids) {
+      const row = await ctx.db
+        .query("shop_service_fixed_prices")
+        .withIndex("by_shop_service_tier", (q) =>
+          q
+            .eq("shop_id", args.shop_id)
+            .eq("service_id", service_id)
+            .eq("tier", tier),
+        )
+        .unique();
+      const price = normalizeShopServicePrice(row);
+      if (price) {
+        result[String(service_id)] = {
+          low_cents: price.lowCents,
+          high_cents: price.highCents,
+          is_fixed: price.isFixed,
+        };
+      }
     }
     return result;
   },

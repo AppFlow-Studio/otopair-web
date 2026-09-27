@@ -8,6 +8,7 @@ import { Badge, Button, Card, Input, Select } from '../../Primitives'
 import { Toast } from '../../AdminActionPanel'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
 import { FallbackHistoryModal } from './FallbackHistoryModal'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 type BaselineRow = {
   id: Id<'pricing_baselines'>
@@ -87,13 +88,14 @@ export const BaselinesTable = () => {
       actorName, actorId,
     })
     if (res.ok) {
-      setToast(res.changes ? `Baseline updated for ${r.service_name}` : 'No changes')
+      setToast(res.changes ? `Baseline updated for ${formatServiceDisplayName(r.service_name)}` : 'No changes')
       cancelEdit()
     }
   }
 
   const filtered = (baselines ?? []).filter(b =>
     !q || b.service_name.toLowerCase().includes(q.toLowerCase()) ||
+    formatServiceDisplayName(b.service_name).toLowerCase().includes(q.toLowerCase()) ||
     (b.service_slug ?? '').toLowerCase().includes(q.toLowerCase())
   )
 
@@ -131,7 +133,7 @@ export const BaselinesTable = () => {
               return (
                 <tr key={String(r.id)}>
                   <td style={td}>
-                    <div style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{r.service_name}</div>
+                    <div style={{ fontSize:13, fontWeight:500, color:'var(--slate-900)' }}>{formatServiceDisplayName(r.service_name)}</div>
                     {r.service_slug && (
                       <div className="mono" style={{ fontSize:10, color:'var(--slate-400)' }}>{r.service_slug}</div>
                     )}
@@ -194,7 +196,7 @@ export const BaselinesTable = () => {
         <FallbackHistoryModal
           entityType="baseline"
           entityId={String(historyFor.id)}
-          title={`History · ${historyFor.service_name}`}
+          title={`History · ${formatServiceDisplayName(historyFor.service_name)}`}
           subtitle={`Current: ${fmtMoney(historyFor.base_price_low_cents)} – ${fmtMoney(historyFor.base_price_high_cents)} · ${historyFor.data_source}${historyFor.is_real_data ? ' · real' : ' · estimate'}`}
           onClose={() => setHistoryFor(null)}
         />

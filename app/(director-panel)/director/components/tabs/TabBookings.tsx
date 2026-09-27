@@ -10,6 +10,7 @@ import { SectionAnchor } from '../Shell'
 import { consumeGoto, consumeStashedGoto, gotoEntity } from '../directorNav'
 import { StatCard, DailyBars, money, fmtDate } from '../Charts'
 import { BookingDetailModal } from '../BookingDetailModal'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // MEASURED status set on this deployment (mirrors opsBookings.BOOKING_STATUSES).
 const BOARD_STATUSES = [
@@ -93,14 +94,15 @@ const ServiceCell = ({ services, custom }: { services: string[]; custom?: string
   if (catalog.length === 0 && customJobs.length === 0) return <>—</>
   return (
     <span style={{ display:'inline-flex', flexWrap:'wrap', alignItems:'center' }}>
-      {catalog.length > 0 && <span>{catalog.join(', ')}</span>}
+      {catalog.length > 0 && <span>{catalog.map(formatServiceDisplayName).join(', ')}</span>}
       {customJobs.map((name, i) => {
         // Comma-separate from whatever came before (catalog list or a prior
         // custom line) so the whole cell reads as one list.
         const needsComma = catalog.length > 0 || i > 0
+        const formattedName = formatServiceDisplayName(name)
         return (
           <span key={i} style={{ display:'inline-flex', alignItems:'center', gap:4 }}>
-            <span>{needsComma ? `, ${name}` : name}</span>
+            <span>{needsComma ? `, ${formattedName}` : formattedName}</span>
             <Badge tone="teal">Custom</Badge>
           </span>
         )

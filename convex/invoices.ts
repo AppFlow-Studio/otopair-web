@@ -22,6 +22,7 @@ import {
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 import { customServiceNames } from "./lib/customServiceNames";
 import { axlePositionByServiceId } from "./lib/brakeScope";
+import { partDisplayName } from "./lib/parts";
 
 const PLATFORM_FEE_BPS = 700;
 const DEFAULT_LABOR_RATE = 120;
@@ -83,6 +84,15 @@ export type AssembledInvoiceData = {
     logoUrl: string | null;
   };
   mechanicName: string | null;
+
+  /** "cancellation_fee" = this booking was cancelled / released for pickup and
+   *  only the forfeit fee was captured; the breakdown is a single fee line, not
+   *  labor/parts/tax. Renderers should show "Pickup / cancellation fee", not a
+   *  service bill. */
+  receiptKind: "service" | "cancellation_fee";
+  /** The captured pickup / late-cancel fee in cents when receiptKind is
+   *  "cancellation_fee"; null otherwise. */
+  cancellationFeeCents: number | null;
 
   services: string[];
   parts: AssembledInvoicePart[];
@@ -185,7 +195,10 @@ async function assembleInvoiceData(
       const unit = Number(s.unit_cost ?? 0);
       const line = Number(s.total_cost ?? qty * unit);
       return {
-        name: s.part_name,
+        name: partDisplayName({
+          part_name: s.part_name,
+          oem_number: s.oem_part_number,
+        }),
         oemNumber: displayOem(s.oem_part_number),
         brand: s.brand ?? null,
         qty,
@@ -203,7 +216,7 @@ async function assembleInvoiceData(
           const qty = Number(p.quantity ?? 1);
           const unit = Number(p.cost ?? 0);
           return {
-            name: p.part_name,
+            name: partDisplayName(p),
             oemNumber: displayOem(p.oem_number),
             brand: p.brand ?? null,
             qty,
@@ -253,6 +266,15 @@ async function assembleInvoiceData(
     const capturedCents = Number(payment.captured_amount_cents ?? 0);
     const subtotalCents = partsTotalCents + laborCents;
 
+    // A cancelled / no-show booking's captured amount is the pickup / late-cancel
+    // forfeit fee (the $20 deposit), not a service bill. Represent it as a single
+    // fee line — no labor/parts, no sales tax, and $0 platform cut (the deposit
+    // PI is a destination charge with application_fee_amount 0) — instead of the
+    // nonsensical "$X tax on a $20 fee" the normal breakdown would produce.
+    const isCancellationFeeReceipt =
+      (booking.status === "cancelled" || booking.status === "no_show") &&
+      capturedCents > 0;
+
     // Cash walk-in invoice: it's the shop's own bill (parts + labor), with no
     // sales tax line and no Otopair platform fee. Total = captured amount when
     // recorded (the mechanic's override), else the computed subtotal.
@@ -260,7 +282,11 @@ async function assembleInvoiceData(
     let totalCents: number;
     let platformFeeCents: number | null;
     let taxCents: number | null;
-    if (isCash) {
+    if (isCancellationFeeReceipt) {
+      totalCents = capturedCents;
+      platformFeeCents = 0;
+      taxCents = 0;
+    } else if (isCash) {
       totalCents = capturedCents > 0 ? capturedCents : subtotalCents;
       platformFeeCents = null;
       taxCents = null;
@@ -281,6 +307,7 @@ async function assembleInvoiceData(
     // payments.invoice_quote_flags so finance can audit drift without
     // grepping logs. Also rolls per-quote engine flags up to the invoice.
     if (
+      !isCancellationFeeReceipt &&
       cfgForBand &&
       booking.shop_id &&
       Array.isArray(booking.service_ids) &&
@@ -397,22 +424,32 @@ async function assembleInvoiceData(
         logoUrl: shopLogoUrl,
       },
       mechanicName,
+      receiptKind: isCancellationFeeReceipt ? "cancellation_fee" : "service",
+      cancellationFeeCents: isCancellationFeeReceipt ? capturedCents : null,
       // Catalog services first, then the off-catalog lines. Without the second
       // half a booking whose only work was custom produced a PDF and a
       // /receipts/<id> page listing NOTHING against a real charge — the
-      // customer's own proof of what they paid for, blank.
-      services: [
-        ...services
-          .map((s): string | null => (s ? (s as Doc<"services">).name : null))
-          .filter((x): x is string => Boolean(x)),
-        ...customServiceNames((booking as any).custom_services),
-      ],
-      parts,
+      // customer's own proof of what they paid for, blank. A cancellation-fee
+      // receipt has no services at all — the single fee line stands in for them.
+      services: isCancellationFeeReceipt
+        ? ["Pickup / cancellation fee"]
+        : [
+            ...services
+              .map((s): string | null => (s ? (s as Doc<"services">).name : null))
+              .filter((x): x is string => Boolean(x)),
+            // Only lines the customer actually approved — a still-`pending_confirmation`
+            // draft the mechanic added but never got confirmed must never appear on
+            // the receipt as something paid for.
+            ...customServiceNames((booking as any).custom_services, {
+              customerVisibleOnly: true,
+            }),
+          ],
+      parts: isCancellationFeeReceipt ? [] : parts,
 
-      laborMinutes,
-      laborCents,
-      partsTotalCents,
-      subtotalCents,
+      laborMinutes: isCancellationFeeReceipt ? 0 : laborMinutes,
+      laborCents: isCancellationFeeReceipt ? 0 : laborCents,
+      partsTotalCents: isCancellationFeeReceipt ? 0 : partsTotalCents,
+      subtotalCents: isCancellationFeeReceipt ? totalCents : subtotalCents,
       taxCents,
       platformFeeCents,
       totalCents,
@@ -694,6 +731,13 @@ export const getReceiptForBooking = query({
       paymentId: data.paymentId,
       status: data.status,
       invoiceNumber: data.invoiceNumber,
+      // "cancellation_fee" → this receipt is the pickup / late-cancel forfeit
+      // fee, not a service bill; the breakdown collapses to a single fee line.
+      // Mobile should caption it "Pickup / cancellation fee", not "Labor,
+      // parts, fee and tax". See docs/mobile-pickup-past-services-spec.md §3.
+      receiptKind: data.receiptKind,
+      cancellationFeeCents: data.cancellationFeeCents,
+      services: data.services,
       url,
       generatedAtMs: data.invoiceGeneratedAtMs,
       emailedAtMs: data.invoiceEmailedAtMs,
@@ -719,6 +763,46 @@ export const getReceiptForBooking = query({
  * generation pass; safe to call multiple times (idempotent via storage-id
  * check inside the action).
  */
+/**
+ * Signed URL for a booking's stored invoice PDF, or null when none exists yet.
+ *
+ * The render pipeline (`invoices_node.generateAndEmail`) has always produced a
+ * real PDF and stashed it in Convex storage, but nothing in the app could
+ * reach it — so the receipt sheet's SHARE sent a bare reference string and the
+ * PDF only ever left the system by email (Ahmad, 2026-09-14).
+ *
+ * Returns null rather than throwing when the PDF is absent: on most bookings
+ * it genuinely has not been rendered yet, and the caller's job is to schedule
+ * generation and wait, not to treat it as an error.
+ */
+export const getInvoicePdfUrl = query({
+  args: { bookingId: v.id("bookings") },
+  handler: async (ctx, { bookingId }) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+    const me = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!me) return null;
+
+    const booking = await ctx.db.get(bookingId);
+    // Scoped to the customer on the booking. An invoice carries the shop, the
+    // vehicle and what was paid, so it is not something to hand to any caller
+    // holding an id.
+    if (!booking || booking.user_id !== me._id) return null;
+
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", bookingId))
+      .unique();
+    const storageId = (payment as any)?.invoice_storage_id;
+    if (!storageId) return null;
+
+    return await ctx.storage.getUrl(storageId);
+  },
+});
+
 export const requestInvoiceGeneration = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, { bookingId }) => {

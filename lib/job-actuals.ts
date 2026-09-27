@@ -10,6 +10,10 @@ export type JobActualPart = {
 export type JobActualDetails = {
   status: "draft" | "finalized";
   startedAt?: number | null;
+  /** The inspection window — Start Job to the MPI gate closing. Recorded
+   *  separately from startedAt so micrometer time stays out of labor. */
+  mpiStartedAt?: number | null;
+  mpiCompletedAt?: number | null;
   completedAtMs?: number | null;
   actualLaborMinutes?: number | null;
   actualPartsCost?: number | null;

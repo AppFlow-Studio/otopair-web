@@ -11,16 +11,23 @@ import JobActualsDialog, { type JobActualsPayload } from "@/components/job-actua
 import MultiPointInspectionDialog, {
   type InspectionInputPayload,
 } from "@/components/multi-point-inspection-dialog";
+import type { InspectionPhase } from "@/lib/inspection-template";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
+import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
 import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
+import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
-import { templateForSystem } from "@/lib/diagnostic-checklist-templates";
+import {
+  splitDiagnosticServices,
+  templateForSystem,
+} from "@/lib/diagnostic-checklist-templates";
 import type {
   PostJobSurveyPayload,
   CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   GreetingHeader,
   MetricRow,
@@ -119,9 +126,11 @@ export default function MechanicDashboard() {
   );
   const savePrejob = useMutation(api.bookings.savePrejob);
   const startWithPrejob = useMutation(api.bookings.startWithPrejob);
+  const updateStatus = useMutation(api.bookings.updateStatus);
   const commitInspectionAndAwaitEstimate = useMutation(
     api.bookings.commitInspectionAndAwaitEstimate,
   );
+  const completeMpiPhase = useMutation(api.bookings.completeMpiPhase);
   const completeWithPostjob = useMutation(api.bookings.completeWithPostjob);
 
   const saveActualsDraft = useMutation(api.job_actuals.saveDraft);
@@ -130,8 +139,11 @@ export default function MechanicDashboard() {
   const [toast, setToast] = useState<string>("");
   const [workflowBookingId, setWorkflowBookingId] = useState<Id<"bookings"> | null>(null);
   const [workflowMode, setWorkflowMode] = useState<
-    "prejob" | "prejob_estimate" | "postjob" | null
+    "prejob" | "prejob_estimate" | "postjob" | "diagnostic_postjob" | null
   >(null);
+  // "Do it now" from the diagnostic worksheet — the mid-job scope flow for the
+  // booking currently open in the workflow dialog.
+  const [showMidJobDialog, setShowMidJobDialog] = useState(false);
   const [pendingActiveBlock, setPendingActiveBlock] = useState<{
     activeBookingId: string;
     activeVehicle: string;
@@ -147,6 +159,12 @@ export default function MechanicDashboard() {
     api.bookings.getVehiclePassportForBooking,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
   );
+  // Keyed on status, not on mpiStartedAt — a booking still waiting on a
+  // customer's pre-job estimate approval must never read as "mpi" just
+  // because a timestamp was written early. status has one guarded writer;
+  // mpiStartedAt has several.
+  const workflowInspectionPhase: InspectionPhase =
+    selectedWorkflowBooking?.status === "in_progress" ? "mpi" : "pre";
   const workflowPrefill = useQuery(
     api.job_actuals.getPrefillData,
     workflowBookingId ? { bookingId: workflowBookingId } : "skip"
@@ -230,19 +248,56 @@ export default function MechanicDashboard() {
       (j: any) => String(j._id) === bookingId,
     );
     const pas = (target as any)?.paymentApprovalState as string | undefined;
-    const alreadyEstimated =
-      (target as any)?.hasDisclosedRange &&
-      pas != null &&
-      pas !== "none";
+    const hasRange = (target as any)?.hasDisclosedRange === true;
+    // Estimate already confirmed (customer-approved or auto in-range): begin the
+    // job directly. The estimate popup only CONFIRMS now — it never starts — so
+    // starting is this explicit step, matching the booking drawer's Start Job
+    // button.
+    const estimateApprovedReadyToStart =
+      hasRange && (pas === "in_range" || pas === "pre_job_approved");
+    if (estimateApprovedReadyToStart) {
+      void beginJobDirectly(bookingId);
+      return;
+    }
+    // Pending / declined estimates still route through the dialog so the
+    // mechanic can view the pending confirmation or pick continue/revise/release
+    // on a decline; a not-yet-estimated booking opens the inspection.
+    const alreadyEstimated = hasRange && pas != null && pas !== "none";
     openWorkflowDialog(
       bookingId,
       alreadyEstimated ? "prejob_estimate" : "prejob",
     );
   }
 
+  // Begin an at-shop booking whose estimate is already confirmed, straight from
+  // the job card — the transition is exactly what the estimate popup used to do
+  // (updateStatus -> in_progress); the FSM's in_progress guard blocks any
+  // not-yet-approved state, and the server enforces one active job per mechanic.
+  async function beginJobDirectly(bookingId: string) {
+    setBusyAction(`start:${bookingId}`);
+    try {
+      await updateStatus({
+        bookingId: bookingId as Id<"bookings">,
+        newStatus: "in_progress",
+        reason: "job_started",
+      });
+      setToast("Job started");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+        setToast("Finish your current in-progress job first — then start this one.");
+      } else {
+        setToast(message || "Could not start the job.");
+      }
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   function closeWorkflowDialog() {
     setWorkflowBookingId(null);
     setWorkflowMode(null);
+    setShowMidJobDialog(false);
   }
 
   function openActualsDialog(bookingId: string, mode: "complete" | "edit") {
@@ -276,7 +331,17 @@ export default function MechanicDashboard() {
           prejob: payload,
           inspection,
         });
-        setToast("Pre-job inspection saved");
+        setToast("Inspection saved");
+        closeWorkflowDialog();
+      } else if (workflowInspectionPhase === "mpi") {
+        // Job is already running: this closes the on-lift half, ending the
+        // inspection window and starting the labor clock.
+        await completeMpiPhase({
+          bookingId: workflowBookingId,
+          prejob: payload,
+          inspection,
+        });
+        setToast("Inspection complete — job clock started");
         closeWorkflowDialog();
       } else if (isNewCycle) {
         await commitInspectionAndAwaitEstimate({
@@ -395,26 +460,7 @@ export default function MechanicDashboard() {
     if (!dashboard) return [];
     const items: NeedItem[] = [];
 
-    // 1) In progress — finish what's on the lift.
-    for (const job of dashboard.todaysJobs) {
-      if (job.status !== "in_progress") continue;
-      const id = String(job._id);
-      const isDiag = !!(job as any).diagnosticSystem;
-      items.push({
-        key: `active-${id}`,
-        kind: "active",
-        dot: "success",
-        primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.join(", ") || undefined,
-        meta: "in progress",
-        action: {
-          label: isDiag ? "Diagnostic" : "Complete",
-          tone: isDiag ? "warning" : "primary",
-          run: () => openWorkflowDialog(id, "postjob"),
-        },
-        onOpen: () => openWorkflowDialog(id, "postjob"),
-      });
-    }
+    // 1) In progress — shown only in "In the bay," never as awaiting work.
 
     // 2) Ready to start — the vehicle is here.
     for (const job of dashboard.todaysJobs) {
@@ -427,7 +473,7 @@ export default function MechanicDashboard() {
         kind: "ready",
         dot: "primary",
         primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.join(", ") || undefined,
+        secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
         meta: `${formatTime(job.scheduledTime)}${enroute ? " · en route" : ""}`,
         action: passportIncomplete
           ? {
@@ -449,6 +495,7 @@ export default function MechanicDashboard() {
 
     // 3) Diagnostics needing follow-up.
     for (const job of diagnosticsNeedingFollowUp ?? []) {
+      if (job.status === "in_progress") continue;
       const id = String(job._id);
       items.push({
         key: `diag-${id}`,
@@ -456,7 +503,7 @@ export default function MechanicDashboard() {
         dot: "warning",
         primary: `${job.customerName} · ${job.vehicle}`,
         secondary:
-          `${job.serviceNames.join(", ")}${
+          `${job.serviceNames.map(formatServiceDisplayName).join(", ")}${
             job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""
           }` || undefined,
         meta: job.followupState === "awaiting_info" ? "awaiting info" : "pending",
@@ -508,7 +555,12 @@ export default function MechanicDashboard() {
   const inProgressCount =
     dashboard?.todaysJobs.filter((job: any) => job.status === "in_progress").length ?? 0;
   const readyCount =
-    dashboard?.todaysJobs.filter((job: any) => job.status === "vehicle_at_shop").length ?? 0;
+    dashboard?.todaysJobs.filter(
+      (job: any) =>
+        job.status === "vehicle_at_shop" &&
+        job.hasDisclosedRange &&
+        ["in_range", "pre_job_approved"].includes(job.paymentApprovalState),
+    ).length ?? 0;
 
   if (dashboard === undefined) {
     return (
@@ -640,7 +692,7 @@ export default function MechanicDashboard() {
                   dot={statusDot(job.status)}
                   code={formatTime(job.scheduledTime)}
                   primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                  secondary={job.serviceNames.join(", ") || undefined}
+                  secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                   meta={statusText(job.status)}
                   onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                 />
@@ -668,7 +720,7 @@ export default function MechanicDashboard() {
                         dot="muted"
                         code={formatTime(job.scheduledTime)}
                         primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                        secondary={job.serviceNames.join(", ") || undefined}
+                        secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                         onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                       />
                     );
@@ -701,19 +753,25 @@ export default function MechanicDashboard() {
         ) : null}
       </ConfirmationDialog>
 
-      <MultiPointInspectionDialog
+      <BookingWorkflowGuard
         open={workflowBookingId !== null && workflowMode === "prejob"}
+        booking={selectedWorkflowBooking}
+        allowedStatuses={[workflowInspectionPhase === "mpi" ? "in_progress" : "vehicle_at_shop"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <MultiPointInspectionDialog
+          open={workflowBookingId !== null && workflowMode === "prejob"}
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
         }
-        bookingServices={selectedWorkflowBooking?.serviceNames ?? []}
-        jobInProgress={selectedWorkflowBooking?.status === "in_progress"}
+        bookingServices={selectedWorkflowBooking?.serviceNames?.map(formatServiceDisplayName) ?? []}
+        phase={workflowInspectionPhase}
         tireReplacementPositions={
           selectedWorkflowBooking?.tireSpecs?.positions ?? []
         }
@@ -732,20 +790,31 @@ export default function MechanicDashboard() {
             prejob: payload,
             inspection,
           });
-        }}
-      />
+          }}
+        />
+      </BookingWorkflowGuard>
 
-      <DiagnosticChecklistDialog
+      <BookingWorkflowGuard
         open={
           workflowBookingId !== null &&
           workflowMode === "postjob" &&
           !!selectedWorkflowBooking?.diagnosticSystem
         }
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["in_progress"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <DiagnosticChecklistDialog
+          open={
+            workflowBookingId !== null &&
+            workflowMode === "postjob" &&
+            !!selectedWorkflowBooking?.diagnosticSystem
+          }
         bookingId={workflowBookingId}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -766,25 +835,60 @@ export default function MechanicDashboard() {
         recommendedServiceNote={selectedWorkflowBooking?.recommendedServiceNote ?? null}
         followupState={selectedWorkflowBooking?.diagnosticFollowupState ?? null}
         awaitingInfoNote={selectedWorkflowBooking?.awaitingInfoNote ?? null}
+        isDiagnosticOnly={
+          splitDiagnosticServices(selectedWorkflowBooking?.serviceNames ?? [])
+            .additional.length === 0
+        }
+        additionalServiceNames={splitDiagnosticServices(
+          selectedWorkflowBooking?.serviceNames ?? [],
+        ).additional.map(formatServiceDisplayName)}
         onClose={closeWorkflowDialog}
-        onCompleted={() => {
-          setToast("Diagnostic completed");
+        onCompleted={(msg) => {
+          setToast(msg ?? "Diagnostic completed");
           closeWorkflowDialog();
         }}
-        onError={(msg) => setToast(msg)}
+        onContinueToPostJob={() => setWorkflowMode("diagnostic_postjob")}
+        onAddWorkNow={() => setShowMidJobDialog(true)}
+          onError={(msg) => setToast(msg)}
+        />
+      </BookingWorkflowGuard>
+
+      {/* "Do it now" from the diagnostic worksheet — add the found work to this
+          booking as mid-job scope (customer approves the new price, then it's
+          completed through the post-job survey). */}
+      <MidJobScopeDialog
+        open={showMidJobDialog}
+        bookingId={workflowBookingId}
+        onClose={() => setShowMidJobDialog(false)}
+        onSubmitted={(msg) => {
+          setShowMidJobDialog(false);
+          setToast(msg);
+        }}
       />
 
-      <PostJobSurveyDialog
+      <BookingWorkflowGuard
         open={
           workflowBookingId !== null &&
-          workflowMode === "postjob" &&
-          !selectedWorkflowBooking?.diagnosticSystem
+          ((workflowMode === "postjob" &&
+            !selectedWorkflowBooking?.diagnosticSystem) ||
+            workflowMode === "diagnostic_postjob")
         }
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["in_progress"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <PostJobSurveyDialog
+          open={
+            workflowBookingId !== null &&
+            ((workflowMode === "postjob" &&
+              !selectedWorkflowBooking?.diagnosticSystem) ||
+              workflowMode === "diagnostic_postjob")
+          }
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -802,6 +906,10 @@ export default function MechanicDashboard() {
         onClose={closeWorkflowDialog}
         onSubmit={handleCompleteAction}
         layoverNotes={[
+          // Diagnostic worksheet findings seed the post-job findings step so a
+          // diagnostic wrapping up here doesn't retype what the mechanic already
+          // wrote on the checklist.
+          (selectedWorkflowBooking as any)?.diagnosticFindingsNote ?? "",
           (selectedWorkflowBooking?.jobActuals as any)?.inProgressNotes ?? "",
           // "Why the added scope / why this adjustment" reasons for agreed
           // changes — folded in so they seed the findings and appear in the
@@ -831,26 +939,41 @@ export default function MechanicDashboard() {
         quotedParts={workflowLockedQuote.lockedQuoteParts}
         lockedQuote={workflowLockedQuote.lockedQuote}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
-        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
-      />
+          fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+          hasShopPriceRange={(selectedWorkflowBooking as any)?.hasShopPriceRange ?? false}
+          shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
+          shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
+          shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
+          bookingServiceLines={(selectedWorkflowBooking as any)?.bookingServiceLines ?? null}
+        />
+      </BookingWorkflowGuard>
 
       {/* Pre-Job Approval — auto-chained from the inspection dialog. Same
           PostJobSurveyDialog component, this time with cycle="pre_job" so it
           routes submit through booking_approvals.submitPreJobEstimate and
           renders the live ApprovalStatusPanel after send. */}
-      <PostJobSurveyDialog
+      <BookingWorkflowGuard
         open={workflowBookingId !== null && workflowMode === "prejob_estimate"}
+        booking={selectedWorkflowBooking}
+        allowedStatuses={["vehicle_at_shop", "pending_customer_acceptance"]}
+        onAcknowledge={closeWorkflowDialog}
+      >
+        <PostJobSurveyDialog
+          open={workflowBookingId !== null && workflowMode === "prejob_estimate"}
         bookingId={workflowBookingId ? String(workflowBookingId) : null}
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
         }
         passportData={selectedWorkflowPassport ?? null}
         estimatedLaborMinutes={selectedWorkflowBooking?.estimatedLaborMinutes ?? null}
+        customLaborOverridesMinutes={
+          (selectedWorkflowBooking as any)?.customLaborOverridesMinutes ?? null
+        }
         prefillData={workflowPrefill ?? null}
         isSubmitting={false}
         onClose={closeWorkflowDialog}
@@ -867,19 +990,33 @@ export default function MechanicDashboard() {
         shopState={(selectedWorkflowBooking as any)?.shopState ?? null}
         shopZip={(selectedWorkflowBooking as any)?.shopZip ?? null}
         isFixedPrice={(selectedWorkflowBooking as any)?.isFixedPrice}
-        fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
-      />
+          fixedBaseCents={(selectedWorkflowBooking as any)?.fixedContractBaseCents ?? null}
+          hasShopPriceRange={(selectedWorkflowBooking as any)?.hasShopPriceRange ?? false}
+          shopSetBandLowCents={(selectedWorkflowBooking as any)?.shopSetBandLowCents ?? null}
+          shopSetBandHighCents={(selectedWorkflowBooking as any)?.shopSetBandHighCents ?? null}
+          shopSetBaseDefaultCents={(selectedWorkflowBooking as any)?.shopSetBaseDefaultCents ?? null}
+          bookingServiceLines={(selectedWorkflowBooking as any)?.bookingServiceLines ?? null}
+        />
+      </BookingWorkflowGuard>
 
-      <JobActualsDialog
+      <BookingWorkflowGuard
         open={actualsBookingId !== null}
+        booking={selectedBooking}
+        allowedStatuses={[actualsDialogMode === "edit" ? "completed" : "in_progress"]}
+        onAcknowledge={closeActualsDialog}
+      >
+        <JobActualsDialog
+          open={actualsBookingId !== null}
         mode={actualsDialogMode}
         estimatedLaborMinutes={selectedBooking?.estimatedLaborMinutes ?? null}
+        laborRateCents={(selectedBooking as any)?.shopLaborRateCents ?? null}
         jobActuals={selectedBooking?.jobActuals ?? null}
         prefillData={actualsPrefill ?? null}
         onClose={closeActualsDialog}
         onSaveDraft={handleSaveActualsDraft}
-        onFinalize={handleFinalizeActuals}
-      />
+          onFinalize={handleFinalizeActuals}
+        />
+      </BookingWorkflowGuard>
 
       {toast ? (
         <div className="fixed bottom-6 right-6 z-[70] rounded-lg border border-border bg-card px-4 py-3 text-sm text-foreground shadow-lg">

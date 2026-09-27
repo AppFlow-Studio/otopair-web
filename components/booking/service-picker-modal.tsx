@@ -22,6 +22,7 @@ import { Loader2, Search, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import ServiceSuggestions from "@/components/booking/service-suggestions";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export type ServicePicked =
   | {
@@ -230,7 +231,7 @@ export default function ServicePickerModal({
                           onPick({
                             kind: "service",
                             id: svc._id,
-                            name: svc.name,
+                            name: formatServiceDisplayName(svc.name),
                             slug: (svc as any).slug ?? null,
                             has_options: Boolean((svc as any).has_options),
                           })
@@ -238,7 +239,7 @@ export default function ServicePickerModal({
                         className="flex w-full items-center justify-between gap-2 rounded-lg border border-transparent px-3 py-2 text-left transition-colors hover:border-primary/15 hover:bg-primary/5"
                       >
                         <span className="truncate text-[13px] font-medium text-foreground">
-                          {svc.name}
+                          {formatServiceDisplayName(svc.name)}
                         </span>
                         {svc.is_vehicle_match ? (
                           <span className="inline-flex shrink-0 items-center rounded-md bg-primary/15 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-primary">

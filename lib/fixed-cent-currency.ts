@@ -14,7 +14,11 @@ export function fixedCentCurrencyCents(value: string | number | null | undefined
   return Math.round(amount * 100);
 }
 
-export function formatFixedCentCurrency(value: string | number | null | undefined): string {
+export function formatFixedCentCurrency(
+  value: string | number | null | undefined,
+  options?: { emptyWhenBlank?: boolean },
+): string {
+  if (options?.emptyWhenBlank && String(value ?? "").trim() === "") return "";
   return formatCents(fixedCentCurrencyCents(value));
 }
 

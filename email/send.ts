@@ -177,6 +177,9 @@ type WalkinPayload = {
 };
 
 const OTOPAIR_LOGO_URL = "https://otopair.com/logo.png";
+// Tightly-cropped glass logo that reads cleanly on a light/white header — the
+// same asset the invite email uses. Used by the sleek "grey" shell below.
+const EMAIL_LOGO_LIGHT_URL = "https://otopair.com/otopair-email-logo.png";
 const BRAND_GRADIENT =
   "linear-gradient(135deg,#0d72ff 0%,#3b82f6 100%)";
 
@@ -459,6 +462,37 @@ function brandedShellWithLogo(headline: string, bodyHtml: string): string {
         </td></tr>
         <tr><td style="padding:32px 40px;color:#1f2937;font-size:16px;line-height:1.6;">${bodyHtml}</td></tr>
         <tr><td style="padding:24px 40px 32px;border-top:1px solid #e5e7eb;text-align:center;background:#fafafa;">
+          <p style="margin:0;color:#1f2937;font-size:14px;font-weight:600;">Powered by Otopair</p>
+          <p style="margin:4px 0 0;color:#9ca3af;font-size:12px;">© Otopair ${new Date().getFullYear()}</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body></html>`;
+}
+
+/**
+ * Sleek "grey" shell — light background, white rounded card, and the Otopair
+ * logo on a clean white header (no blue banner). Mirrors the invite/campaign
+ * email look in `email/invite-template.ts` so branded receipts read as a set.
+ * Reusable for any customer-facing receipt that wants the branded style.
+ */
+function brandedShellLight(headline: string, bodyHtml: string): string {
+  return `
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background-color:#f3f4f6;">
+  <table role="presentation" width="100%" style="border-collapse:collapse;background-color:#f3f4f6;">
+    <tr><td align="center" style="padding:32px 16px;">
+      <table role="presentation" width="100%" style="max-width:600px;border-collapse:separate;background-color:#ffffff;border:1px solid #eceef1;border-radius:16px;overflow:hidden;box-shadow:0 1px 2px rgba(17,24,39,0.04),0 8px 24px rgba(17,24,39,0.06);">
+        <tr><td align="center" style="padding:40px 40px 28px;background-color:#ffffff;border-bottom:1px solid #eef0f3;">
+          <img src="${EMAIL_LOGO_LIGHT_URL}" alt="Otopair" width="56" height="56" style="display:block;margin:0 auto 12px;border:0;" />
+          <p style="margin:0 0 8px;color:#9ca3af;font-size:12px;font-weight:600;letter-spacing:2px;text-transform:uppercase;">Otopair</p>
+          <h1 style="margin:0;color:#111827;font-size:22px;font-weight:700;letter-spacing:-0.4px;">${escapeHtml(headline)}</h1>
+        </td></tr>
+        <tr><td style="padding:32px 40px;color:#1f2937;font-size:16px;line-height:1.6;">${bodyHtml}</td></tr>
+        <tr><td style="padding:24px 40px 32px;border-top:1px solid #f3f4f6;text-align:center;">
           <p style="margin:0;color:#1f2937;font-size:14px;font-weight:600;">Powered by Otopair</p>
           <p style="margin:4px 0 0;color:#9ca3af;font-size:12px;">© Otopair ${new Date().getFullYear()}</p>
         </td></tr>
@@ -1022,11 +1056,14 @@ export interface ContactSupportEmailData {
   customerName?: string;
   /** How many screenshots/videos the user attached (not uploaded here). */
   attachmentCount?: number;
+  /** Where the request came from, shown under the heading. Defaults to the app's contact sheet. */
+  sentFrom?: string;
 }
 
 export async function sendContactSupportEmail(data: ContactSupportEmailData) {
   const supportInbox = process.env.SUPPORT_EMAIL || "support@otopair.com";
   const { topic, subject, description, customerEmail, customerName, attachmentCount } = data;
+  const sentFrom = data.sentFrom ?? "Sent from Settings → Contact Us.";
   const esc = (s: string) => (s || "").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   const lineCss = "margin:0 0 6px;color:#1f2937;font-size:14px;line-height:1.5;";
@@ -1042,7 +1079,7 @@ export async function sendContactSupportEmail(data: ContactSupportEmailData) {
           <table role="presentation" style="max-width:560px;width:100%;border-collapse:collapse;background-color:#ffffff;border-radius:12px;box-shadow:0 4px 6px rgba(0,0,0,0.08);">
             <tr><td style="padding:24px 28px 8px;border-bottom:1px solid #e5e7eb;">
               <h1 style="margin:0;color:#0f172a;font-size:20px;font-weight:700;">New contact request</h1>
-              <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">Sent from Settings → Contact Us.</p>
+              <p style="margin:4px 0 0;color:#6b7280;font-size:13px;">${esc(sentFrom)}</p>
             </td></tr>
             <tr><td style="padding:20px 28px 4px;">
               <p style="${lineCss}"><span style="${labelCss}">Topic:</span> ${esc(topic)}</p>
@@ -1075,6 +1112,53 @@ export async function sendContactSupportEmail(data: ContactSupportEmailData) {
     return { success: true, data: result };
   } catch (error) {
     console.error("Error sending contact support email:", error);
+    return { success: false, error };
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Public /support form — customer-facing receipt. Confirms we received their
+// support / charge-dispute request and sets the "we'll be in touch" expectation.
+// The internal alert to the ops inbox reuses sendContactSupportEmail above.
+// ----------------------------------------------------------------------------
+export interface SupportRequestReceiptData {
+  customerEmail: string;
+  customerName?: string;
+  /** Human-readable category label (e.g. "Charge dispute"). */
+  categoryLabel: string;
+  subject: string;
+}
+
+export async function sendSupportRequestReceiptEmail(
+  data: SupportRequestReceiptData,
+) {
+  try {
+    const first = escapeHtml(
+      (data.customerName ?? "").trim().split(/\s+/)[0] || "there",
+    );
+    const body = `
+      <p style="margin:0 0 8px;">Hi ${first},</p>
+      <p style="margin:0 0 20px;">Thanks for reaching out to Otopair support. We've received
+      your request and our team will review it and get back to you at
+      <strong>${escapeHtml(data.customerEmail)}</strong>.</p>
+      <table role="presentation" style="width:100%;border-collapse:collapse;margin:0 0 20px;background:#ffffff;border-radius:8px;border:1px solid #e5e7eb;">
+        <tr><td style="padding:16px 20px;">
+          <p style="margin:0 0 4px;color:#6b7280;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Your request</p>
+          <p style="margin:8px 0 0;color:#111827;font-size:14px;font-weight:600;">${escapeHtml(data.categoryLabel)}</p>
+          <p style="margin:2px 0 0;color:#6b7280;font-size:13px;">${escapeHtml(data.subject)}</p>
+        </td></tr>
+      </table>
+      <p style="margin:0 0 8px;color:#6b7280;font-size:14px;">
+        No action needed right now — just reply to this email if you have anything to add.</p>`;
+    const result = await resend.emails.send({
+      from: "Otopair Support <support@otopair.com>",
+      to: data.customerEmail,
+      subject: "We received your Otopair support request",
+      html: brandedShellLight("Request received", body),
+    });
+    return { success: true, data: result };
+  } catch (error) {
+    console.error("Error sending support request receipt email:", error);
     return { success: false, error };
   }
 }

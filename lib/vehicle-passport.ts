@@ -141,6 +141,14 @@ export type VehiclePassportData = {
   vehicle_label: string;
   vehicle_short_label: string;
   vehicle_spec_label?: string | null;
+  /**
+   * Compact "engine · config · drivetrain" line for the inspection header card
+   * (e.g. "2.4L · I4 · AWD"). Built from engine.displacement_l +
+   * engine.configuration + vehicle_configs.drivetrain. Body class is omitted —
+   * it only lives in the deprecated `generations` table. Falls back to
+   * `vehicle_spec_label` when none of the segments are known.
+   */
+  vehicle_spec_line?: string | null;
   chassis_label?: string | null;
   service_name: string;
   service_slug: string | null;

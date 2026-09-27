@@ -17,12 +17,28 @@ const isPublicRoute = createRouteMatcher([
   "/llms.txt",
   "/privacy",
   "/terms",
+  "/shop-portal-terms",
+  // Counsel's site policy pages (2026-09-15). The URLs they replace
+  // (/cancellation-policy, /warranty, /how-shops-are-verified) redirect in
+  // next.config.ts, which runs before middleware.
+  "/cancellation",
+  "/warranties",
+  "/trust",
+  "/accessibility",
+  // The two pages Privacy Policy v6.1 §6 names, and the route their forms post to.
+  "/privacy-choices",
+  "/delete-account",
   "/contact",
+  // Public, no-login customer support / charge-dispute intake (marketing page +
+  // its submit endpoint). Feeds the director "Disputes" inbox.
+  "/support(.*)",
+  "/api/support(.*)",
   "/sign-in(.*)",
   "/sign-up(.*)",
   "/accept-invite(.*)",
   "/api/waitlist",
   "/api/contact",
+  "/api/privacy-requests",
   "/api/webhooks(.*)",
   // B2B shop onboarding — public top of funnel (no auth): partner marketing
   // page, the application intake form, and its submit endpoint.

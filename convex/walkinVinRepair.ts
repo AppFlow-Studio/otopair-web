@@ -35,6 +35,17 @@ import { query, mutation, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { isRealVin, isPseudoVin, canonicalVin } from "./lib/vinIdentity";
+import type { EnrichmentActor } from "./lib/enrichmentActor";
+
+/** Best-effort display name for a users row (Clerk-synced). */
+function actorFromUser(user: any, kind: "driver" | "mechanic"): EnrichmentActor {
+  const name =
+    [user?.first_name, user?.last_name].filter(Boolean).join(" ").trim() ||
+    user?.username ||
+    user?.email ||
+    kind;
+  return { name, id: String(user?._id ?? ""), kind };
+}
 
 /**
  * Every table whose rows belong to one car and are keyed on the VIN string,
@@ -175,6 +186,10 @@ export async function reconcileVin(
     toVin: string;
     trigger: string;
     actorUserId?: Id<"users">;
+    // Display identity for the enrichment run this repair kicks off — so an
+    // error-out alert can name the driver/mechanic behind it. See
+    // lib/enrichmentActor. actorUserId (above) is the audit-log key.
+    actor?: EnrichmentActor;
     now: number;
   },
 ): Promise<
@@ -239,6 +254,8 @@ export async function reconcileVin(
   // re-key must commit whether or not enrichment succeeds.
   await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runHeadless.go, {
     vin: toVin,
+    trigger: args.trigger,
+    actor: args.actor,
   });
 
   return { ok: true, plan, batch };
@@ -336,6 +353,7 @@ export const submitVinForMyVehicle = mutation({
       toVin: args.vin,
       trigger: "claim",
       actorUserId: user._id,
+      actor: actorFromUser(user, "driver"),
       now: Date.now(),
     });
 
@@ -385,6 +403,7 @@ export const submitVinForBooking = mutation({
       toVin: args.vin,
       trigger: "mechanic",
       actorUserId: user._id,
+      actor: actorFromUser(user, "mechanic"),
       now: Date.now(),
     });
 

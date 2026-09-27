@@ -41,9 +41,10 @@ import {
   buildMergedMaintenanceItems,
   type DriverRecommendationLike,
 } from "../../utils/mergedMaintenance";
-import { resolveSlugMap } from "../service_intervals_queries";
+import { resolveSlugMap, resolveFallbackProfile } from "../service_intervals_queries";
 import { loadHealthScoreWeights } from "../healthScoreWeights";
 import { resolveMileageForOwner } from "../lib/mileage";
+import { extractMaintenanceType } from "../../lib/maintenanceServiceMapping";
 import type { MaintenanceItem, MaintenanceStatus } from "../../components/cars/MaintenanceTracker";
 
 // -----------------------------------------------------------------------------
@@ -140,7 +141,12 @@ export type RecordProvenance = "verified" | "self_reported" | "inferred";
 
 export interface VehicleHealthItem {
   id: string;
-  type: MaintenanceType;
+  /** Item category. One of the five core maintenance types, a `minor_*` record
+   *  type a mechanic graded, or one of the non-core categories "catalog"
+   *  (interval inference), "rec" (mechanic recommendation), "warning"
+   *  (consolidated dashboard lights). Not narrowed to MaintenanceType: the
+   *  non-core kinds are real values this field can carry. */
+  type: string;
   label: string;
   status: MaintenanceStatus;
   description: string;
@@ -227,7 +233,7 @@ const MONITORED_SYSTEMS: MonitoredSystem[] = [...ALL_MAINTENANCE_TYPES, "inspect
  * systems users actually ask Oto about, hybrid/EV traction battery first.
  */
 const NOT_MONITORED_STATEMENT =
-  "OtoPair tracks ONLY the systems listed in `monitored_systems`. This response carries no data whatsoever — not good, not bad — about anything else. That includes, among many others, the hybrid/EV high-voltage traction battery, the transmission, the suspension, and the air conditioning. If a system is not in `monitored_systems`, it is absent because it has never been measured, NOT because it was checked and found healthy. Never infer that an unlisted system is fine, healthy, or 'covered' from this payload, from an absence of problems in `items`, or from the health score — the score is computed from the monitored set alone. For anything unlisted, say plainly that you have no data on it and offer an inspection.";
+  "OtoPair MEASURES only the systems listed in `monitored_systems`. Items with `type: \"catalog\"` are different in kind — they come from a maintenance schedule plus the odometer, not from anyone inspecting the part. Treat those as 'the schedule calls for this', never as 'the part was checked'; you DO know the service exists and whether a record is on file, so never claim it is outside what you can track. This response carries no data whatsoever — not good, not bad — about any system that produces NO item at all. That includes, among many others, the hybrid/EV high-voltage traction battery, the suspension, and the air conditioning. If a system produces no item, that is because it has never been looked at, NOT because it was checked and found healthy. Never infer that such a system is fine, healthy, or 'covered' from this payload, from an absence of problems in `items`, or from the health score — the score is computed from the measured set alone, and schedule-derived items deliberately do not move it. For anything with no item, say plainly that you have no data on it and offer an inspection.";
 
 export interface VehicleHealthResponse {
   /**
@@ -404,6 +410,22 @@ async function loadVehicleContextForUser(
       )
     : {};
 
+  // Class profile for the catalog pass's class-table fallback — the SAME
+  // source the ring reads via useVehicleFallbackProfile, including the ring's
+  // BEV guard (Fallback v2 §2: the class table never runs for a BEV).
+  const fallbackProfile = vehicle.vehicle_config_id
+    ? await resolveFallbackProfile(ctx, vehicle.vehicle_config_id)
+    : null;
+  const classCtx =
+    !fallbackProfile || fallbackProfile.fuelClass === "bev"
+      ? undefined
+      : {
+          vehicleClass: fallbackProfile.vehicleClass,
+          drivetrain: fallbackProfile.drivetrain,
+          hasDifferential: fallbackProfile.hasDifferential,
+          turbo: fallbackProfile.turbo,
+        };
+
   // Open-mechanic-rec penalty (−0–15) feeds the ring's score. Rewards (the
   // Health-Points buffer) are paused for now — see Rewards removal — so Oto
   // no longer reads vehicle_health_points here, keeping it in lockstep with
@@ -574,6 +596,20 @@ async function loadVehicleContextForUser(
     vehicleYear,
     oemIntervals as any,
   );
+  // Resolves a rec's service_id to its taxonomy slug so the merge can tell a
+  // recommendation and an eye-check tile are the same finding — the ring gets
+  // this from the booking store's catalog. Only read when there are recs, so
+  // the common path costs no extra scan.
+  let serviceSlugById: ((serviceId: string) => string | undefined) | undefined;
+  if (driverRecommendations.length > 0) {
+    const catalog = await ctx.db.query("services").collect();
+    const bySlug = new Map<string, string>();
+    for (const svc of catalog) {
+      if (svc._id && svc.slug) bySlug.set(String(svc._id), String(svc.slug));
+    }
+    serviceSlugById = (serviceId: string) => bySlug.get(serviceId);
+  }
+
   const scoringItems = buildMergedMaintenanceItems({
     userItems: scoringUserItems,
     records: records.map((r) => ({
@@ -585,6 +621,14 @@ async function loadVehicleContextForUser(
     vehicleYear,
     driverRecommendations,
     scopeId: owner._id as unknown as string,
+    // Behaviors #6/#7 — the anchored mileage/interval signal pills and the
+    // from-odometer catalog coverage pass, with the class-table fallback.
+    // Oto passes the ring's FULL input set: the item list it reports must be
+    // 1:1 with the Cars page, not a narrower anchored-only subset.
+    currentOdometer: odometerMiles > 0 ? odometerMiles : null,
+    oemIntervals: oemIntervals as any,
+    classCtx,
+    serviceSlugById,
   });
 
   return {
@@ -607,7 +651,20 @@ function toAiShape(
   item: MaintenanceItem,
   provenanceByType: Map<MaintenanceType, RecordProvenance>,
 ): VehicleHealthItem {
-  const rawType = item.id.replace(/^(unknown-|user-|smartcar-)/, "") as MaintenanceType;
+  // ONE vocabulary for item ids, shared with the scoring path
+  // (lib/maintenanceServiceMapping.extractMaintenanceType) so the two can't
+  // disagree. Core rows yield "oil"/"brakes"/…, mechanic-graded minors yield
+  // "minor_*", and the three non-core kinds collapse to a clean category:
+  //   catalog-<slug>          -> "catalog"      (interval inference, no record)
+  //   rec-<id>                -> "rec"          (mechanic recommendation)
+  //   warning-active-<scope>  -> "warning"      (consolidated dashboard lights)
+  // Before this, `type` echoed the whole id, which both lied about the declared
+  // type AND leaked raw Convex document ids (rec-, warning-active-) into the
+  // model's context. `label` already carries the human-readable name and `id`
+  // still carries the slug, so nothing user-facing is lost.
+  const rawType = extractMaintenanceType(
+    item.id.replace(/^smartcar-/, ""),
+  ) as MaintenanceType;
 
   // Provenance derivation:
   //   - id starts with "user-"     → backed by a maintenance_record. Look up
@@ -658,7 +715,6 @@ async function _getVehicleHealthCore(
 ): Promise<VehicleHealthResponse> {
   const {
     owner,
-    enrichedItems,
     scoringItems,
     odometerMiles,
     knownIssues,
@@ -666,9 +722,14 @@ async function _getVehicleHealthCore(
     provenanceByType,
   } = await loadVehicleContextForUser(ctx, userId, args.vehicle_id);
 
-  // Score from the ring-equivalent items + the same penalty so the number
-  // Oto states matches the Cars page. Items REPORTED to Oto stay the conservative
-  // enrichedItems (unchanged).
+  // Score AND reported items both come from the ring-equivalent set, so the
+  // number Oto states and the list it narrates are both 1:1 with the Cars page.
+  // The old parallel `enrichedItems` set existed because the shared merge used
+  // OPTIMISTIC no-record fallbacks (oil->due_soon, others->on_time) and Oto must
+  // not fabricate a status. That is no longer true: the merge now emits
+  // `unknown-<type>: unknown` for a service with no record, so the conservative
+  // duplicate is redundant. (Its now-dead builder is left in the loader for a
+  // separate cleanup.)
   const score = computeVehicleHealthScore(
     {
       maintenanceItems: scoringItems,
@@ -687,7 +748,9 @@ async function _getVehicleHealthCore(
     not_monitored: NOT_MONITORED_STATEMENT,
     score,
     score_is_estimated: owner.health_score_is_estimated ?? false,
-    items: enrichedItems.map((item) => toAiShape(item, provenanceByType)),
+    items: scoringItems
+      .map(enrichUrgentItem)
+      .map((item) => toAiShape(item, provenanceByType)),
     known_issues: describeKnownIssues(knownIssues),
   };
 }

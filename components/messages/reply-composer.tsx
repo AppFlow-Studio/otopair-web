@@ -83,6 +83,25 @@ export function ReplyComposer({
   }
 
   async function sendPickup(response: string) {
+    // Declining must carry a reason (respondToPickupRequest enforces it) — use
+    // the free-text draft so the customer sees the "why". The other responses
+    // are one-tap comms pings.
+    if (response === "declined") {
+      const note = draft.trim();
+      if (!note) {
+        setError("Type a short reason before declining so the customer knows why.");
+        return;
+      }
+      await run(async () => {
+        await reply({
+          ticketId,
+          text: note,
+          action: { kind: "pickup_response", params: { response, note } },
+        });
+        setDraft("");
+      });
+      return;
+    }
     await run(() =>
       reply({
         ticketId,

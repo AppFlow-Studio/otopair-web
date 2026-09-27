@@ -104,7 +104,7 @@ export default function TrustAndSafetyPage() {
         </p>
         <p>
           The full standard, including what {SITE_NAME} does not check today, is on{" "}
-          <Link href="/how-shops-are-verified">how shops are verified</Link>.
+          <Link href="/trust">how shops are verified</Link>.
         </p>
       </Section>
 
@@ -147,7 +147,7 @@ export default function TrustAndSafetyPage() {
             <strong>One exception to know about.</strong> If the shop&rsquo;s first estimate after
             inspection is above what you approved and you do not answer within 24 hours, the $20 hold
             is kept to pay the shop for the inspection. See the{" "}
-            <Link href="/cancellation-policy">cancellation policy</Link>.
+            <Link href="/cancellation">cancellation policy</Link>.
           </li>
         </ul>
       </Section>
@@ -210,7 +210,7 @@ export default function TrustAndSafetyPage() {
           issuer instead, Stripe runs that process and the shop responds to it through Stripe. Before
           any of this, the fastest route is usually to message the shop from the booking; most
           problems are a conversation, not a case. What a shop stands behind after the work is done is
-          the shop&rsquo;s own promise; see the <Link href="/warranty">warranty page</Link>.
+          the shop&rsquo;s own promise; see the <Link href="/warranties">warranty page</Link>.
         </p>
       </Section>
 
@@ -223,7 +223,11 @@ export default function TrustAndSafetyPage() {
           <li>Hides fees. The total you approve is the total you pay.</li>
           <li>Uses upsells, scarcity or countdowns.</li>
           <li>Uses panic or guilt language.</li>
-          <li>Sells or rents your data. See the <Link href="/privacy">privacy policy</Link>.</li>
+          <li>
+            Sells or shares your name, contact details, messages, location or payment details. The{" "}
+            <Link href="/privacy">privacy policy</Link> explains the vehicle-history data Otopair does
+            license, and how to opt your car out.
+          </li>
           <li>Pushes services your car does not need.</li>
           <li>Sends marketing notification blasts.</li>
         </ul>

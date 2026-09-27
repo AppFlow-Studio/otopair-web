@@ -38,6 +38,7 @@ import {
 import { isNonPooledPriceType, isPoisonPriceType, ESTIMATOR_ENDPOINT_PRICE_TYPE } from "./priceTypes";
 import { isPriceDataStale } from "../part_prices";
 import { partFitsConfigMake } from "../partSelector";
+import { normalizeShopServicePrice } from "./shopServicePricing";
 
 /** PARTS_SOURCE_REAL_PRIMARY gates the real per-config parts band in
  *  resolvePartsCost. Default OFF — when unset, resolvePartsCost output is
@@ -784,10 +785,8 @@ export async function buildQuote(
   const shop = await ctx.db.get(args.shop_id);
   if (!shop) return refuse("shop not found");
 
-  // Per-(shop, service, tier) flat-price override. When set, the shop has
-  // declared a single advertised price (e.g. $89.99 oil change) — bypass the
-  // labor + parts math entirely. Tax + platform fee are still added on top by
-  // the booking flow.
+  // Per-(shop, service, tier) fixed/range override. It replaces labor + parts
+  // math; tax and the platform fee are still added by the booking flow.
   const fixed = await ctx.db
     .query("shop_service_fixed_prices")
     .withIndex("by_shop_service_tier", (q) =>
@@ -797,13 +796,17 @@ export async function buildQuote(
         .eq("tier", tier),
     )
     .unique();
-  if (fixed) {
-    const price = round2(fixed.price_cents / 100);
+  const shopPrice = normalizeShopServicePrice(fixed);
+  if (shopPrice) {
+    const low = round2(shopPrice.lowCents / 100);
+    const high = round2(shopPrice.highCents / 100);
+    const midpoint = (low + high) / 2;
+    const spreadPct = midpoint > 0 ? ((high - low) / midpoint) * 100 : 0;
     return {
       ok: true,
-      low: price,
-      high: price,
-      spread_pct: 0,
+      low,
+      high,
+      spread_pct: Math.round(spreadPct * 10) / 10,
       tier,
       labor: {
         hours: 0,
@@ -814,18 +817,18 @@ export async function buildQuote(
         rate_source: "fixed_override",
       },
       parts: {
-        low: price,
-        high: price,
+        low,
+        high,
         source: "fixed_override",
-        per_unit_low: price,
-        per_unit_high: price,
+        per_unit_low: low,
+        per_unit_high: high,
         unit_count: 1,
         baseline_count: 1,
         unit_label: "kit",
         unit_count_estimated: false,
       },
-      flags: ["fixed_price_override"],
-      display_label: "Fixed price",
+      flags: [shopPrice.isFixed ? "fixed_price_override" : "shop_price_range_override"],
+      display_label: shopPrice.isFixed ? "Fixed price" : "Shop price range",
     };
   }
 

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { usePathname, useRouter } from "next/navigation";
-import { UserButton, useUser } from "@clerk/nextjs";
+import { UserButton, useClerk, useUser } from "@clerk/nextjs";
 import { useMutation, useQuery } from "convex/react";
 import { makeFunctionReference } from "convex/server";
 import { api } from "@/convex/_generated/api";
@@ -29,6 +29,7 @@ import {
   Wrench,
   Contact,
   History,
+  LogOut,
   Star,
   type LucideIcon,
 } from "lucide-react";
@@ -37,10 +38,10 @@ import { KeyboardShortcutsModal } from "@/components/keyboard-shortcuts-modal";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { PortalSidebarContext } from "./portal-context";
-import CustomerSchedulingAlerts from "@/components/customer-scheduling-alerts";
 import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
 import MechanicPickupAlert from "@/components/mechanic/pickup-alert";
+import { PortalAuthBoundary } from "@/components/portal/portal-auth-boundary";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -280,6 +281,40 @@ export default function PortalLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const { isLoaded, isSignedIn } = useUser();
+  const { signOut } = useClerk();
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const handleSignOut = async () => {
+    setIsSigningOut(true);
+    try {
+      await signOut({ redirectUrl: "/" });
+    } catch {
+      setIsSigningOut(false);
+    }
+  };
+
+  return (
+    <PortalAuthBoundary
+      isLoaded={isLoaded}
+      isSignedIn={isSignedIn}
+      isSigningOut={isSigningOut}
+      allowSignedOut={pathname.startsWith("/accept-invite")}
+    >
+      <AuthenticatedPortalLayout onSignOut={handleSignOut}>
+        {children}
+      </AuthenticatedPortalLayout>
+    </PortalAuthBoundary>
+  );
+}
+
+function AuthenticatedPortalLayout({
+  children,
+  onSignOut,
+}: {
+  children: React.ReactNode;
+  onSignOut: () => void;
+}) {
+  const pathname = usePathname();
   const router = useRouter();
   const { user } = useUser();
   const displayName = user
@@ -404,12 +439,24 @@ export default function PortalLayout({
             </Link>
             <div className="ml-auto flex items-center gap-3">
               <UserButton
+                appearance={{
+                  elements: {
+                    userButtonPopoverActionButton__signOut: { display: "none" },
+                  },
+                }}
                 userProfileProps={{
                   appearance: {
                     elements: { profileSection__danger: { display: "none" } },
                   },
                 }}
               >
+                <UserButton.MenuItems>
+                  <UserButton.Action
+                    label="Sign out"
+                    labelIcon={<LogOut className="w-4 h-4" />}
+                    onClick={onSignOut}
+                  />
+                </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
                   url="support"
@@ -721,6 +768,11 @@ export default function PortalLayout({
           <div className="flex items-center gap-3 px-4 py-4 border-t border-gray-200">
             <div className="shrink-0">
               <UserButton
+                appearance={{
+                  elements: {
+                    userButtonPopoverActionButton__signOut: { display: "none" },
+                  },
+                }}
                 userProfileProps={{
                   appearance: {
                     elements: { profileSection__danger: { display: "none" } },
@@ -761,6 +813,11 @@ export default function PortalLayout({
                       onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
+                  <UserButton.Action
+                    label="Sign out"
+                    labelIcon={<LogOut className="w-4 h-4" />}
+                    onClick={onSignOut}
+                  />
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
@@ -795,6 +852,11 @@ export default function PortalLayout({
                 <NotificationBell />
               )}
               <UserButton
+                appearance={{
+                  elements: {
+                    userButtonPopoverActionButton__signOut: { display: "none" },
+                  },
+                }}
                 userProfileProps={{
                   appearance: {
                     elements: { profileSection__danger: { display: "none" } },
@@ -835,6 +897,11 @@ export default function PortalLayout({
                       onClick={() => runDashboardSeedAction(null)}
                     />
                   ) : null}
+                  <UserButton.Action
+                    label="Sign out"
+                    labelIcon={<LogOut className="w-4 h-4" />}
+                    onClick={onSignOut}
+                  />
                 </UserButton.MenuItems>
                 <UserButton.UserProfilePage
                   label="Support"
@@ -865,7 +932,6 @@ export default function PortalLayout({
           )}
 
           <main className="flex-1 px-6 pt-6 pb-0">
-            <CustomerSchedulingAlerts />
             {children}
           </main>
         </div>

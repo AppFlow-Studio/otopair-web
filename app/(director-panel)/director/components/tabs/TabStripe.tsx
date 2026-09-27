@@ -17,6 +17,7 @@ import {
   fmtCurrency, fmtPct, fmtNumber, fmtRelative, money, fmtDate,
 } from '../Charts'
 import { can } from '@/lib/portal/capabilities'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 type Period = '7d' | '30d' | '90d' | 'ytd'
 const PERIOD_LABELS: Record<Period, string> = { '7d': '7 days', '30d': '30 days', '90d': '90 days', ytd: 'Year to date' }
@@ -834,7 +835,7 @@ const PaymentDetailModal = ({ id, onClose }: { id: Id<'payments'> | null; onClos
                         {(data.booking.services?.length > 0 || data.booking.vehicleYmm) && (
                           <div style={{ marginTop:2, fontSize:12, color:'var(--slate-500)' }}>
                             {[
-                              data.booking.services?.filter(s => s && s !== '—').join(', ') || null,
+                              data.booking.services?.filter(s => s && s !== '—').map(formatServiceDisplayName).join(', ') || null,
                               data.booking.vehicleYmm,
                             ].filter(Boolean).join(' · ')}
                           </div>

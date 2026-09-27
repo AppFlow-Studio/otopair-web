@@ -46,11 +46,12 @@ export default async function ClaimPage({
   }
 
   if ("alreadyClaimed" in result && result.alreadyClaimed) {
-    redirect("/sign-in");
+    redirect(`/t/${token}`);
   }
 
   return (
     <ClaimSignUp
+      token={token}
       email={result.email ?? ""}
       firstName={result.firstName ?? ""}
       shopName={result.shopName ?? ""}

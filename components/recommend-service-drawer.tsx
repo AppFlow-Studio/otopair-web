@@ -11,6 +11,7 @@ import {
   drawerPrimaryButtonClassName,
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export interface RecommendServiceContext {
   diagnosticBookingId: Id<"bookings">;
@@ -223,7 +224,7 @@ export default function RecommendServiceDrawer({
                 Recommended service · after diagnostic
               </div>
               <h2 className="mt-1.5 text-lg font-semibold text-foreground">
-                Schedule {context.serviceName}
+                Schedule {formatServiceDisplayName(context.serviceName)}
               </h2>
               <p className="mt-0.5 text-sm text-muted-foreground">
                 {context.customerName} · {context.vehicleDisplay}
@@ -249,7 +250,7 @@ export default function RecommendServiceDrawer({
           <div className={drawerInfoCardClassName}>
             <DrawerFieldLabel>Service</DrawerFieldLabel>
             <p className="text-[15px] font-medium text-foreground">
-              {context.serviceName}
+              {formatServiceDisplayName(context.serviceName)}
             </p>
             <p className="mt-1 text-sm text-muted-foreground">
               Estimated {durationMinutes}m

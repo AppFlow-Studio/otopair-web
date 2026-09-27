@@ -12,6 +12,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { query } from "./_generated/server";
 import { requireDirector } from "./directorGate";
+import { billablePart } from "./lib/parts";
 import {
   getPassportCompletionPercent,
   getMissingRequiredPassportFields,
@@ -275,7 +276,7 @@ export const surveyStream = query({
         mileage: j.prejob_report?.mileage ?? j.postjob_report?.completion_mileage ?? null,
         flagged_specs:
           j.flagged_vehicle_specs === true || j.prejob_report?.flagged_vehicle_specs === true,
-        parts_count: j.postjob_report?.parts_used?.length ?? 0,
+        parts_count: (j.postjob_report?.parts_used ?? []).filter(billablePart).length,
         photos: j.postjob_report?.postjob_photos?.length ?? 0,
         tread: j.prejob_report?.tire_tread ?? null,
         rotor_thickness: j.prejob_report?.brakes != null

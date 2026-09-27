@@ -26,6 +26,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { buildNhtsaVinKey } from "./vehicleEnrichment/types";
+import { mintClaimToken } from "./walkin_claims";
 
 function canonicalVin(vin?: string): string | undefined {
   const c = vin?.trim().toUpperCase();
@@ -58,6 +59,10 @@ export const lookupConfig = query({
     fuelType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // YMM-only (no decoded transmission): the key intentionally omits the
+    // transmission family and stays in the legacy transmission-less namespace.
+    // At worst this misses a transmission-keyed config (soft — no pre-warm); the
+    // real add-flow decode links/enriches correctly. See types.ts.
     const nhtsaKey = buildNhtsaVinKey({
       year: args.year,
       make: args.make,
@@ -275,6 +280,8 @@ export const createStub = mutation({
     if (vin) {
       let matchedConfigId: Id<"vehicle_configs"> | undefined;
       if (args.year && args.make && args.model) {
+        // YMM-only — transmission family intentionally omitted (transmission-less
+        // namespace); may miss a transmission-keyed config, harmless. See types.ts.
         const nhtsaKey = buildNhtsaVinKey({
           year: args.year,
           make: args.make,
@@ -330,7 +337,14 @@ export const createStub = mutation({
       vehicleAttached = true;
     }
 
-    // Never leak the internal id; the client only needs a success signal.
-    return { ok: true, isRealUser, vehicleAttached, configLinked };
+    // Mint a claim token on the stub user row so the user can claim their
+    // account via otopair://claim/<token> or /t/<token> in the app or on the web.
+    let claimToken: string | null = null;
+    if (!isRealUser) {
+      claimToken = await mintClaimToken(ctx, userId);
+    }
+
+    // Never leak the internal id; the client only needs a success signal + claimToken.
+    return { ok: true, isRealUser, vehicleAttached, configLinked, claimToken };
   },
 });

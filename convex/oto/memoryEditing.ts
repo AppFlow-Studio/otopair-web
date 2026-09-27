@@ -1081,6 +1081,24 @@ export const commitControl = internalMutation({
 // Day 2 TODO: enforce role-conditional invariants (prompt_version /
 // model_used required for assistant), insert.
 // -----------------------------------------------------------------------------
+/**
+ * Highest turn_number conversation_audit holds for a conversation, or -1.
+ * Read-only. oto/chat.ts numbers each turn past it once an edited message has
+ * shortened the conversation (#272), since recounting messages would reuse a
+ * (turn, role) the log already holds and recordTurn would reject the write.
+ */
+export const getLastAuditTurnNumber = internalQuery({
+  args: { conversationId: v.id("ai_conversations") },
+  handler: async (ctx, { conversationId }) => {
+    const last = await ctx.db
+      .query("conversation_audit")
+      .withIndex("by_conversation_turn", (q) => q.eq("conversation_id", conversationId))
+      .order("desc")
+      .first();
+    return last?.turn_number ?? -1;
+  },
+});
+
 export const recordTurn = internalMutation({
   args: {
     conversation_id: v.id("ai_conversations"),

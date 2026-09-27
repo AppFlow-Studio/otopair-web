@@ -75,9 +75,13 @@ export async function notifyCustomerQuoteReceived(
       quote_type: kind,
       shopName,
       total,
-      // Deep-link hint for the mobile app: open the quotes list for this
-      // booking when the notification is tapped.
-      data: { bookingId: String(booking._id), quote_type: kind },
+      // Deep-link so a tap opens the booking (the confirmed base route); the
+      // quote_type hint lets the app deep-route to the quotes list from there.
+      data: {
+        deepLink: `otopair://booking/${String(booking._id)}`,
+        bookingId: String(booking._id),
+        quote_type: kind,
+      },
     },
   });
 }

@@ -32,6 +32,7 @@ import { mutation, query } from "./_generated/server";
 import { v } from "convex/values";
 import { syncMechanicAvailabilityWindow } from "./lib/timeSlotAvailability";
 import { getBookableShopIds } from "../lib/bookableShop";
+import { reassignActiveBookingsAwayFromMechanic } from "./bookings";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -170,6 +171,7 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
         lastName: mechanic.last_name as string,
         title: (mechanic.title ?? "") as string,
         email: (mechanic.email ?? latestInvitation?.email ?? "") as string,
+        entityType: (mechanic.entity_type === "bay" ? "bay" : "mechanic") as "bay" | "mechanic",
         isActive: mechanic.is_active !== false,
         rating: mechanic.rating ?? 0,
         reviewCount: mechanic.review_count ?? 0,
@@ -576,12 +578,14 @@ export const createManaged = mutation({
     lastName: v.string(),
     title: v.optional(v.string()),
     email: v.optional(v.string()),
+    entityType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await requireShopOwner(ctx, args.shopId);
+    const entityType = args.entityType === "bay" ? "bay" : "mechanic";
     const firstName = args.firstName.trim();
     const lastName = args.lastName.trim();
-    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+    if (!firstName) throw new Error(entityType === "bay" ? "Enter a bay name." : "Enter a first name.");
 
     const mechanicId = await ctx.db.insert("mechanics", {
       shop_id: args.shopId,
@@ -592,6 +596,7 @@ export const createManaged = mutation({
       is_active: true,
       rating: 0,
       review_count: 0,
+      entity_type: entityType,
     });
 
     await syncMechanicAvailabilityWindow(ctx, {
@@ -610,18 +615,26 @@ export const updateManaged = mutation({
     lastName: v.string(),
     title: v.optional(v.string()),
     email: v.optional(v.string()),
+    entityType: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
+    const entityType =
+      args.entityType === "bay" || args.entityType === "mechanic"
+        ? args.entityType
+        : mechanic.entity_type === "bay"
+          ? "bay"
+          : "mechanic";
     const firstName = args.firstName.trim();
     const lastName = args.lastName.trim();
-    if (!firstName || !lastName) throw new Error("Enter both a first and last name.");
+    if (!firstName) throw new Error(entityType === "bay" ? "Enter a bay name." : "Enter a first name.");
 
     await ctx.db.patch(args.mechanicId, {
       first_name: firstName,
       last_name: lastName,
       title: args.title?.trim() || undefined,
       email: args.email?.trim().toLowerCase() || undefined,
+      entity_type: entityType,
     });
 
     await syncMechanicAvailabilityWindow(ctx, {
@@ -666,7 +679,8 @@ export const deactivateManaged = mutation({
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
     const blockers = await getBlockingBookings(ctx, args.mechanicId, mechanic.shop_id);
     if (blockers.length > 0) {
-      throw new Error("This mechanic has active bookings or jobs that must be completed or reassigned first.");
+      const label = mechanic.entity_type === "bay" ? "bay" : "mechanic";
+      throw new Error(`This ${label} has active bookings or jobs that must be completed or reassigned first.`);
     }
 
     await ctx.db.patch(args.mechanicId, { is_active: false });
@@ -685,5 +699,179 @@ export const getByShop = query({
       .query("mechanics")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .collect();
+  },
+});
+
+/**
+ * MUTATION: enableSelfAsMechanic
+ * Lets a shop owner opt into being a schedulable mechanic. Creates (or
+ * reactivates) a mechanics row tied to their own user record and links their
+ * shop_users membership to it via mechanic_id, so they show up as a lane on the
+ * Schedule and can be assigned bookings like any other mechanic.
+ */
+export const enableSelfAsMechanic = mutation({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const { user } = await requireShopOwner(ctx, args.shopId);
+    const now = Date.now();
+
+    const firstName =
+      (user.first_name ?? "").trim() ||
+      (user.email ? String(user.email).split("@")[0] : "") ||
+      "Owner";
+    const lastName = (user.last_name ?? "").trim();
+    const email = user.email ? String(user.email).trim().toLowerCase() : undefined;
+
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_and_shop", (q: any) =>
+        q.eq("user_id", user._id).eq("shop_id", args.shopId),
+      )
+      .first();
+
+    // Resolve which mechanics row to (re)use, in priority order, so repeated
+    // opt-in/opt-out never accumulates duplicate profiles:
+    //   1. an existing self-mechanic tied to this user
+    //   2. a mechanic the owner's membership already points at (e.g. one they
+    //      set up manually via "Add mechanic" then deactivated) — adopt it
+    //   3. otherwise create a fresh profile
+    let mechanic = await ctx.db
+      .query("mechanics")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) => q.eq(q.field("shop_id"), args.shopId))
+      .first();
+
+    if (!mechanic && membership?.mechanic_id) {
+      const linked = await ctx.db.get(membership.mechanic_id);
+      if (
+        linked &&
+        String(linked.shop_id) === String(args.shopId) &&
+        linked.entity_type !== "bay"
+      ) {
+        mechanic = linked;
+      }
+    }
+
+    let mechanicId;
+    if (mechanic) {
+      await ctx.db.patch(mechanic._id, {
+        is_active: true,
+        user_id: user._id,
+        first_name: firstName,
+        last_name: lastName,
+        email: email ?? mechanic.email,
+        entity_type: "mechanic",
+      });
+      mechanicId = mechanic._id;
+    } else {
+      mechanicId = await ctx.db.insert("mechanics", {
+        shop_id: args.shopId,
+        user_id: user._id,
+        first_name: firstName,
+        last_name: lastName,
+        title: "Owner",
+        email,
+        is_active: true,
+        rating: 0,
+        review_count: 0,
+        entity_type: "mechanic",
+      });
+    }
+
+    // Link (or create) the owner's shop membership so getMyPortalAccess resolves
+    // their own swim lane and the Schedule can highlight/default to it.
+    if (membership) {
+      await ctx.db.patch(membership._id, {
+        mechanic_id: mechanicId,
+        is_active: true,
+        updated_at: now,
+      });
+    } else {
+      await ctx.db.insert("shop_users", {
+        shop_id: args.shopId,
+        user_id: user._id,
+        role: "shop_owner",
+        mechanic_id: mechanicId,
+        is_active: true,
+        invited_at: now,
+        accepted_at: now,
+        created_at: now,
+        updated_at: now,
+      });
+    }
+
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      mechanicId,
+    });
+
+    return mechanicId;
+  },
+});
+
+/**
+ * MUTATION: disableSelfAsMechanic
+ * Reverses enableSelfAsMechanic: deactivates the owner's mechanic profile and
+ * unlinks it from their membership so they drop off the Schedule. Refuses while
+ * they still have active bookings/jobs assigned to avoid orphaning live work.
+ */
+export const disableSelfAsMechanic = mutation({
+  args: { shopId: v.id("shops") },
+  handler: async (ctx, args) => {
+    const { user } = await requireShopOwner(ctx, args.shopId);
+    const now = Date.now();
+
+    const membership = await ctx.db
+      .query("shop_users")
+      .withIndex("by_user_and_shop", (q: any) =>
+        q.eq("user_id", user._id).eq("shop_id", args.shopId),
+      )
+      .first();
+
+    // Resolve the mechanic to retire: prefer the one tied to this user, else
+    // whatever the owner's membership currently points at (covers profiles set
+    // up before user_id existed). Mirror of enableSelfAsMechanic's resolution.
+    let mechanic = await ctx.db
+      .query("mechanics")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+      .filter((q: any) =>
+        q.and(q.eq(q.field("shop_id"), args.shopId), q.neq(q.field("is_active"), false)),
+      )
+      .first();
+
+    if (!mechanic && membership?.mechanic_id) {
+      const linked = await ctx.db.get(membership.mechanic_id);
+      if (linked && String(linked.shop_id) === String(args.shopId) && linked.is_active !== false) {
+        mechanic = linked;
+      }
+    }
+
+    // No active self-mechanic — just make sure no stale pointer lingers.
+    if (!mechanic) {
+      if (membership?.mechanic_id) {
+        await ctx.db.patch(membership._id, { mechanic_id: undefined, updated_at: now });
+      }
+      return { ok: true };
+    }
+
+    // Clear this row before retiring it: auto-reassign every booking to another
+    // available mechanic at the same time, refusing if a job is in progress or
+    // no one is free. Convex mutation atomicity means any refusal here rolls back
+    // before the mechanic is deactivated, so we never strand bookings.
+    const { reassigned, unassigned } = await reassignActiveBookingsAwayFromMechanic(ctx, {
+      shopId: args.shopId,
+      mechanicId: mechanic._id,
+    });
+
+    await ctx.db.patch(mechanic._id, { is_active: false });
+    if (membership?.mechanic_id) {
+      await ctx.db.patch(membership._id, { mechanic_id: undefined, updated_at: now });
+    }
+    await syncMechanicAvailabilityWindow(ctx, {
+      shopId: args.shopId,
+      mechanicId: mechanic._id,
+    });
+
+    return { ok: true, reassigned, unassigned };
   },
 });

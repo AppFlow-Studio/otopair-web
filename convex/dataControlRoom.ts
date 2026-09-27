@@ -182,7 +182,12 @@ export const triggerReEnrich = mutation({
     await ctx.scheduler.runAfter(
       0,
       internal.vehicleEnrichment.marketplaceScraper.enrichAndTrack,
-      { vin, vin_queue_id: queueRow._id },
+      {
+        vin,
+        vin_queue_id: queueRow._id,
+        trigger: "director_reenrich",
+        actor: { name: actor.name, id: String(actor.userId), kind: "director" },
+      },
     );
 
     await logAudit(ctx, actor, {

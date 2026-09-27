@@ -102,9 +102,9 @@ export const OVERLAP_FAMILIES: OverlapFamily[] = [
   },
   {
     id: "cooling_drain",
-    label: "Timing belt + coolant flush",
+    label: "Drive belt + coolant flush",
     description:
-      "A timing-belt job already drains and refills the coolant, so a co-booked coolant flush doesn't pay for that drain again.",
+      "A drive-belt job already drains and refills the coolant, so a co-booked coolant flush doesn't pay for that drain again.",
     services: ["timing_belt", "coolant_flush"],
   },
 ];

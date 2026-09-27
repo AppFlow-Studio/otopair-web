@@ -15,10 +15,17 @@ import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { Car, Check, Loader2, Truck, X } from "lucide-react";
+import { Car, Check, KeyRound, Loader2, Truck, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import {
+  DeclinePickupDialog,
+  ReleaseVehicleDialog,
+} from "@/components/pickup/release-vehicle-dialog";
 
 type PickupResponse = "acknowledged" | "bringing_out" | "declined";
+// The two comms pings the shop can send without releasing the car. Decline is
+// its own reason-gated dialog; release is the terminal cancel+settle step.
+type CommsResponse = "acknowledged" | "bringing_out";
 
 type PickupRow = {
   _id: Id<"bookings">;
@@ -47,10 +54,12 @@ export default function PickupRequestAlerts({
   const [errorByRow, setErrorByRow] = useState<Record<string, string | null>>(
     {},
   );
+  const [releaseFor, setReleaseFor] = useState<Id<"bookings"> | null>(null);
+  const [declineFor, setDeclineFor] = useState<Id<"bookings"> | null>(null);
 
   if (!rows || rows.length === 0) return null;
 
-  async function handleRespond(row: PickupRow, response: PickupResponse) {
+  async function handleRespond(row: PickupRow, response: CommsResponse) {
     const key = String(row.bookingId);
     setPending((p) => ({ ...p, [key]: response }));
     setErrorByRow((e) => ({ ...e, [key]: null }));
@@ -131,6 +140,7 @@ export default function PickupRequestAlerts({
                 )}
               </div>
 
+              {/* Stage 1 — comms pings (no status change) */}
               <div className="mt-4 flex flex-wrap gap-2">
                 <ResponseButton
                   active={row.pickupResponse === "acknowledged"}
@@ -151,14 +161,29 @@ export default function PickupRequestAlerts({
                   tone="primary"
                 />
                 <ResponseButton
-                  active={row.pickupResponse === "declined"}
-                  pending={pendingResponse === "declined"}
+                  active={false}
+                  pending={false}
                   disabled={!!pendingResponse}
-                  onClick={() => handleRespond(row, "declined")}
+                  onClick={() => setDeclineFor(row.bookingId)}
                   icon={<X className="h-3.5 w-3.5" strokeWidth={2.5} />}
                   label="Decline"
                   tone="danger"
                 />
+              </div>
+
+              {/* Stage 2 — terminal handoff: cancel + settle */}
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setReleaseFor(row.bookingId)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-red-600 bg-red-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-red-700"
+                >
+                  <KeyRound className="h-3.5 w-3.5" strokeWidth={2.5} />
+                  Release car
+                </button>
+                <span className="text-[11px] text-muted-foreground">
+                  Hands the car back &amp; closes the booking
+                </span>
               </div>
 
               {rowError && (
@@ -168,6 +193,17 @@ export default function PickupRequestAlerts({
           );
         })}
       </div>
+
+      <ReleaseVehicleDialog
+        bookingId={releaseFor}
+        open={releaseFor != null}
+        onClose={() => setReleaseFor(null)}
+      />
+      <DeclinePickupDialog
+        bookingId={declineFor}
+        open={declineFor != null}
+        onClose={() => setDeclineFor(null)}
+      />
     </section>
   );
 }

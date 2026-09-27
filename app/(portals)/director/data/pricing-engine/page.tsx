@@ -13,6 +13,7 @@ import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import { usePortalSession, useCan } from "@/app/(portals)/portal-session";
 import { CoSignCeremony } from "@/components/portal/CoSignCeremony";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDate = (ms: number) => new Date(ms).toLocaleString();
@@ -249,7 +250,7 @@ export default function PricingEnginePage() {
                     key={b.id}
                     className="flex items-center gap-2 rounded-lg border border-slate-100 px-3 py-1.5 text-[13px]"
                   >
-                    <span className="truncate text-slate-700">{b.service_name}</span>
+                    <span className="truncate text-slate-700">{formatServiceDisplayName(b.service_name)}</span>
                     {!b.is_real_data && (
                       <span className={`${pill} bg-amber-50 text-amber-700`}>estimate</span>
                     )}
@@ -262,7 +263,7 @@ export default function PricingEnginePage() {
                         cellButton({
                           kind: "baseline",
                           id: b.id,
-                          label: b.service_name,
+                          label: formatServiceDisplayName(b.service_name),
                           from: `$${(b.base_price_low_cents / 100).toFixed(0)}–$${(b.base_price_high_cents / 100).toFixed(0)}`,
                           base_price_low_cents: b.base_price_low_cents,
                           base_price_high_cents: b.base_price_high_cents,

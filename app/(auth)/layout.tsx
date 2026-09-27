@@ -1,4 +1,5 @@
 import Image from "next/image";
+import { PortalTermsNotice } from "@/components/legal/portal-terms-notice";
 
 export default function AuthLayout({
   children,
@@ -11,6 +12,7 @@ export default function AuthLayout({
         <Image src="/logo.png" alt="Otopair" width={64} height={64} />
       </div>
       {children}
+      <PortalTermsNotice className="mt-6 mb-8" />
     </div>
   );
 }

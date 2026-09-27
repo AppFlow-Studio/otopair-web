@@ -125,6 +125,61 @@ export const _walkinBookingCustomerForShopStaff = internalQuery({
  * Returns { token: null } if the user has already claimed their account
  * (nothing to hand out).
  */
+/**
+ * Resolve a tracker link to the job it points at.
+ *
+ * ONE resolver for every entry point — `resolveClaimToken`, `getTrackerData`,
+ * `_vinForClaimToken` and `claimByToken` all used to re-derive this, and each
+ * copy of "most recent walk-in for this user" is a place they can disagree
+ * about which job a link means.
+ *
+ * Two schemes, checked in order:
+ *
+ *  1. `bookings.tracker_token` — the current one. Points at exactly one job,
+ *     which is what makes a link stable for a customer with several walk-ins
+ *     open at the same shop.
+ *  2. `users.claim_token` — legacy, kept because links are already out there
+ *     in customers' text messages. Resolves to their most recent walk-in,
+ *     which is what it always did. It expires on its own; nothing to migrate.
+ */
+type TokenTarget =
+  | { kind: "expired" }
+  | { kind: "unknown" }
+  | { kind: "ok"; booking: any | null; user: Doc<"users">; legacy: boolean };
+
+async function resolveTrackerToken(ctx: any, token: string): Promise<TokenTarget> {
+  if (!token) return { kind: "unknown" };
+  const now = Date.now();
+
+  const booking = await ctx.db
+    .query("bookings")
+    .withIndex("by_tracker_token", (q: any) => q.eq("tracker_token", token))
+    .first();
+  if (booking) {
+    const expiresAt = (booking as any).tracker_token_expires_at as number | undefined;
+    if (!expiresAt || expiresAt < now) return { kind: "expired" };
+    const user = (await ctx.db.get((booking as any).user_id)) as Doc<"users"> | null;
+    if (!user) return { kind: "unknown" };
+    return { kind: "ok", booking, user, legacy: false };
+  }
+
+  const user = await ctx.db
+    .query("users")
+    .withIndex("by_claim_token", (q: any) => q.eq("claim_token", token))
+    .first();
+  if (!user) return { kind: "unknown" };
+  const expiresAt = (user as any).claim_token_expires_at as number | undefined;
+  if (!expiresAt || expiresAt < now) return { kind: "expired" };
+
+  const recent = await ctx.db
+    .query("bookings")
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
+    .order("desc")
+    .take(5);
+  const walkin = recent.find((b: any) => b.source === "mechanic_walk_in") ?? null;
+  return { kind: "ok", booking: walkin, user, legacy: true };
+}
+
 export const mintForBooking = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
@@ -141,16 +196,41 @@ export const mintForBooking = mutation({
 
     const user = (await ctx.db.get(userId)) as Doc<"users"> | null;
     if (!user) throw new Error("Customer user not found");
-    if ((user as any).walkInClaimedAt) {
-      return { token: null as string | null, expiresAtMs: null as number | null };
+
+    // A customer who already has an Otopair account STILL gets a link.
+    //
+    // This used to return `{ token: null }` for them, and the portal rendered
+    // "No tracker link — they'll see this booking the next time they open the
+    // app". Ahmad, 2026-09-10: "obviously we need one even for existing
+    // users." He is right — "next time they open the app" is a hope, not a
+    // handoff, and the link is the only thing a mechanic can actually give
+    // someone standing at the counter.
+    //
+    // For them the link is a TRACKER link rather than a claim: the account
+    // exists, the job is already theirs, and `claimByToken` no-ops. For a
+    // shop-built stub it is both.
+    const now = Date.now();
+    const existing = (booking as any).tracker_token as string | undefined;
+    const existingExpiry = (booking as any).tracker_token_expires_at as number | undefined;
+    // Idempotent, like the user-level mint it replaces: re-sending a booking's
+    // link must not invalidate the one already in the customer's messages.
+    if (existing && existingExpiry && existingExpiry > now) {
+      return { token: existing, expiresAtMs: existingExpiry };
     }
 
-    const token = await mintClaimToken(ctx, userId);
-    if (!token) return { token: null, expiresAtMs: null };
+    const token = randomToken();
+    const expiresAtMs = now + CLAIM_TOKEN_TTL_MS;
+    await ctx.db.patch(args.bookingId, {
+      tracker_token: token,
+      tracker_token_expires_at: expiresAtMs,
+    } as any);
 
-    const refreshed = (await ctx.db.get(userId)) as Doc<"users"> | null;
-    const expiresAtMs =
-      (refreshed as any)?.claim_token_expires_at ?? null;
+    // Also seed the account-claim token when the customer has no account yet,
+    // so the claim path keeps working exactly as before.
+    if (!(user as any).walkInClaimedAt) {
+      await mintClaimToken(ctx, userId);
+    }
+
     return { token, expiresAtMs };
   },
 });
@@ -158,32 +238,21 @@ export const mintForBooking = mutation({
 export const resolveClaimToken = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
-    if (!args.token) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_claim_token", (q: any) => q.eq("claim_token", args.token))
-      .first();
-    if (!user) return null;
+    const target = await resolveTrackerToken(ctx, args.token);
+    if (target.kind === "unknown") return null;
+    if (target.kind === "expired") return { expired: true } as const;
+    const { user } = target;
+    const walkin = target.booking;
 
-    const expiresAt = (user as any).claim_token_expires_at as number | undefined;
-    if (!expiresAt || expiresAt < Date.now()) {
-      return { expired: true } as const;
-    }
-
-    if ((user as any).walkInClaimedAt) {
-      return { alreadyClaimed: true } as const;
-    }
-
-    // Pull the most recent walk-in booking for shop + vehicle context.
-    const recentBookings = await ctx.db
-      .query("bookings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
-      .order("desc")
-      .take(5);
-
-    const walkin = recentBookings.find(
-      (b: any) => b.source === "mechanic_walk_in",
-    );
+    // `alreadyClaimed` is a FLAG now, not a dead end.
+    //
+    // It used to short-circuit to `{ alreadyClaimed: true }` and nothing else,
+    // and the app rendered that as "This job is already claimed. Sign in and
+    // you'll find it in your Garage." — a wall, for the customer whose job it
+    // actually is. They still get the full payload; the flag only tells the
+    // app to take them to the tracker instead of through a claim flow they
+    // have no need for.
+    const alreadyClaimed = Boolean((user as any).walkInClaimedAt);
 
     let shopName: string | null = null;
     if (walkin?.shop_id) {
@@ -210,6 +279,7 @@ export const resolveClaimToken = query({
     }
 
     return {
+      alreadyClaimed,
       email: (user as any).email ?? null,
       // E.164 phone the shop already has on file — the mobile claim flow
       // masks it on the verify-phone screen. Null when the shop never
@@ -247,28 +317,15 @@ export const resolveClaimToken = query({
 export const getTrackerData = query({
   args: { token: v.string() },
   handler: async (ctx, args) => {
-    if (!args.token) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_claim_token", (q: any) => q.eq("claim_token", args.token))
-      .first();
-    if (!user) return null;
-
-    const expiresAt = (user as any).claim_token_expires_at as number | undefined;
-    if (!expiresAt || expiresAt < Date.now()) {
-      return { expired: true } as const;
-    }
-
-    // Most recent walk-in booking for this user. Non-walk-in bookings
-    // shouldn't reach the tracker URL — this guard keeps that contract.
-    const recent = await ctx.db
-      .query("bookings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
-      .order("desc")
-      .take(5);
-    const booking = recent.find(
-      (b: any) => b.source === "mechanic_walk_in",
-    ) as any;
+    const target = await resolveTrackerToken(ctx, args.token);
+    if (target.kind === "unknown") return null;
+    if (target.kind === "expired") return { expired: true } as const;
+    const { user } = target;
+    // A booking-scoped token names its job outright. The legacy user-scoped
+    // one falls back to the most recent walk-in, and non-walk-in bookings
+    // still must not reach the tracker URL — that contract is inside
+    // `resolveTrackerToken`.
+    const booking = target.booking as any;
     if (!booking) return null;
 
     // Shop
@@ -456,18 +513,9 @@ export const getTrackerData = query({
 export const _vinForClaimToken = internalQuery({
   args: { token: v.string() },
   handler: async (ctx, args) => {
-    if (!args.token) return null;
-    const user = await ctx.db
-      .query("users")
-      .withIndex("by_claim_token", (q: any) => q.eq("claim_token", args.token))
-      .first();
-    if (!user) return null;
-    const recent = await ctx.db
-      .query("bookings")
-      .withIndex("by_user_id", (q: any) => q.eq("user_id", user._id))
-      .order("desc")
-      .take(5);
-    const booking = recent.find((b: any) => b.source === "mechanic_walk_in") as any;
+    const target = await resolveTrackerToken(ctx, args.token);
+    if (target.kind !== "ok") return null;
+    const booking = target.booking as any;
     if (!booking?.vin) return null;
 
     const veh = await ctx.db
@@ -511,3 +559,149 @@ export const ensureTrackerImage = action({
     );
   },
 });
+
+/**
+ * Claim a walk-in onto the CURRENTLY SIGNED-IN account.
+ *
+ * The gap this fills. `users.getOrCreateMe` adopts a stub only when it is
+ * inserting a brand-new user — that covers a customer who has never used
+ * Otopair. It does nothing for someone who ALREADY has an account, because
+ * that mutation finds them by `clerkUserId` and returns before it ever looks
+ * for a stub. And an existing customer is the ordinary case: they walk into a
+ * shop, the shop takes a name and phone that don't match what Otopair holds,
+ * so a fresh stub is created alongside their real account.
+ *
+ * Ahmad, 2026-09-07: signed in already, followed the claim link, landed on the
+ * Cars tab with no new car. `(walk-in)/create-account.tsx` bounces a signed-in
+ * user straight to the garage, so nothing was ever claimed.
+ *
+ * Adoption cannot be used here. It patches the stub's `clerkUserId` to the real
+ * one, and the real account already holds that value — `by_clerkUserId` is read
+ * with `.unique()`, so a second row carrying it makes every one of those reads
+ * throw. This MERGES instead: the stub's rows are repointed at the signed-in
+ * user and the stub is retired.
+ */
+export const claimByToken = mutation({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const me = await currentUser(ctx);
+    if (!me) throw new Error("Not authenticated");
+
+    // Accepts either token scheme — a booking-scoped tracker link or a legacy
+    // user-scoped claim link. `resolveTrackerToken` is the single place that
+    // knows the difference.
+    const target = await resolveTrackerToken(ctx, args.token);
+    if (target.kind === "unknown") return { ok: false as const, reason: "not_found" as const };
+    if (target.kind === "expired") return { ok: false as const, reason: "expired" as const };
+    const stub = target.user;
+
+    // The car this link is about. Returned so the app can open the garage ON
+    // that vehicle instead of whichever one happens to be primary.
+    //
+    // `getTrackerData` deliberately withholds the VIN — that query is public
+    // and the link is shareable, so a bystander must not get one. Here the
+    // caller is authenticated AND owns the booking, so there is nothing to
+    // withhold.
+    const vin = ((target.booking as any)?.vin as string | undefined) ?? null;
+
+    // Already on this account — the deep link was opened twice, the signup
+    // path adopted it first, or this is a returning customer opening a tracker
+    // link for a job that was always theirs. Not an error; nothing to move.
+    if (stub._id === me._id) return { ok: true as const, alreadyMine: true as const, vin };
+
+    const now = Date.now();
+    // A stub this caller has ALREADY absorbed can be merged again.
+    //
+    // Retiring a stub leaves the row in place, and the shop portal's customer
+    // lookup still finds it by phone or email — so a later walk-in for the
+    // same person can land on it before `createByShop` learns to follow the
+    // forwarding pointer. Refusing here would strand that job on a dead row
+    // with no way back. Merging again is idempotent and lands it where it
+    // belongs.
+    //
+    // Scoped to the caller it was merged INTO, so this is not a general
+    // re-claim: anyone else still gets `already_claimed`.
+    const mergedInto = (stub as any).merged_into_user_id as Id<"users"> | undefined;
+    const isRepeatForSameOwner = mergedInto === me._id;
+    if ((stub as any).walkInClaimedAt && !isRepeatForSameOwner) {
+      return { ok: false as const, reason: "already_claimed" as const };
+    }
+    // Only a shop-built stub is ever mergeable. Without this the token would be
+    // a way to absorb a real person's account into your own.
+    if (!String(stub.clerkUserId ?? "").startsWith("shop-created-")) {
+      return { ok: false as const, reason: "not_claimable" as const };
+    }
+
+    // ── Vehicles ────────────────────────────────────────────────────────────
+    // Repointed rather than recreated, so the maintenance_records hanging off
+    // each `vehicle_owners._id` come across with the car.
+    const stubOwnerships = await ctx.db
+      .query("vehicle_owners")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", stub._id))
+      .collect();
+
+    let vehiclesMoved = 0;
+    for (const ownership of stubOwnerships) {
+      const mine = await ctx.db
+        .query("vehicle_owners")
+        .withIndex("by_vin_user", (q: any) =>
+          q.eq("vin", ownership.vin).eq("user_id", me._id),
+        )
+        .first();
+      if (mine) {
+        // The car is already in their garage. Retiring the stub's row rather
+        // than moving it keeps the carousel from showing the same VIN twice;
+        // the driver's own row is the one with their history on it.
+        await ctx.db.patch(ownership._id, { status: "inactive" } as any);
+        continue;
+      }
+      await ctx.db.patch(ownership._id, {
+        user_id: me._id,
+        // Never steal primary from a car they already had.
+        is_primary: stubOwnerships.length > 0 && (await hasNoActiveVehicles(ctx, me._id)),
+      } as any);
+      vehiclesMoved++;
+    }
+
+    // ── Bookings ────────────────────────────────────────────────────────────
+    const stubBookings = await ctx.db
+      .query("bookings")
+      .withIndex("by_user_id", (q: any) => q.eq("user_id", stub._id))
+      .collect();
+    for (const booking of stubBookings) {
+      await ctx.db.patch(booking._id, { user_id: me._id } as any);
+    }
+
+    // ── Retire the stub ─────────────────────────────────────────────────────
+    // Kept, not deleted: it may be referenced by rows this merge does not know
+    // about, and a dangling id is worse than a parked row. The token is cleared
+    // so the link cannot be replayed onto a different account.
+    await ctx.db.patch(stub._id, {
+      walkInClaimedAt: now,
+      claim_token: undefined,
+      claim_token_expires_at: undefined,
+      isPendingDeletion: true,
+      // Where the customer actually lives now. `createByShop` follows this so
+      // their next walk-in never lands back on this row.
+      merged_into_user_id: me._id,
+      lastUpdated: now,
+    } as any);
+
+    return {
+      ok: true as const,
+      vin,
+      vehiclesMoved,
+      bookingsMoved: stubBookings.length,
+    };
+  },
+});
+
+/** True when the user has no active vehicle yet, so a merged-in car is allowed
+ *  to become their primary. */
+async function hasNoActiveVehicles(ctx: any, userId: Id<"users">): Promise<boolean> {
+  const existing = await ctx.db
+    .query("vehicle_owners")
+    .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "active"))
+    .first();
+  return !existing;
+}

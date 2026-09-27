@@ -27,6 +27,10 @@ export function hydrateTieredInspectionState(inspection: any): InspectionState {
     state.zones[zoneId] = {
       ...base,
       done: !!input.done,
+      // Rows written before the phase split carry no done_phase; they were
+      // pre-check completions. isZoneDoneForPhase applies the same default,
+      // but making it explicit here keeps the runtime state self-describing.
+      donePhase: input.done_phase === "mpi" ? "mpi" : "pre",
       dirty: false,
       measures: { ...base.measures, ...(input.measures ?? {}) },
       tri: { ...base.tri, ...(input.tri ?? {}) },

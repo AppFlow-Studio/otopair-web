@@ -61,11 +61,22 @@ function matchesFamily(modelName: string, familyToken: string): boolean {
   // That did not show while GLE wrongly resolved to E-Class and never reached
   // this path; now that it does, the AMG trims have to come with it.
   const key = tightKey(modelName).replace(/^amg/, "");
-  return new RegExp(`^${familyToken}\\d`).test(key);
+  if (new RegExp(`^${familyToken}\\d`).test(key)) return true;
+  // BMW numeric families also own their M lines: family "5" → "M5",
+  // "M5 Touring", "M550i xDrive"; family "3" → "M3", "M340i". Without this
+  // the 5 Series expansion was 530i…550e only, so an M5 VIN could never find
+  // its own trim and defaulted to "530i". Anchored on the family number, so
+  // family "5" never takes "M8".
+  return (
+    /^\d+$/.test(familyToken) &&
+    new RegExp(`^m${familyToken}(?:\\d|[a-z]|$)`).test(key)
+  );
 }
 
 /** "GLE350" → "GLE 350", "GLE63 AMG S" → "GLE 63 AMG S". */
 function prettifyVariant(name: string): string {
+  // BMW M designations are written tight ("M5", "M340i"), never "M 5".
+  if (/^M\d/.test(name.trim())) return name.trim();
   return name.replace(/^([A-Za-z]+)(\d)/, "$1 $2").trim();
 }
 
@@ -77,6 +88,10 @@ function prettifyVariant(name: string): string {
 function cleanTrimToken(raw: string): string {
   let s = String(raw ?? "").trim();
   if (!s) return "";
+  // A label that is ONLY body/doors ("2dr", "4dr Sedan", "Coupe") names no
+  // trim — Car API files a model's single base row that way.
+  if (/^\d+\s*-?\s*(?:dr|door)s?\b/i.test(s)) return "";
+  if (/^(?:sedan|coupe|hatchback|wagon|suv|convertible|roadster)\b/i.test(s)) return "";
   s = s.replace(/\s+\d+\s*-?\s*(?:dr|door)s?\b.*$/i, "");
   s = s.replace(
     /\s+\b(?:sedan|coupe|hatchback|wagon|suv|truck|van|minivan|convertible|roadster|cab|pickup|crew|awd|fwd|rwd|4wd|4x4|2wd)\b.*$/i,
@@ -105,10 +120,22 @@ function dedupeByNorm(names: string[]): string[] {
  * provider is best-effort. Returns an alphabetically-sorted, deduped list of
  * clean trim/variant tokens (may be empty → UI falls back to free-text entry).
  */
+/** Letter/digit-split tokens: "AMG GT63" → ["amg", "gt", "63"]. */
+function variantTokens(s: string): string[] {
+  return (
+    String(s ?? "")
+      .toLowerCase()
+      .match(/[a-z]+|\d+/g) ?? []
+  );
+}
+
 export async function fetchYmmTrimsFromProviders(args: {
   year: number;
   make: string;
   model: string;
+  /** The VIN-decoded trim ("AMG GT63"). Pulls in sibling catalog models the
+   *  trim points at — see the extension-sibling block below. */
+  decodedTrim?: string;
 }): Promise<string[]> {
   const year = args.year;
   const make = (args.make ?? "").trim();
@@ -120,8 +147,10 @@ export async function fetchYmmTrimsFromProviders(args: {
     carApiModelsForMakeYear(make, year).catch(() => [] as string[]),
   ]);
 
+  // Facets are free text straight from dealer listings ("2dr", "EX 4dr
+  // SUV AWD") — clean them the same way as Car API rows.
   const mcTrims = Array.isArray(mcRes?.trims)
-    ? mcRes!.trims.map((t) => (t?.item ?? "").trim()).filter(Boolean)
+    ? mcRes!.trims.map((t) => cleanTrimToken(t?.item ?? "")).filter(Boolean)
     : [];
 
   // Does the requested model map to a real Car API catalog model? (Same
@@ -150,13 +179,34 @@ export async function fetchYmmTrimsFromProviders(args: {
     const rows: any[] = Array.isArray(cat?.trims?.data) ? cat!.trims.data : [];
     carApiTrims = rows
       .map((r) => {
-        const name = String(r?.name ?? "").trim();
+        const name = cleanTrimToken(String(r?.name ?? ""));
         if (name) return name;
-        return cleanTrimToken(
+        const fromDesc = cleanTrimToken(
           String(r?.description ?? r?.trim ?? r?.submodel ?? ""),
         );
+        // A row that is only "2dr Coupe" is the model's base car — name it
+        // by the model ("AMG GT") instead of dropping it.
+        return fromDesc || resolved;
       })
       .filter((s) => s.length > 0);
+
+    // Extension siblings: Car API files the 2021 AMG GT 4-door as separate
+    // models ("AMG GT 63", "AMG GT 63 S") beside the 2-door "AMG GT", whose
+    // only trim row is "2dr Coupe" — so a GT 63 VIN was offered just "2dr".
+    // Add the sibling models whose extra tokens the decoded trim names.
+    const resolvedTokens = new Set(variantTokens(resolved));
+    const hintTokens = new Set(
+      variantTokens(args.decodedTrim ?? "").filter((t) => !resolvedTokens.has(t)),
+    );
+    if (hintTokens.size > 0) {
+      const resolvedKey = tightKey(resolved);
+      for (const m of carApiModels) {
+        const key = tightKey(m);
+        if (key === resolvedKey || !key.startsWith(resolvedKey)) continue;
+        const extra = variantTokens(m).filter((t) => !resolvedTokens.has(t));
+        if (extra.some((t) => hintTokens.has(t))) carApiTrims.push(m);
+      }
+    }
   }
 
   return dedupeByNorm([...mcTrims, ...carApiTrims]).sort((a, b) =>

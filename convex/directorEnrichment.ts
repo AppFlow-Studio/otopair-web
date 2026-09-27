@@ -1574,7 +1574,11 @@ export const purgeAndReenrich = mutation({
     const why = requireReason(reason);
     const vin = cleanVin(rawVin);
     await enforceCooldown(ctx, "purge_reenrich", vin);
-    await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runPublic.purgeAndRerun, { vin });
+    await ctx.scheduler.runAfter(0, internal.vehicleEnrichment.runPublic.purgeAndRerun, {
+      vin,
+      trigger: "director_purge",
+      actor: { name: actor.name, id: String(actor.userId), kind: "director" },
+    });
     await logAudit(ctx, actor, {
       entity_type: "enrichment_trigger:purge_reenrich",
       entity_id: vin,

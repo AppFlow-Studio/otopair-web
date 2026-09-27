@@ -5,6 +5,7 @@ import { ConversationProvider } from "@elevenlabs/react";
 import {
   AnimatePresence,
   motion,
+  type MotionProps,
   useAnimationFrame,
   useInView,
   useMotionValue,
@@ -26,17 +27,20 @@ import {
   VehicleCard,
 } from "./cards";
 import { DemoCard } from "./demo-cards";
+import { CardSurfaceProvider } from "./oto-card";
 import { DynamicCard } from "./dynamic-card";
+import { ServiceCard, SymptomCard } from "./explainer-cards";
 import DebugTriggers from "./debug-triggers"; // TEMP — remove with debug-triggers.tsx
 import { useOtoAgent, type OtoAgent } from "./use-oto-agent";
 
 // Discoverability chips under the intro bar — each routes to a real demo card
 // (in live + scripted-demo mode alike).
 const QUICK_CHIPS = [
-  "What can you do?",
-  "How does pricing work?",
-  "How do rewards work?",
-  "Where are you available?",
+  "How much is an oil change?",
+  "How much for brakes on my car?",
+  "My check engine light just came on",
+  "Is $850 fair for a wheel bearing?",
+  "Find me an oil change near Staten Island",
 ];
 
 /** Small live-status indicator that sits under the orb when active (desktop)
@@ -163,10 +167,16 @@ function HeroInner() {
 
   // The right "canvas" panel — Oto's screen. Defaults to the schedule preview
   // and swaps to whatever Oto is currently demonstrating.
-  const rightKey = oto.dynamicCard
-    ? `dynamic:${oto.dynamicCard.title}`
-    : oto.demoFeature ?? (oto.step === "intro" ? "schedule" : oto.step);
+  const rightKey = oto.symptomCard
+    ? `symptom:${oto.symptomCard.id}`
+    : oto.serviceCard
+      ? `service:${oto.serviceCard.service}`
+      : oto.dynamicCard
+        ? `dynamic:${oto.dynamicCard.title}`
+        : oto.demoFeature ?? (oto.step === "intro" ? "schedule" : oto.step);
   const renderRightCard = () => {
+    if (oto.symptomCard) return <SymptomCard symptom={oto.symptomCard} />;
+    if (oto.serviceCard) return <ServiceCard service={oto.serviceCard} />;
     if (oto.dynamicCard) return <DynamicCard payload={oto.dynamicCard} />;
     if (oto.demoFeature) return <DemoCard feature={oto.demoFeature} />;
     if (oto.step === "vehicle" && oto.vehicle)
@@ -193,8 +203,10 @@ function HeroInner() {
       return (
         <BookingConfirmedCard
           booking={oto.booking}
+          vehicle={oto.vehicle}
           onSavePreSignup={oto.savePreSignup}
           saved={oto.presignupSaved}
+          claimToken={oto.claimToken}
         />
       );
     if (oto.step === "scheduling")
@@ -203,6 +215,8 @@ function HeroInner() {
     return null;
   };
   const hasCard =
+    oto.symptomCard !== null ||
+    oto.serviceCard !== null ||
     oto.dynamicCard !== null ||
     oto.demoFeature !== null ||
     oto.step === "vehicle" ||
@@ -216,7 +230,7 @@ function HeroInner() {
   const mobileConversation = active && (oto.messages.length > 0 || oto.thinking || hasCard);
 
   // Reduced-motion-aware slide choreography for the side panels.
-  const slide = (dir: -1 | 1, delay: number) =>
+  const slide = (dir: -1 | 1, delay: number): MotionProps =>
     reduce
       ? {
           initial: { opacity: 0 },
@@ -426,7 +440,7 @@ function HeroInner() {
                   onMic={oto.startVoice}
                   canvas={hasCard ? renderRightCard() : null}
                   conversationTitle={
-                    oto.step === "confirmed" ? "Oto booked your appointment" : "Talk to Oto"
+                    oto.step === "confirmed" ? "Oto matched your vehicle" : "Talk to Oto"
                   }
                   status={
                     <StatusPill
@@ -489,11 +503,11 @@ function HeroInner() {
               <motion.div
                 key="canvas"
                 {...slide(1, 0.12)}
-                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-tab:hidden lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
+                className="relative z-10 order-3 flex w-full shrink-0 items-center justify-center max-tab:hidden tab:h-[500px] tab:max-w-[420px] lg:order-3 lg:-ml-20 lg:h-[530px] lg:w-[380px] xl:-ml-16 xl:w-[440px]"
               >
                 {/* Audio-reactive ring — pulses with Oto's voice while it narrates. */}
                 <motion.div
-                  className="relative w-full rounded-[22px]"
+                  className="relative h-full w-full rounded-[22px]"
                   style={reduce ? undefined : { boxShadow: canvasShadow, scale: canvasScale }}
                 >
                   {/* Quick crossfade between cards — each card runs its own
@@ -505,9 +519,17 @@ function HeroInner() {
                       animate={{ opacity: 1, scale: 1 }}
                       exit={{ opacity: 0, scale: 0.99 }}
                       transition={{ duration: 0.22, ease: "easeOut" }}
-                      className="w-full"
+                      className="h-full w-full"
                     >
-                      {renderRightCard()}
+                      {/* "panel": the card fills this fixed-height frame and
+                          scrolls inside itself, so the canvas stops
+                          re-centring every time Oto shows something new. The
+                          mobile copy below stays "inline" — there the card is
+                          one item in a scrolling transcript with no height of
+                          its own. */}
+                      <CardSurfaceProvider surface="panel">
+                        {renderRightCard()}
+                      </CardSurfaceProvider>
                     </motion.div>
                   </AnimatePresence>
                 </motion.div>

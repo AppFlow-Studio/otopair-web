@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 
 import {
   isMechanicAvailableForWindow,
@@ -332,7 +332,7 @@ test("any-mechanic assignment chooses the lowest same-day workload", async () =>
   expect(mechanicId).toBe("mech-2");
 });
 
-test("any-mechanic tie-breaks by scheduled minutes and stable mechanic id", async () => {
+test("any-mechanic tie-breaks by scheduled minutes, then by stable mechanic id", async () => {
   const sameCountCtx = makeCtx(
     baseSeed({
       bookings: [
@@ -367,6 +367,11 @@ test("any-mechanic tie-breaks by scheduled minutes and stable mechanic id", asyn
     }),
   ).toBe("mech-1");
 
+  // Re-baselined 2026-09-23: the tie-break was Math.random(), which made this
+  // choice unstable and this test fail intermittently. It is now a sort on
+  // mechanicId, so the same tie resolves the same way every run. Ported from
+  // otopair-web, which fixed it first — asserting the old random behaviour
+  // here would have made a mobile push revert that fix on the shared backend.
   const noWorkloadCtx = makeCtx(baseSeed());
   expect(
     await resolveAvailableMechanicForWindow(noWorkloadCtx, {

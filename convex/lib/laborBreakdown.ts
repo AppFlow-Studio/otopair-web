@@ -14,8 +14,14 @@
  * the per-line split was stale. Centralizing the AGREED read here means every
  * consumer applies the same precedence and can't drift from a hand-rolled copy.
  *
- * `labor_allocations` is the canonical AGREED source: `line_key === "base"` is the
- * booked service(s) lump, every other key is a custom-job id, `hours` is decimal.
+ * `labor_allocations` is the canonical AGREED source, in one of two key shapes:
+ *   • post-job cycle: `line_key === "base"` is the booked service(s) lump, every
+ *     other key is a bare custom-job id.
+ *   • pre/mid-job estimate cycle: `svc:<serviceId>` per booked service and
+ *     `job:<customJobId>` per added line.
+ * Reading only the first shape made every estimate-cycle agreement invisible —
+ * re-opening the dialog snapped each service back to its catalog estimate.
+ * `hours` is decimal in both.
  */
 
 import { serviceMatchKey } from "./serviceMatch";
@@ -34,24 +40,46 @@ export type LaborAllocation = {
  */
 export function parseAgreedLaborAllocations(
   allocations: LaborAllocation[] | null | undefined,
-): { baseHours: number | null; byLineKey: Map<string, number> } {
+): {
+  baseHours: number | null;
+  byLineKey: Map<string, number>;
+  byServiceId: Map<string, number>;
+} {
   const byLineKey = new Map<string, number>();
+  const byServiceId = new Map<string, number>();
   let baseHours: number | null = null;
   if (Array.isArray(allocations)) {
     for (const a of allocations) {
       if (a?.line_key == null || typeof a.hours !== "number") continue;
-      if (a.line_key === "base") {
+      const key = String(a.line_key);
+      if (key === "base") {
         baseHours = a.hours;
+      } else if (key.startsWith("svc:")) {
+        byServiceId.set(key.slice(4), a.hours);
+      } else if (key.startsWith("job:")) {
+        byLineKey.set(key.slice(4), a.hours);
       } else {
-        byLineKey.set(String(a.line_key), a.hours);
+        byLineKey.set(key, a.hours);
       }
     }
   }
-  return { baseHours, byLineKey };
+  // Estimate-cycle rows carry no "base" lump — the booked services' agreed time
+  // is the sum of their per-service rows.
+  if (baseHours == null && byServiceId.size > 0) {
+    let sum = 0;
+    byServiceId.forEach((h) => (sum += h));
+    baseHours = sum;
+  }
+  return { baseHours, byLineKey, byServiceId };
 }
 
 /** Booked (catalog) service — name + its catalog default labor hours. */
-export type BaseServiceInput = { name: string; catalogHours: number | null };
+export type BaseServiceInput = {
+  name: string;
+  catalogHours: number | null;
+  /** Booked service id — joins an estimate-cycle `svc:<id>` allocation. */
+  serviceId?: string | null;
+};
 
 /** Off-catalog line as it appears on `bookings.custom_services`. */
 export type CustomServiceInput = { name: string; durationMinutes: number | null };
@@ -94,8 +122,11 @@ export function resolveAgreedLaborLines(input: {
   /** finalApproval.labor_cents / 100, else booking.labor_cost. */
   laborSubtotalDollars: number | null;
 }): { lines: ResolvedLaborLine[]; totalHours: number } {
-  const { baseHours: baseAllocHours, byLineKey: allocByJobId } =
-    parseAgreedLaborAllocations(input.allocations);
+  const {
+    baseHours: baseAllocHours,
+    byLineKey: allocByJobId,
+    byServiceId: allocByServiceId,
+  } = parseAgreedLaborAllocations(input.allocations);
 
   // match_key → custom-job id, and match_key → fallback minutes. Declined lines
   // never bill, so they're excluded from both.
@@ -115,6 +146,14 @@ export function resolveAgreedLaborLines(input: {
   const raw: Array<{ name: string; hours: number | null }> = [];
   let totalHours = 0;
 
+  // Keys of the BOOKED services, so a custom line that duplicates one (a service
+  // added off-catalog that's already booked) is dropped below instead of billing
+  // its labor twice. Mirrors the parts twin: an added line resolving to an
+  // already-booked catalog service is redundant — the booked line owns the work.
+  const baseKeys = new Set(
+    input.baseServices.map((b) => serviceMatchKey(String(b.name))),
+  );
+
   // Booked services: distribute the agreed "base" lump across the booked lines
   // in proportion to their catalog hours so each line reads naturally and they
   // sum to the agreed base. No allocation → the catalog default stands.
@@ -124,7 +163,15 @@ export function resolveAgreedLaborLines(input: {
   );
   for (const b of input.baseServices) {
     let hours: number | null = b.catalogHours;
-    if (baseAllocHours != null) {
+    const perServiceHours =
+      b.serviceId != null ? allocByServiceId.get(String(b.serviceId)) : undefined;
+    if (typeof perServiceHours === "number") {
+      // Estimate cycle recorded this service's own agreed time — no split needed.
+      hours = perServiceHours;
+    } else if (allocByServiceId.size > 0 && b.serviceId != null) {
+      // Per-service agreement exists but not for this line: its catalog time
+      // stands (splitting the summed lump would count other lines' hours twice).
+    } else if (baseAllocHours != null) {
       hours =
         catalogHoursSum > 0 && b.catalogHours != null
           ? baseAllocHours * (b.catalogHours / catalogHoursSum)
@@ -141,6 +188,10 @@ export function resolveAgreedLaborLines(input: {
     const name = typeof c.name === "string" ? c.name.trim() : "";
     if (!name) continue;
     const key = serviceMatchKey(name);
+    // A custom line that duplicates a BOOKED service bills labor that the base
+    // lump already covers — skip it so the line (and its hours) isn't counted
+    // twice on the receipt.
+    if (baseKeys.has(key)) continue;
     const jobId = jobIdByKey.get(key);
     const allocHours = jobId != null ? allocByJobId.get(jobId) : undefined;
     let hours: number | null;

@@ -5,6 +5,7 @@ import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { errorMessage, notify } from "@/lib/feedback";
 
 type NotificationItem = {
   kind: "booking" | "tire_quote" | "rotor_quote";
@@ -133,7 +134,6 @@ export function NotificationCard({
   onAfterAction,
 }: NotificationCardProps) {
   const router = useRouter();
-  const acceptBooking = useMutation(api.bookings.accept);
   const cancelBooking = useMutation(api.bookings.cancel);
 
   const [pending, setPending] = useState(false);
@@ -158,19 +158,6 @@ export function NotificationCard({
       ? "text-orange-600"
       : "text-amber-600";
 
-  async function handleAccept() {
-    if (pending) return;
-    setPending(true);
-    setError(null);
-    try {
-      await acceptBooking({ bookingId: item.bookingId });
-      onAfterAction?.();
-    } catch (e: any) {
-      setError(e?.message ?? "Couldn't accept this booking.");
-      setPending(false);
-    }
-  }
-
   async function handleDeclineConfirm() {
     if (pending) return;
     setPending(true);
@@ -180,17 +167,23 @@ export function NotificationCard({
         bookingId: item.bookingId,
         reason: declineReason.trim() || "declined_by_shop",
       });
+      notify.success("Booking declined — the customer has been notified");
       onAfterAction?.();
-    } catch (e: any) {
-      setError(e?.message ?? "Couldn't decline this booking.");
+    } catch (e: unknown) {
+      const msg = errorMessage(e, "Couldn't decline this booking.");
+      setError(msg);
+      notify.error(msg);
       setPending(false);
     }
   }
 
-  function handleDetails() {
+  // Booking requests are accepted only after review inside the schedule
+  // drawer — never one-click from a notification. "Open" lands the owner
+  // there with the booking's drawer open.
+  function handleOpen() {
     onAfterAction?.();
     const params = new URLSearchParams();
-    params.set("action", "focus-booking");
+    params.set("action", "open-booking");
     params.set("bookingId", String(item.bookingId));
     if (item.scheduledDate) {
       params.set("date", item.scheduledDate);
@@ -362,11 +355,10 @@ export function NotificationCard({
             <>
               <button
                 type="button"
-                onClick={handleAccept}
-                disabled={pending}
-                className="inline-flex items-center rounded-md bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                onClick={handleOpen}
+                className="inline-flex items-center rounded-md bg-neutral-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-neutral-800"
               >
-                Accept
+                Open
               </button>
               <button
                 type="button"
@@ -375,13 +367,6 @@ export function NotificationCard({
                 className="inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
                 Decline
-              </button>
-              <button
-                type="button"
-                onClick={handleDetails}
-                className="ml-auto inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900"
-              >
-                Details
               </button>
             </>
           ) : (
@@ -418,7 +403,8 @@ export function NotificationCard({
             className="mt-1 w-full rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-900 outline-none focus:border-gray-400"
           />
           <p className="mt-1 text-[11px] text-gray-500">
-            The customer will be notified.
+            Are you sure? The customer gets a push notification that their
+            booking was declined. This can&apos;t be undone.
           </p>
           <div className="mt-2 flex items-center justify-end gap-2">
             <button
@@ -430,7 +416,7 @@ export function NotificationCard({
               disabled={pending}
               className="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:text-gray-900"
             >
-              Cancel
+              Keep booking
             </button>
             <button
               type="button"
@@ -438,7 +424,7 @@ export function NotificationCard({
               disabled={pending}
               className="inline-flex items-center rounded-md bg-red-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-red-700 disabled:opacity-50"
             >
-              Confirm decline
+              {pending ? "Declining..." : "Yes, decline booking"}
             </button>
           </div>
         </div>

@@ -12,6 +12,7 @@ import {
 } from "next/font/google";
 import "./globals.css";
 import { ClerkProvider } from "@clerk/nextjs";
+import { Toaster } from "sonner";
 import ConvexClientProvider from "@/components/providers/convex-client-provider";
 import { SiteJsonLd } from "@/components/seo/json-ld";
 import { SITE_NAME, SITE_URL } from "@/lib/site";
@@ -189,6 +190,10 @@ export default function RootLayout({
           {/* Organization + WebSite + LocalBusiness graph, sitewide. */}
           <SiteJsonLd />
           <ConvexClientProvider>{children}</ConvexClientProvider>
+          {/* One global toast host — reaction feedback for every shop action.
+              Mounted at the root so it covers the portal, the onboarding
+              early-return branch, and the /apply and /claim flows. */}
+          <Toaster richColors closeButton position="bottom-center" />
         </body>
       </html>
     </ClerkProvider>

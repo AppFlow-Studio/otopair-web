@@ -22,6 +22,15 @@ const nextConfig: NextConfig = {
       },
       // The data portal moved under the director umbrella.
       { source: "/data/:path*", destination: "/director/data/:path*", permanent: false },
+      // Counsel's Site Policy Pages (2026-09-15) replace three pages that
+      // stated different policies — a 14-day dispute window where counsel
+      // says 7 days, "Otopair does not verify insurance" where counsel lists
+      // insurance as a check. Two live pages stating different policies is
+      // the risk counsel warns about, so each old URL now lands on its
+      // replacement for good (308), and only the new page exists.
+      { source: "/cancellation-policy", destination: "/cancellation", permanent: true },
+      { source: "/warranty", destination: "/warranties", permanent: true },
+      { source: "/how-shops-are-verified", destination: "/trust", permanent: true },
     ];
   },
   images: {

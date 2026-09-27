@@ -35,6 +35,7 @@ import { TabFollowUps }     from './components/tabs/TabFollowUps'
 import { TabSystemHealth }  from './components/tabs/TabSystemHealth'
 import { TabTransactions }  from './components/tabs/TabTransactions'
 import { TabSettlement }    from './components/tabs/TabSettlement'
+import { TabDisputes }      from './components/tabs/TabDisputes'
 import { TabAnalytics }     from './components/tabs/TabAnalytics'
 import { TabIntegrations }  from './components/tabs/TabIntegrations'
 
@@ -51,6 +52,7 @@ const TABS: Record<string, React.ComponentType> = {
   stripe:      TabStripe,
   transactions: TabTransactions,
   settlement:  TabSettlement,
+  disputes:    TabDisputes,
   cars:        TabCars,
   configs:     TabVehicleConfigs,
   enrichment:  TabEnrichment,

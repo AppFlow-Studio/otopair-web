@@ -76,6 +76,9 @@ export function useApprovalWorkflow({
   const updateStatus = useMutation(api.bookings.updateStatus);
   const cancel = useMutation(api.bookings.cancel);
   const withdraw = useMutation(api.booking_approvals.withdrawPendingApproval);
+  const continueOriginal = useMutation(
+    api.booking_approvals.continueAtOriginalScope,
+  );
 
   const state = approvalState?.payment_approval_state ?? "none";
   const isInRange = state === "in_range";
@@ -110,26 +113,40 @@ export function useApprovalWorkflow({
   );
 
   const bookingStatus = approvalState?.booking_status ?? null;
-  // At the at-shop check-in the car is physically here, so customer approval
-  // clears the way to begin work immediately (vehicle_at_shop -> in_progress).
-  // When the estimate was adjusted from the incoming queue the car hasn't
-  // arrived yet — pending/pending_shop_acceptance can't legally jump to
-  // in_progress (that throws "Invalid transition"), so approval simply
-  // confirms the booking and the normal check-in flow starts work later.
-  const startWorkBeginsJob = bookingStatus === "vehicle_at_shop";
+  // The car is physically here (at-shop check-in done). Confirming an estimate
+  // must NOT also begin the job — starting is a deliberate, separate action on
+  // the booking drawer / mechanic job card. This flag only tells the popup to
+  // frame the confirmation as "you can start from the booking when ready"
+  // instead of offering a confirm-the-booking step for a car that hasn't
+  // arrived yet.
+  const carIsAtShop = bookingStatus === "vehicle_at_shop";
 
   const onStartWork = useCallback(async () => {
     if (!bookingId) return;
-    const newStatus =
-      bookingStatus === "vehicle_at_shop" || bookingStatus === "in_progress"
-        ? "in_progress"
-        : "confirmed";
+    // The approval popup only CONFIRMS an estimate — it never starts the job.
+    // Starting (vehicle_at_shop -> in_progress) is a dedicated button on the
+    // booking drawer / mechanic job card, so a price confirmation can never
+    // silently begin the labor clock. A booking already at/after the at-shop
+    // check-in therefore stays put here; only a not-yet-confirmed booking
+    // advances to `confirmed` (the normal check-in flow starts work later).
+    if (bookingStatus === "vehicle_at_shop" || bookingStatus === "in_progress") {
+      return;
+    }
     await updateStatus({
       bookingId: bookingId as Id<"bookings">,
-      newStatus,
+      newStatus: "confirmed",
       reason: "approval_confirmed",
     });
   }, [bookingId, bookingStatus, updateStatus]);
+
+  // "Continue with original services" after a decline: lift the booking out of
+  // the `*_declined` dead-end (server rolls price to the standing/disclosed
+  // ceiling and restores a startable state) so the dedicated Start Job button
+  // can begin the job at the original scope.
+  const onContinueOriginalScope = useCallback(async () => {
+    if (!bookingId) return;
+    await continueOriginal({ bookingId: bookingId as Id<"bookings"> });
+  }, [bookingId, continueOriginal]);
 
   const onRelease = useCallback(async () => {
     if (!bookingId) return;
@@ -162,8 +179,9 @@ export function useApprovalWorkflow({
     relativeSentLabel,
     slaCountdownLabel,
     bookingStatus,
-    startWorkBeginsJob,
+    carIsAtShop,
     onStartWork,
+    onContinueOriginalScope,
     onRelease,
     onWithdraw,
   };

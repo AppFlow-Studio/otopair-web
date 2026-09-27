@@ -133,6 +133,8 @@ export const claimPendingSmsRows = internalMutation({
 
     for (const row of pending) {
       if ((row as any).channel !== "sms") continue;
+      // Not yet due — respect a future-dated scheduled_for_ms (see push).
+      if ((row as any).scheduled_for_ms != null && (row as any).scheduled_for_ms > now) continue;
       await ctx.db.patch(row._id, {
         status: "dispatching",
         updated_at: now,

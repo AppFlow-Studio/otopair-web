@@ -127,9 +127,13 @@ export function acceptNormalizedTrim(
         .split(/[^a-z0-9]+/)
         .filter((t) => t.length >= 2),
     );
+  // "Base" is the merge's placeholder when no decoder named a trim — it is not
+  // evidence. Counting it rejected every real trim the normalizer recovered
+  // (NHTSA model "M5" + blank trim → merged "Base" → normalizer "M5" refused,
+  // and the M5 then defaulted to the alphabetically-first "530i").
   const evidence = new Set<string>();
   for (const e of decodeEvidence) {
-    if (e) for (const t of tokens(e)) evidence.add(t);
+    if (e) for (const t of tokens(e)) if (t !== "base") evidence.add(t);
   }
   // Nothing decoded to contradict — the normalizer is the only trim source.
   if (evidence.size === 0) return true;

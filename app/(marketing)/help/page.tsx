@@ -104,6 +104,7 @@ export default function HelpPage() {
       hero={
         <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
           <PillLink href="/help/approving-extra-work">Approving extra work</PillLink>
+          <TextLink href="/support">Dispute a charge</TextLink>
           <TextLink href="/contact">Reach a person</TextLink>
         </div>
       }
@@ -135,7 +136,9 @@ export default function HelpPage() {
         <Reveal className="grid gap-3 tab:grid-cols-12 tab:gap-8">
           <h2 className={`${H2} tab:col-span-5`}>Still stuck?</h2>
           <p className="max-w-[56ch] text-[17px] leading-[1.6] text-[#4c5661] tab:col-span-6 tab:col-start-7 [&_a]:text-[#4B82A5] [&_a]:underline [&_a]:decoration-[#4B82A5]/40 [&_a]:underline-offset-[3px] [&_a:hover]:decoration-[#4B82A5]">
-            Email <a href={`mailto:${SUPPORT_EMAIL}?subject=Driver%20support`}>{SUPPORT_EMAIL}</a> with the booking and
+            Charged for something that doesn&apos;t look right?{" "}
+            <Link href="/support">Dispute a charge or request a refund</Link> and our team will review it. Otherwise,
+            email <a href={`mailto:${SUPPORT_EMAIL}?subject=Driver%20support`}>{SUPPORT_EMAIL}</a> with the booking and
             what happened, and a person will reply. For anything about a specific job, the fastest route is the message
             thread on the booking in the app, where the shop answers with your car in front of them. The{" "}
             <Link href="/contact">contact page</Link> lists the right address for shops, the car-data API and press.

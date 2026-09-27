@@ -22,6 +22,7 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH } from '../../Primitives'
 import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, SourceChip, SourceTypeBadge, STREAM_SOURCE, timeAgo, fmtWhenExact } from './helpers'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 const inputStyle: React.CSSProperties = {
   border: '1px solid var(--slate-200)', borderRadius: 6, padding: '6px 8px',
@@ -319,7 +320,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
                     const st = gapState(k)
                     return (
                       <div key={k} style={{ border: '1px solid var(--yellow-200, #fde68a)', background: 'var(--yellow-50)', borderRadius: 8, padding: '10px 12px' }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)', marginBottom: 6 }}>{g.serviceName} · {g.roleLabel}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)', marginBottom: 6 }}>{formatServiceDisplayName(g.serviceName)} · {g.roleLabel}</div>
                         {st.saved ? <div style={{ fontSize: 12, color: 'var(--green-700)' }}>✓ Part added</div> : (
                           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                             <input value={st.oem} onChange={e => setGapForms(s => ({ ...s, [k]: { ...st, oem: e.target.value } }))}
@@ -344,7 +345,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
                     const st = priceState(g.partId)
                     return (
                       <div key={g.partId} style={{ border: '1px solid var(--yellow-200, #fde68a)', background: 'var(--yellow-50)', borderRadius: 8, padding: '10px 12px' }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)', marginBottom: 2 }}>{g.serviceName}</div>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--slate-700)', marginBottom: 2 }}>{formatServiceDisplayName(g.serviceName)}</div>
                         <div style={{ fontSize: 12, color: 'var(--slate-600)', marginBottom: 6 }}>
                           <span className="mono">{g.oemNumber ?? '—'}</span>{g.partName ? ` · ${g.partName}` : ''}
                         </div>

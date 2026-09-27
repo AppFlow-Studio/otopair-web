@@ -32,7 +32,7 @@
  */
 
 import { action, mutation, query } from "./_generated/server";
-import { Doc } from "./_generated/dataModel";
+import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 function hasEssentialOnboardingFields(
@@ -152,6 +152,9 @@ export const getOrCreateMe = mutation({
   args: {
     authProvider: v.optional(v.string()),
     acquisitionSource: v.optional(v.string()),
+    /** Walk-in claim token from `otopair://claim/<token>`, when the signup
+     *  came through one. Lets a phone-only signup adopt its stub. */
+    claimToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const identity = await ctx.auth.getUserIdentity();
@@ -206,6 +209,38 @@ export const getOrCreateMe = mutation({
       }
       return existing;
     }
+
+    // Before inserting, check whether a stub is waiting to be adopted.
+    //
+    // This used to insert unconditionally, and the walk-in flow broke on it.
+    // A shop creates the customer as a "shop-created-*" stub and links the car
+    // to that row; the customer opens the claim link, signs up, and the app
+    // calls this mutation immediately. Matching on `clerkUserId` alone finds
+    // nothing — the stub's is `shop-created-...` — so we minted a SECOND user.
+    // The stub kept the car and the booking; the real account owned nothing,
+    // and the Cars tab was empty (Ahmad, 2026-09-07).
+    //
+    // The adoption logic existed in `upsertFromClerk`, reached by the Clerk
+    // `user.created` webhook — but that is a race the app wins almost every
+    // time (a local mutation against Clerk → Vercel → Convex), and once this
+    // mutation has inserted a row, `upsertFromClerk` finds it by clerkUserId
+    // and returns before ever looking for a stub. So the adoption never ran.
+    //
+    // Email is only trusted when Clerk says it is verified — the webhook path
+    // does not check, and matching an unverified address against a stub would
+    // let anyone who knows a walk-in customer's email adopt their account.
+    const adopted = await adoptClaimableStub(ctx, {
+      clerkUserId,
+      email: identity.emailVerified ? identity.email || undefined : undefined,
+      phone: (identity as { phoneNumber?: string }).phoneNumber,
+      first_name: identity.givenName || undefined,
+      last_name: identity.familyName || undefined,
+      profile_photo_url: identity.pictureUrl || undefined,
+      authProvider: args.authProvider,
+      emailConfirmed: identity.emailVerified || undefined,
+      claimToken: args.claimToken,
+    });
+    if (adopted) return await ctx.db.get(adopted);
 
     // New user — seed with everything Clerk provides + first-touch attribution
     const userId = await ctx.db.insert("users", {
@@ -280,6 +315,65 @@ export const dismissSetupCard = mutation({
     if (user.setupCardDismissed === true) return user._id;
 
     await ctx.db.patch(user._id, { setupCardDismissed: true });
+    return user._id;
+  },
+});
+
+/**
+ * MUTATION: markTutorialSeen
+ *
+ * Stamps the first-run tutorial as done. Called on BOTH completion and skip:
+ * a driver who dismissed the tour has told us their answer, and showing it
+ * again would read as an ad rather than help. Settings keeps a manual re-entry
+ * so skipping is not a one-way door.
+ *
+ * Idempotent — the first stamp wins, so a double-tap or a retry after a flaky
+ * network cannot rewrite when they actually saw it.
+ */
+export const markTutorialSeen = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+    if (typeof user.tutorialSeenAt === "number") return user._id;
+
+    await ctx.db.patch(user._id, { tutorialSeenAt: Date.now() });
+    return user._id;
+  },
+});
+
+/**
+ * MUTATION: resetTutorial
+ *
+ * Clears the seen stamp so the first-run tour plays again. This is what keeps
+ * "skip" from being a one-way door: a driver who dismissed the tour on day one
+ * has no other route back to it, and rebuilding the same six screens somewhere
+ * else in Settings would be two copies to keep in step.
+ *
+ * Clearing the flag rather than opening the overlay from here on purpose —
+ * Home already owns the gate, so there is one place that decides whether the
+ * tour shows.
+ */
+export const resetTutorial = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+
+    if (!user) throw new Error("User not found");
+    await ctx.db.patch(user._id, { tutorialSeenAt: undefined });
     return user._id;
   },
 });
@@ -542,6 +636,112 @@ export const completeOnboarding = mutation({
   },
 });
 
+/**
+ * Migrate a pre-Clerk stub user onto a real Clerk identity.
+ *
+ * Two stub sources, same shape:
+ *   • "shop-created-" — a shop walk-in booking (convex/bookings.ts)
+ *   • "presignup-"    — a marketing-site Oto pre-signup (convex/preSignups.ts)
+ *
+ * Adoption PATCHES the stub rather than inserting a new row, and that is the
+ * whole point: `vehicle_owners`, `bookings` and `maintenance_records` all
+ * reference the Convex user `_id`, never the `clerkUserId` string. Keep the
+ * `_id` and the customer's car and job follow them into their new account.
+ * Insert a second row instead and the stub keeps the car while the real
+ * account owns nothing.
+ *
+ * Matched by claim token first, then by email, then by normalized phone.
+ * Returns the adopted `_id`, or null when there is nothing to adopt.
+ *
+ * SHARED on purpose — `upsertFromClerk` (Clerk webhook, via otopair-web) and
+ * `getOrCreateMe` (the app, immediately after signup) both need this and race
+ * each other. Two copies of the rule would mean the outcome depended on which
+ * one landed first.
+ */
+async function adoptClaimableStub(
+  ctx: any,
+  args: {
+    clerkUserId: string;
+    email?: string;
+    phone?: string;
+    first_name?: string;
+    last_name?: string;
+    profile_photo_url?: string;
+    role?: string;
+    authProvider?: string;
+    emailConfirmed?: boolean;
+    phoneVerified?: boolean;
+    username?: string;
+    /** From the walk-in deep link. Proof of intent, so it outranks the
+     *  contact-detail match and works for a phone-only signup. */
+    claimToken?: string;
+  },
+): Promise<Id<"users"> | null> {
+  const now = Date.now();
+  const normalizedIncomingPhone = normalizePhoneE164(args.phone);
+  let claimable: Doc<"users"> | null = null;
+
+  // 1. The claim token. The customer followed a link only their shop could
+  //    have sent, which is stronger evidence than a matching email address.
+  if (args.claimToken) {
+    const byToken = await ctx.db
+      .query("users")
+      .withIndex("by_claim_token", (q: any) => q.eq("claim_token", args.claimToken))
+      .first();
+    const expiresAt = byToken?.claim_token_expires_at as number | undefined;
+    if (byToken && isClaimableStub(byToken.clerkUserId) && (expiresAt ?? 0) > now) {
+      claimable = byToken;
+    }
+  }
+
+  // 2. Email. `by_email` is not unique, so a stub and a real account can share
+  //    one — take the stub if there is one rather than the arbitrary first row.
+  if (!claimable && args.email) {
+    const byEmail = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q: any) => q.eq("email", args.email))
+      .collect();
+    claimable = byEmail.find((u: Doc<"users">) => isClaimableStub(u.clerkUserId)) ?? null;
+  }
+
+  // 3. Phone. No index, so this is a full scan — last resort, and only when a
+  //    phone was actually supplied.
+  if (!claimable && normalizedIncomingPhone) {
+    const all = await ctx.db.query("users").collect();
+    claimable =
+      all.find(
+        (u: Doc<"users">) =>
+          isClaimableStub(u.clerkUserId) && u.phone === normalizedIncomingPhone,
+      ) ?? null;
+  }
+
+  if (!claimable) return null;
+
+  await ctx.db.patch(claimable._id, {
+    clerkUserId: args.clerkUserId,
+    ...(args.email ? { email: args.email } : {}),
+    first_name: args.first_name ?? claimable.first_name,
+    last_name: args.last_name ?? claimable.last_name,
+    profile_photo_url: args.profile_photo_url ?? undefined,
+    phone: normalizedIncomingPhone ?? claimable.phone,
+    role: args.role ?? claimable.role ?? "user",
+    ...(args.authProvider && !claimable.auth_provider
+      ? { auth_provider: args.authProvider }
+      : {}),
+    ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
+    ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
+    ...(args.username ? { username: args.username } : {}),
+    // The shop already collected name and contact details, so there is nothing
+    // left to ask at the account level. Per-vehicle onboarding is separate
+    // (`vehicle_owners.onboardingComplete`) and is NOT skipped here.
+    onboardingCompleted: true,
+    essentialOnboardingCompleted: true,
+    lastUpdated: now,
+    walkInClaimedAt: now,
+  } as any);
+  return claimable._id;
+}
+
 export const upsertFromClerk = mutation({
   args: {
     clerkUserId: v.string(),
@@ -567,26 +767,32 @@ export const upsertFromClerk = mutation({
     const now = Date.now();
 
     if (existing) {
-      const nextUser = {
-        ...existing,
-        email: args.email,
-        first_name: args.first_name,
-        last_name: args.last_name,
-        profile_photo_url: args.profile_photo_url ?? undefined,
-        ...(args.phone ? { phone: args.phone } : {}),
-        ...(args.role ? { role: args.role } : {}),
-      };
+      // Sync Clerk profile data to Convex on login/update.
+      const updates: Record<string, any> = {};
+      if (args.email && existing.email !== args.email) {
+        updates.email = args.email;
+      }
+      if (args.first_name && !existing.first_name) {
+        updates.first_name = args.first_name;
+      }
+      if (args.last_name && !existing.last_name) {
+        updates.last_name = args.last_name;
+      }
+      if (args.profile_photo_url && !existing.profile_photo_url && !existing.profile_photo_storage_id) {
+        updates.profile_photo_url = args.profile_photo_url;
+      }
+      if (args.phone && !existing.phone) {
+        updates.phone = normalizePhoneE164(args.phone);
+      }
+      if (args.role && !existing.role) {
+        updates.role = args.role;
+      }
+      if (args.authProvider && !existing.auth_provider) {
+        updates.auth_provider = args.authProvider;
+      }
+      const nextUser = { ...existing, ...updates };
       await ctx.db.patch(existing._id, {
-        email: args.email,
-        first_name: args.first_name,
-        last_name: args.last_name,
-        profile_photo_url: args.profile_photo_url ?? undefined,
-        ...(args.phone ? { phone: args.phone } : {}),
-        ...(args.role ? { role: args.role } : {}),
-        // Signup method — first-touch: only set if we don't already have one.
-        ...(args.authProvider && !existing.auth_provider
-          ? { auth_provider: args.authProvider }
-          : {}),
+        ...updates,
         // Verification flags + username refresh whenever Clerk sends them.
         ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
         ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
@@ -600,58 +806,25 @@ export const upsertFromClerk = mutation({
       return existing._id;
     }
 
-    // Stub claim — when a stub user was created for this person before they
-    // had a Clerk identity, match it by email or normalized phone and migrate
-    // it onto the real Clerk identity. Two stub sources, same shape:
-    //   • "shop-created-" — shop walk-in booking (convex/bookings.ts)
-    //   • "presignup-"    — marketing-site Oto pre-signup (convex/preSignups.ts)
-    // All bookings + vehicle_owners stay linked because they reference the
-    // Convex user _id, not the clerkUserId string.
-    const normalizedIncomingPhone = normalizePhoneE164(args.phone);
-    let claimable = await ctx.db
-      .query("users")
-      .withIndex("by_email", (q) => q.eq("email", args.email))
-      .first();
-    if (claimable && !isClaimableStub(claimable.clerkUserId)) {
-      claimable = null;
-    }
-    if (!claimable && normalizedIncomingPhone) {
-      const all = await ctx.db.query("users").collect();
-      claimable =
-        all.find(
-          (u) =>
-            isClaimableStub(u.clerkUserId) &&
-            u.phone === normalizedIncomingPhone,
-        ) ?? null;
-    }
-
-    if (claimable) {
-      await ctx.db.patch(claimable._id, {
-        clerkUserId: args.clerkUserId,
-        email: args.email,
-        first_name: args.first_name ?? claimable.first_name,
-        last_name: args.last_name ?? claimable.last_name,
-        profile_photo_url: args.profile_photo_url ?? undefined,
-        phone: normalizedIncomingPhone ?? claimable.phone,
-        role: args.role ?? claimable.role ?? "user",
-        ...(args.authProvider && !claimable.auth_provider
-          ? { auth_provider: args.authProvider }
-          : {}),
-        ...(args.emailConfirmed !== undefined ? { emailConfirmed: args.emailConfirmed } : {}),
-        ...(args.phoneVerified !== undefined ? { phoneVerified: args.phoneVerified } : {}),
-        ...(args.username ? { username: args.username } : {}),
-        onboardingCompleted: true,
-        essentialOnboardingCompleted: true,
-        lastUpdated: now,
-        walkInClaimedAt: now,
-      });
-      return claimable._id;
-    }
+    const adopted = await adoptClaimableStub(ctx, {
+      clerkUserId: args.clerkUserId,
+      email: args.email,
+      phone: args.phone,
+      first_name: args.first_name,
+      last_name: args.last_name,
+      profile_photo_url: args.profile_photo_url,
+      role: args.role,
+      authProvider: args.authProvider,
+      emailConfirmed: args.emailConfirmed,
+      phoneVerified: args.phoneVerified,
+      username: args.username,
+    });
+    if (adopted) return adopted;
 
     return await ctx.db.insert("users", {
       clerkUserId: args.clerkUserId,
       email: args.email,
-      phone: normalizedIncomingPhone,
+      phone: normalizePhoneE164(args.phone),
       first_name: args.first_name,
       last_name: args.last_name,
       profile_photo_url: args.profile_photo_url ?? undefined,

@@ -15,6 +15,7 @@ import { sendTeamInvite } from "@/lib/send-team-invite";
 import TimePicker from "@/components/ui/time-picker";
 import Tooltip from "@/components/ui/tooltip";
 import LicenseUploader from "@/components/shop/license-uploader";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   BadgeDollarSign,
   Building2,
@@ -554,12 +555,12 @@ function getEmptyMechanicForm(): MechanicFormState {
 }
 
 function getFirstIncompleteSavedStep(params: {
-  hasSavedShop: boolean;
+  hasSavedShopDetails: boolean;
   savedHoursCount: number;
   savedServiceCount: number;
   mechanicCount: number;
 }) {
-  if (!params.hasSavedShop) return 0;
+  if (!params.hasSavedShopDetails) return 0;
   if (params.savedHoursCount < 7) return 1;
   if (params.savedServiceCount === 0) return 2;
   // Licenses (3) and mechanics (4) are optional/skippable — resume at Payments.
@@ -734,7 +735,12 @@ export default function ShopSetupPage() {
   const firstIncompleteSavedStep = useMemo(
     () =>
       getFirstIncompleteSavedStep({
-        hasSavedShop: Boolean(onboardingData?.shop),
+        // Director-approved invites pre-create the shop record (name/address/phone
+        // pulled from the application) but WITHOUT a slug — the owner still has to
+        // fill the required "page name" on Step 0. Gate on the slug actually being
+        // set rather than the bare record existing, otherwise an invited shop skips
+        // Step 0 and opens on Operating Hours with no page name captured.
+        hasSavedShopDetails: Boolean(onboardingData?.shop?.slug),
         savedHoursCount: onboardingData?.hours.length ?? 0,
         savedServiceCount: persistedServiceCount,
         mechanicCount: onboardingData?.mechanics.length ?? 0,
@@ -2323,12 +2329,12 @@ export default function ShopSetupPage() {
                                           })
                                         }
                                         className="mt-1 h-4 w-4 rounded border-input text-primary focus:ring-ring"
-                                        aria-label={`Offer ${service.name}`}
+                                        aria-label={`Offer ${formatServiceDisplayName(service.name)}`}
                                       />
                                       <div className="min-w-0 flex-1">
                                         <div className="flex flex-wrap items-center gap-2">
                                           <p className="text-sm font-medium text-foreground">
-                                            {service.name}
+                                            {formatServiceDisplayName(service.name)}
                                           </p>
                                           <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
                                             {service.defaultLaborHours} hr
@@ -2336,7 +2342,7 @@ export default function ShopSetupPage() {
                                         </div>
                                         {service.description ? (
                                           <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                                            {service.description}
+                                            {formatServiceDisplayName(service.description)}
                                           </p>
                                         ) : null}
                                       </div>

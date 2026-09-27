@@ -164,6 +164,18 @@ crons.interval(
   (internal as any).email_dispatcher.dispatchPendingEmails,
 );
 
+// Ops alerts: drain pending `channel:"slack"` notification_outbox rows (SLO
+// breaches, enrichment error-outs, canonical-shortcut nudges) to the ops Slack
+// channel. Before this cron those rows had no dispatcher and sat pending
+// forever (see notifications.ts). No-op/stub unless SLACK_WEBHOOK_URL (or
+// SLACK_BOT_TOKEN + SLACK_ALERT_CHANNEL) is set; a stale-on-enable guard in the
+// dispatcher keeps the first run from dumping backlog into the channel.
+crons.interval(
+  "dispatch-pending-slack",
+  { minutes: 1 },
+  (internal as any).slack_dispatcher.dispatchPendingSlack,
+);
+
 // Data API self-serve enrich-run ledger: reconcile each active run (queued /
 // enriching) against its config's live enrichment_status, flipping it to
 // enriching / complete / failed and enqueuing the owner's completion email.
@@ -213,6 +225,28 @@ crons.interval(
   "dispatch-pending-push",
   { minutes: 1 },
   (internal as any).lib.push_dispatcher.dispatchPendingPush,
+);
+
+// Recover notification_outbox rows stranded in `dispatching` by a mid-send
+// network/timeout error (the dispatcher can't tell "delivered" from "lost", so
+// it leaves them), flipping any stuck > 3 min back to `pending` for the next
+// dispatch tick. Channel-agnostic (push/sms/email). The push dispatcher now
+// re-queues its own transient failures immediately (see _requeuePushRows), so
+// this is a backstop for sends that died mid-flight before recording anything.
+crons.interval(
+  "reset-stuck-dispatching",
+  { minutes: 1 },
+  (internal as any).lib.push_dispatcher.resetStuckDispatching,
+);
+
+// Confirm actual delivery: read Expo's push receipts for accepted tickets
+// (`dispatched` rows), promoting them to `delivered` or `failed` (clearing the
+// token on DeviceNotRegistered). Runs every 2 min; receipts that never appear
+// are given up on after 30 min.
+crons.interval(
+  "poll-push-receipts",
+  { minutes: 2 },
+  (internal as any).lib.push_dispatcher.pollPushReceipts,
 );
 
 // Determinism sentinel (Wave 4): weekly probe of ONE operator-supplied VIN

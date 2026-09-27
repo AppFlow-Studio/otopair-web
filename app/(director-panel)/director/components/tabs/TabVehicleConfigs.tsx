@@ -14,6 +14,7 @@ import { consumeGoto, gotoEntity } from '../directorNav'
 import { TiresSection } from '../TiresSection'
 import { AdminActionPanel, ActionRow, Toast } from '../AdminActionPanel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
+import { formatServiceDisplayName } from '@/lib/service-catalog'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -186,7 +187,7 @@ const GapPartAdder = ({
     <div style={{ border:'1px solid var(--amber-200, #fde68a)', background:'var(--amber-25, #fffbeb)', borderRadius:8, padding:'10px 12px' }}>
       <div style={{ display:'flex', alignItems:'center', justifyContent:'space-between', gap:8, marginBottom:8 }}>
         <span style={{ fontSize:11, fontWeight:600, color:'var(--slate-700)', textTransform:'uppercase', letterSpacing:'0.06em' }}>
-          {gap.serviceName} · {gap.roleLabel}
+          {formatServiceDisplayName(gap.serviceName)} · {gap.roleLabel}
         </span>
         <Badge tone="yellow">no part on file</Badge>
       </div>
@@ -1030,7 +1031,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         </div>
                         {p.services_affected && p.services_affected.length > 0 && (
                           <div style={{ fontSize:11, color:'var(--slate-600)', marginTop:4 }}>
-                            Affects: {p.services_affected.join(', ')}
+                            Affects: {p.services_affected.map(formatServiceDisplayName).join(', ')}
                           </div>
                         )}
                       </div>
@@ -1064,7 +1065,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         fontSize:12, color:'var(--slate-700)',
                       }}>
                         <span style={{ fontWeight:500, color:'var(--slate-900)', display:'flex', alignItems:'center', gap:6, minWidth:0 }}>
-                          <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{r.serviceName}</span>
+                          <span style={{ flex:1, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{formatServiceDisplayName(r.serviceName)}</span>
                           {fromManual(r) && (
                             <span style={{ flexShrink:0 }} title={r.dataQuality === 'oem_manual'
                               ? 'Extracted from the OEM manual PDF'
@@ -1181,7 +1182,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                         borderBottom: i < detail.laborTimes.length - 1 ? '1px solid var(--slate-100)' : 'none',
                         fontSize:12, color:'var(--slate-700)',
                       }}>
-                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{r.serviceName}</span>
+                        <span style={{ fontWeight:500, color:'var(--slate-900)' }}>{formatServiceDisplayName(r.serviceName)}</span>
                         <span className="mono" style={{ textAlign:'right' }}>{r.hours != null ? `${r.hours.toFixed(1)} h` : '—'}</span>
                         <span style={{ fontSize:11, color:'var(--slate-500)' }}>{r.source ?? '—'}</span>
                         <span style={{ textAlign:'right' }}>
@@ -1216,7 +1217,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
                             partName: partName || undefined,
                             token: sessionToken,
                           })
-                          if (res?.ok) setToast(`Added ${gap.roleLabel} — ${gap.serviceName} is now available`)
+                          if (res?.ok) setToast(`Added ${gap.roleLabel} — ${formatServiceDisplayName(gap.serviceName)} is now available`)
                           else setToast('Could not add part')
                         }}
                       />

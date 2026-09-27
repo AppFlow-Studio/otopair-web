@@ -250,6 +250,9 @@ export const prejobReportValidator = v.object({
 export const inspectionZoneStateValidator = v.object({
   zone_id: v.string(),
   done: v.boolean(),
+  // Which half of the split inspection completed this zone. Absent means the
+  // pre-check — the only phase that existed before the split.
+  done_phase: v.optional(v.union(v.literal("pre"), v.literal("mpi"))),
   measures: v.optional(v.record(v.string(), v.string())),
   tri: v.optional(
     v.record(v.string(), v.union(v.literal("g"), v.literal("y"), v.literal("r"))),

@@ -1,0 +1,430 @@
+{
+  "stamp": "2026-09-07_13-44-56",
+  "at": "2026-09-07T13:44:56.396Z",
+  "agentId": "agent_1201ks2vzy5dfrxaswhp5pds5gng",
+  "repeat": 1,
+  "ui": {
+    "skipped": false,
+    "cards": 30,
+    "checked": 30,
+    "findings": [],
+    "byRule": {},
+    "measured": [
+      {
+        "card": "demo/service_catalog",
+        "h": 530,
+        "panelH": 530,
+        "title": "Service Catalog",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/pricing",
+        "h": 530,
+        "panelH": 530,
+        "title": "Transparent pricing",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/health_score",
+        "h": 530,
+        "panelH": 530,
+        "title": "Vehicle Health",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/tires",
+        "h": 530,
+        "panelH": 530,
+        "title": "New tires",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/ratings",
+        "h": 530,
+        "panelH": 530,
+        "title": "Ratings",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/rewards",
+        "h": 530,
+        "panelH": 530,
+        "title": "Ownership Credit",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/overview",
+        "h": 530,
+        "panelH": 530,
+        "title": "What Otopair is",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/coverage",
+        "h": 530,
+        "panelH": 530,
+        "title": "Where it works",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/payments",
+        "h": 530,
+        "panelH": 530,
+        "title": "Payments",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/service_history",
+        "h": 530,
+        "panelH": 530,
+        "title": "Service history",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/checkin",
+        "h": 530,
+        "panelH": 530,
+        "title": "Quarterly check-in",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/bookings",
+        "h": 530,
+        "panelH": 530,
+        "title": "Bookings",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/notifications",
+        "h": 530,
+        "panelH": 530,
+        "title": "Notifications",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "demo/trust",
+        "h": 530,
+        "panelH": 530,
+        "title": "What we’ll never do",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/list",
+        "h": 530,
+        "panelH": 530,
+        "title": "Is there a warranty?",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/steps",
+        "h": 530,
+        "panelH": 530,
+        "title": "Getting a tire quote",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/rows",
+        "h": 530,
+        "panelH": 530,
+        "title": "What's in your total",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/stats",
+        "h": 530,
+        "panelH": 530,
+        "title": "Otopair at launch",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "info/compare",
+        "h": 530,
+        "panelH": 530,
+        "title": "Diagnostics with Oto",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/scheduling",
+        "h": 530,
+        "panelH": 530,
+        "title": "Instant Scheduling",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/shops",
+        "h": 530,
+        "panelH": 530,
+        "title": "Choose a Shop",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/datetime",
+        "h": 530,
+        "panelH": 530,
+        "title": "Instant Scheduling",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "funnel/confirmed",
+        "h": 530,
+        "panelH": 530,
+        "title": "Booking confirmed",
+        "titlePx": 22,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 19,
+            "total": 418,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "vehicle/card",
+        "h": 530,
+        "panelH": 530,
+        "title": "Your Vehicle",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 612,
+            "total": 996,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "service/oil_change",
+        "h": 530,
+        "panelH": 530,
+        "title": "Oil Change",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 69,
+            "total": 500,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "service/brake_pads",
+        "h": 530,
+        "panelH": 530,
+        "title": "Brake Pad Replacement",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 113,
+            "total": 544,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "service/brake_fluid",
+        "h": 530,
+        "panelH": 530,
+        "title": "Brake Fluid Flush",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 134,
+            "total": 565,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "symptom/brake_squeal",
+        "h": 530,
+        "panelH": 530,
+        "title": "Squealing when you brake",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 6,
+            "total": 437,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      },
+      {
+        "card": "symptom/grinding",
+        "h": 530,
+        "panelH": 530,
+        "title": "Grinding when you brake",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [],
+        "panelHeight": 530
+      },
+      {
+        "card": "symptom/check_engine",
+        "h": 530,
+        "panelH": 530,
+        "title": "Check Engine Light Diagnosis",
+        "titlePx": 19,
+        "hasIcon": true,
+        "pad": "24px",
+        "radius": "20px",
+        "scrollers": [
+          {
+            "hidden": 97,
+            "total": 528,
+            "faded": true,
+            "isBody": true
+          }
+        ],
+        "panelHeight": 530
+      }
+    ],
+    "pageErrors": [],
+    "heights": {
+      "min": 530,
+      "max": 530,
+      "spread": 0
+    }
+  }
+}

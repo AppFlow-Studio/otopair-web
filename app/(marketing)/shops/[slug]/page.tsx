@@ -13,6 +13,7 @@ import { JsonLd } from "@/components/seo/json-ld";
 import { formatTime, getPublicShop, type PublicShopProfile, type PublicShopService } from "@/lib/public-shops";
 import { SITE_URL, absoluteUrl } from "@/lib/site";
 import { staticMapSrc, staticPinMapSrc } from "@/lib/static-map";
+import { formatServiceDisplayName } from "@/lib/service-catalog";
 
 export const revalidate = 300;
 export const dynamicParams = true;
@@ -189,7 +190,7 @@ export async function generateMetadata({ params }: { params: Params }): Promise<
   const shop = await load(slug);
   if (!shop) notFound();
   const place = placeOf(shop);
-  const serviceNames = shop.services.slice(0, 3).map((s) => s.name);
+  const serviceNames = shop.services.slice(0, 3).map((s) => formatServiceDisplayName(s.name));
   return {
     title: { absolute: `${shop.name}: verified auto repair ${shop.neighborhood ? "near" : "in"} ${place}, NY` },
     description: `${shop.name} is a verified independent repair shop ${shop.neighborhood ? `near ${place}, ` : "in "}${shop.city}, bookable in the Otopair app${
@@ -346,7 +347,7 @@ export default async function ShopPage({ params }: { params: Params }) {
             <p>
               {shop.services.length === 1 ? "One service" : `${shop.services.length} services`} across{" "}
               {listNames(groups.map((g) => g.category))}:{" "}
-              {listNames(shop.services.slice(0, 4).map((s) => s.name))}
+              {listNames(shop.services.slice(0, 4).map((s) => formatServiceDisplayName(s.name)))}
               {shop.services.length > 4 ? " and more" : ""}. Each one is bookable in the app for your
               exact car.
             </p>
@@ -361,9 +362,9 @@ export default async function ShopPage({ params }: { params: Params }) {
                   <ul className="mt-3">
                     {g.services.map((s) => (
                       <li key={s.slug}>
-                        <Link href={serviceHref(s)}>{s.name}</Link>
+                        <Link href={serviceHref(s)}>{formatServiceDisplayName(s.name)}</Link>
                         {s.description ? (
-                          <span className="text-[#6b655d]">: {s.description}</span>
+                          <span className="text-[#6b655d]">: {formatServiceDisplayName(s.description)}</span>
                         ) : null}
                       </li>
                     ))}

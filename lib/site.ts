@@ -104,12 +104,14 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/services", changeFrequency: "monthly", priority: 0.8 },
   // Tier 4 — trust, conversion, compliance
   { path: "/trust-and-safety", changeFrequency: "monthly", priority: 0.6 },
-  { path: "/how-shops-are-verified", changeFrequency: "monthly", priority: 0.6 },
+  { path: "/trust", changeFrequency: "monthly", priority: 0.6 },
   { path: "/vehicle-health-score", changeFrequency: "monthly", priority: 0.6 },
-  { path: "/warranty", changeFrequency: "yearly", priority: 0.4 },
-  { path: "/cancellation-policy", changeFrequency: "yearly", priority: 0.5 },
+  { path: "/warranties", changeFrequency: "yearly", priority: 0.4 },
+  { path: "/cancellation", changeFrequency: "yearly", priority: 0.5 },
   { path: "/security", changeFrequency: "yearly", priority: 0.4 },
   { path: "/accessibility", changeFrequency: "yearly", priority: 0.3 },
+  { path: "/privacy-choices", changeFrequency: "yearly", priority: 0.3 },
+  { path: "/delete-account", changeFrequency: "yearly", priority: 0.3 },
   { path: "/careers", changeFrequency: "monthly", priority: 0.3 },
   { path: "/press", changeFrequency: "yearly", priority: 0.3 },
   { path: "/help", changeFrequency: "weekly", priority: 0.6 },
@@ -120,6 +122,7 @@ export const PUBLIC_ROUTES: ReadonlyArray<{
   { path: "/contact", changeFrequency: "yearly", priority: 0.5 },
   { path: "/privacy", changeFrequency: "yearly", priority: 0.2 },
   { path: "/terms", changeFrequency: "yearly", priority: 0.2 },
+  { path: "/shop-portal-terms", changeFrequency: "yearly", priority: 0.2 },
 ];
 
 /** Absolute URL for a site path — the one place `SITE_URL` is joined. */

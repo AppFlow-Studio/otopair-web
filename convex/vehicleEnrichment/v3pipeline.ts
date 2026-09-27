@@ -37,6 +37,7 @@ import {
   TRIM_SPEC_KEYS,
 } from "./utils/batchSchemas";
 import { mergeBlockedDomains } from "./utils/enrichmentFlags";
+import { enrichmentActorValidator } from "../lib/enrichmentActor";
 import { BATCH_1_SYSTEM, buildBatch1Prompt } from "./prompts/batch1Prompt";
 import { BATCH_1B_SYSTEM, buildBatch1bPrompt } from "./prompts/batch1bPrompt";
 import { BATCH_2_SYSTEM, buildBatch2Prompt, SERVICES_RESCUE_SYSTEM, buildServicesRescuePrompt } from "./prompts/batch2Prompt";
@@ -2196,6 +2197,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // vehicle_configs row in STAGE 4 so future VIN decodes can dedup against
     // it BEFORE Haiku engine code resolution. See vehicleEnrichment/types.ts.
     nhtsaVinKey: v.optional(v.string()),
+    // Canonical transmission family (automatic|manual|cvt|dct) threaded from the
+    // confirm actions. Folded into config_key so an automatic and a manual of the
+    // same engine never collapse into one cached config. Absent on paths that
+    // don't carry it (director backfill, ymmt) — STEP 3a re-derives it from the
+    // resolved transmission and reconciles the key before the write.
+    transmissionFamily: v.optional(v.string()),
     // Director per-config backfill knobs (additive — default behavior is
     // byte-identical to the signup path which passes neither). See
     // directorConfigBackfills.ts.
@@ -2212,6 +2219,14 @@ export const enrichVehicleBatchV3 = internalAction({
     // place (and reconciles its config_key) rather than spawning a duplicate.
     // Omitted on the signup path → behavior is byte-identical.
     targetConfigId: v.optional(v.id("vehicle_configs")),
+    // Provenance (additive, both default to the historic behavior when omitted):
+    //   trigger — origin label recorded on the run ("director_reenrich",
+    //             "director_purge", "claim", "mechanic", "marketplace", …).
+    //             Defaults to "new_vehicle" (the signup path) when absent.
+    //   actor   — the human behind the run, threaded from the trigger point.
+    //             Absent for system runs. See lib/enrichmentActor.
+    trigger: v.optional(v.string()),
+    actor: enrichmentActorValidator,
   },
   handler: async (ctx, args): Promise<EnrichVehicleBatchV3Result> => {
     const startTime = Date.now();
@@ -2224,6 +2239,9 @@ export const enrichVehicleBatchV3 = internalAction({
       trim: args.trim,
       engineCode: args.engineCode,
       displacement: args.displacement,
+      // Seeded from the caller (signup/shop pass it). STEP 3a re-derives from the
+      // resolved transmission and reconciles the key for paths that don't.
+      transmissionFamily: args.transmissionFamily,
     };
     let configKey = buildEngineKey(vehicle);
     console.log(`[v8] Starting enrichment for ${configKey}`);
@@ -2723,6 +2741,24 @@ export const enrichVehicleBatchV3 = internalAction({
       // else: link already points at a real row — leave it untouched.
     }
 
+    // STEP 3a-tx: Fold the AUTHORITATIVE transmission into the config identity.
+    // transmissionId was just resolved/healed above, so derive its canonical
+    // family and rebuild config_key. This (a) covers paths that didn't pass
+    // args.transmissionFamily (director backfill, ymmt), and (b) reconciles the
+    // seeded family to the healed transmission — so an automatic and a manual of
+    // the same engine land on DIFFERENT config_keys and never clobber each other
+    // in upsertVehicleConfig. Unknown transmission ⇒ family drops out ⇒ key
+    // unchanged from the legacy transmission-less form.
+    if (transmissionId) {
+      const txDoc = await ctx.runQuery(api.transmissions.getById, { id: transmissionId });
+      const resolvedFamily = await canonicalizeTransmissionType(txDoc?.transmission_type ?? null);
+      if (resolvedFamily && resolvedFamily !== vehicle.transmissionFamily) {
+        vehicle.transmissionFamily = resolvedFamily;
+        configKey = buildEngineKey(vehicle);
+        console.log(`[v8] config_key reconciled to transmission family "${resolvedFamily}" → ${configKey}`);
+      }
+    }
+
     // STEP 3b: Fuzzy dedup — if a config with the same engine+year+make exists
     // under a slightly different key, reuse it instead of creating a duplicate.
     // SKIPPED when pinning (targetConfigId): the dedup keys on the vehicle's
@@ -2731,7 +2767,13 @@ export const enrichVehicleBatchV3 = internalAction({
     if (!args.targetConfigId) {
       const possibleDupe = await ctx.runQuery(
         internal.vehicleEnrichment.v3queries.findSimilarConfig,
-        { engine_id: vehicleDoc.engine_id, year: args.year, make_id: makeDoc._id },
+        {
+          engine_id: vehicleDoc.engine_id,
+          year: args.year,
+          make_id: makeDoc._id,
+          // Never fuzzy-merge across transmission families — see findSimilarConfig.
+          transmission_id: transmissionId ?? undefined,
+        },
       );
       if (possibleDupe && possibleDupe.config_key !== configKey) {
         console.log(`[v8] Dedup: using existing key "${possibleDupe.config_key}" instead of "${configKey}"`);
@@ -2826,7 +2868,12 @@ export const enrichVehicleBatchV3 = internalAction({
     // STEP 5: Create enrichment run (now that vehicle_config_id is known)
     const runId = await ctx.runMutation(
       internal.vehicleEnrichment.v3mutations.createEnrichmentRun,
-      { vehicle_config_id: vehicleConfigId, version: "v8", trigger: "new_vehicle" },
+      {
+        vehicle_config_id: vehicleConfigId,
+        version: "v8",
+        trigger: args.trigger ?? "new_vehicle",
+        actor: args.actor,
+      },
     );
 
     await ctx.runMutation(internal.vehicleEnrichment.v3mutations.updateEnrichmentRun, {
@@ -3736,6 +3783,10 @@ async function runPollBatch1Body(
         makeId: args.makeId,
         runId: args.runId,
         attempt: 1,
+        // Resubmit payload for the transient-error auto-retry (see _pollBatch2V3).
+        batch2UserPrompt,
+        batch2SearchUses,
+        batch2BlockedDomains,
       },
     );
 
@@ -3798,6 +3849,16 @@ export const _pollBatch2V3 = internalAction({
     // Anthropic — this flag keeps slow-polling it and applies the gap-fill
     // when it ends instead of orphaning the results (Challenger case).
     lateCollect: v.optional(v.boolean()),
+    // Auto-retry (Sep 2026): a batch that ENDS `errored`/`expired` (a transient
+    // Anthropic-side failure, NOT a parse verdict) is resubmitted once. These
+    // carry the exact resubmit payload so the retry rebuilds an identical
+    // request; the output schema is reconstructable from `nullFields`. Optional
+    // so in-flight scheduled rows (mid-deploy) and the lateCollect path — which
+    // never retries — don't need them. `batch2Retry` is the attempt counter.
+    batch2UserPrompt: v.optional(v.string()),
+    batch2SearchUses: v.optional(v.number()),
+    batch2BlockedDomains: v.optional(v.array(v.string())),
+    batch2Retry: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<void> => {
     // Catch-all failure handler (Jun-9 review item 3): batch-1 data is always
@@ -3933,6 +3994,92 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
         ? "(batch 2 timed out — no response collected)"
         : JSON.stringify(results, null, 2),
     });
+
+    // ── Transient-error auto-retry (Sep 2026) ────────────────────────────────
+    // An ended batch whose request came back `errored`/`expired` is an
+    // Anthropic-side transient (the async queue overloaded / api_error'd /
+    // expired the request), NOT a problem with our prompt — resubmitting the
+    // identical request usually succeeds (the CR-V mellow-cat case: 147m in
+    // queue, then 0-token `errored`, pricing silently dropped). This is
+    // distinct from the 3h TIMEOUT path above (which arms the late collector
+    // for a batch that never ENDED) and from a PARSE verdict (`json_extraction_*`),
+    // which the fields/services rescue rungs below already handle and which a
+    // resubmit would not fix. Bounded by PARTS_BATCH2_MAX_RETRY (default 1),
+    // live-path only (never lateCollect). Kill switch: PARTS_BATCH2_RETRY=off.
+    {
+      const retryCount = args.batch2Retry ?? 0;
+      const maxBatch2Retry = Number(process.env.PARTS_BATCH2_MAX_RETRY ?? "1");
+      const isTransientBatchError =
+        !!r2?.error && /^(errored|expired)\b/.test(String(r2.error));
+      if (
+        !timedOut &&
+        !args.lateCollect &&
+        isTransientBatchError &&
+        process.env.PARTS_BATCH2_RETRY !== "off" &&
+        args.batch2UserPrompt != null &&
+        retryCount < maxBatch2Retry
+      ) {
+        try {
+          const newBatchId = await submitBatch([
+            {
+              customId: "batch2",
+              system: BATCH_2_SYSTEM,
+              userPrompt: args.batch2UserPrompt,
+              maxTokens: 16384,
+              temperature: 0,
+              maxSearchUses: args.batch2SearchUses ?? 6,
+              blockedDomains: args.batch2BlockedDomains,
+              outputSchema: buildBatch2ArraySchema(args.nullFields),
+            },
+          ]);
+          // Re-open the batch2 step row against the fresh batch (the prior
+          // errored response_text stays — it is not overwritten here).
+          await traceStep(ctx, {
+            run_id: args.runId,
+            vehicle_config_id: args.vehicleConfigId,
+            step: "batch2",
+            seq: 4,
+            status: "submitted",
+            started_at: Date.now(),
+            summary: `RETRY ${retryCount + 1}/${maxBatch2Retry} · batchId=${newBatchId} · prev ${String(r2?.error).slice(0, 40)}`,
+          });
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: `resubmit_${retryCount + 1}`,
+            reason: `transient batch2 error (${String(r2?.error).slice(0, 80)}) — resubmitted as ${newBatchId}`,
+            outcome: "ok",
+          }]);
+          await ctx.scheduler.runAfter(
+            POLL_INTERVAL_MS,
+            internal.vehicleEnrichment.v3pipeline._pollBatch2V3,
+            { ...args, batchId: newBatchId, attempt: 1, batch2Retry: retryCount + 1 },
+          );
+          console.log(
+            `[v8/_pollBatch2] transient batch2 error — resubmitted (retry ${retryCount + 1}/${maxBatch2Retry}) batchId=${newBatchId}`,
+          );
+          return; // do NOT finalize — the fresh batch's poll chain will
+        } catch (e) {
+          // The resubmit itself failed — fall through to the batch-1-only
+          // finalize so the run is never lost, and record why.
+          console.error(
+            `[v8/_pollBatch2] batch2 resubmit FAILED (retry ${retryCount + 1}) — finalizing with batch1 data:`,
+            e,
+          );
+          await recordDecisions(ctx, [{
+            vehicleConfigId: String(args.vehicleConfigId),
+            runId: String(args.runId),
+            stage: "batch2",
+            decisionKey: "batch2_retry",
+            chosen: "resubmit_failed",
+            reason: `resubmit threw: ${String(e).slice(0, 120)}`,
+            outcome: "error",
+          }]);
+        }
+      }
+    }
 
     // Fix #3: Detect errored/expired batch2 request
     if (r2?.error) {
@@ -7014,6 +7161,36 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       quotability,
     });
 
+    // Ops alert (Sep 2026): a batch-2 error-out (an ended `errored`/`expired`
+    // result, or the 3h timeout) used to be visible only in the console — the
+    // CR-V mellow-cat case was found by chance. Emit one deduped
+    // notification_outbox row per run, mirroring portalStats.evaluateSlo's
+    // channel:"slack" convention (see _alertEnrichmentErrorOut for the
+    // no-dispatcher-yet caveat). Kill switch: ENRICH_ERROROUT_ALERT=off.
+    if ((r2?.error || timedOut) && process.env.ENRICH_ERROROUT_ALERT !== "off") {
+      try {
+        const unpricedCoreRoles = (quotability?.services ?? []).reduce(
+          (n: number, s: any) =>
+            n + Math.max(0, (s.core_with_fitment ?? 0) - (s.core_with_price ?? 0)),
+          0,
+        );
+        await ctx.runMutation(
+          internal.vehicleEnrichment.v3mutations._alertEnrichmentErrorOut,
+          {
+            runId: args.runId,
+            vehicleConfigId: args.vehicleConfigId,
+            label: `${args.year} ${args.make} ${args.model} ${args.trim}`.trim(),
+            batchId: args.batchId,
+            error: timedOut ? "batch2_timeout" : String(r2?.error ?? "unknown"),
+            quotabilityPct: quotability?.pct,
+            unpricedCoreRoles,
+          },
+        );
+      } catch (e) {
+        console.warn("[v8] error-out alert enqueue failed (non-fatal):", e);
+      }
+    }
+
     // Trace: finalize stage — the run's terminal snapshot.
     await traceStep(ctx, {
       run_id: args.runId,
@@ -7043,6 +7220,20 @@ async function runPollBatch2Body(ctx: any, args: any): Promise<void> {
       internal.vehicleEnrichment.v3queries.getVehicleConfigById,
       { vehicleConfigId: args.vehicleConfigId },
     );
+
+    // The stored config_key encodes the transmission family (STEP 3a-tx). This
+    // poll body rebuilt `vehicle` from vehicleArgs, which carries no transmission,
+    // so re-derive the family from the config's own resolved transmission BEFORE
+    // the key comparison below. Otherwise the migration would compare against a
+    // transmission-less desiredKey, rename the config back to it, and re-collapse
+    // an automatic and a manual of the same engine. A legitimate engine-code
+    // migration still fires — the rebuilt desiredKey just also keeps the
+    // (unchanged) transmission token.
+    const finalTxId = currentVcForFinal?.transmission_id ?? args.transmissionId;
+    if (finalTxId) {
+      const finalTxDoc = await ctx.runQuery(api.transmissions.getById, { id: finalTxId });
+      vehicle.transmissionFamily = await canonicalizeTransmissionType(finalTxDoc?.transmission_type ?? null);
+    }
 
     // Config-key migration (batch-2 audit, Jul 2026): when this run holds a
     // REAL engine code (verified resolution threaded through args, or a

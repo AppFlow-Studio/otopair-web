@@ -30,6 +30,7 @@ import { validateTransition, isTerminal } from "./payment_status_history";
 import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { resolveShopSetForBooking } from "./booking_quotes";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -1793,6 +1794,9 @@ export const _patchBookingCaptured = internalMutation({
       await ctx.db.patch(payment._id, {
         captured_amount_cents: args.finalCaptureAmountCents,
         status: "completed",
+        // Stamp the capture time so the booking activity timeline can show a
+        // "Payment collected" entry at the moment it actually landed.
+        captured_at_ms: payment.captured_at_ms ?? now,
         updated_at: now,
       });
     }
@@ -1842,17 +1846,112 @@ export const _stampSettlement = internalMutation({
   },
 });
 
+/** Core hold-raise, shared by the estimate-approval flow (`adjustAuthorization`)
+ *  and the capture path (`captureAtAmount`). Increments the manual-capture
+ *  authorization to `targetCents`, falling through to a full reauth (void the PI
+ *  and mint a fresh off-session PI at the target) when Stripe rejects the
+ *  increment (card brand doesn't support incremental auth, or the card was later
+ *  declined). Idempotent — skips when the hold already covers the target.
+ *
+ *  Deliberately does NOT revert the booking to `reauth_required` on a hard
+ *  (non-reauthable) increment failure: that estimate-flow side effect is applied
+ *  by the `adjustAuthorization` wrapper, so the capture path can instead fall back
+ *  to capture-at-hold + settlement. (`reauthFlow` still performs its own revert on
+ *  its own failures — that's fine for both callers.)
+ *
+ *  Returns: "ok" (incremented), "reauth_ok"/"reauth_failed" (reauth path),
+ *  "increment_failed_hard" (non-reauthable increment error, no revert), or
+ *  "skipped". */
+async function raiseHoldToTarget(
+  ctx: any,
+  args: { booking: any; payment: any; targetCents: number; stripe: any },
+): Promise<{ status: string; targetCents?: number; reason?: string }> {
+  const { booking, payment, targetCents, stripe } = args;
+  const activePiId = resolveActivePaymentIntentId(payment);
+  if (!activePiId) {
+    return { status: "skipped", reason: "no payment intent" };
+  }
+
+  const currentHold =
+    payment.incremented_total_cents ??
+    payment.hold_amount_cents ??
+    Math.round((payment.amount ?? 0) * 100);
+
+  if (targetCents <= currentHold) {
+    return { status: "skipped", reason: "hold already covers target" };
+  }
+
+  try {
+    await stripe.paymentIntents.incrementAuthorization(activePiId, {
+      amount: targetCents,
+    });
+    await ctx.runMutation(
+      internal.payments_stripe._recordAuthorizationAdjustment,
+      { bookingId: booking._id, incrementedTotalCents: targetCents },
+    );
+    await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
+      bookingId: booking._id,
+      stripeAction: "increment_authorization",
+    });
+    return { status: "ok", targetCents };
+  } catch (err: any) {
+    const code = err?.code ?? err?.raw?.code ?? "";
+    const isReauthable =
+      code === "incremental_authorization_not_supported" ||
+      code === "card_declined" ||
+      code === "payment_intent_unexpected_state";
+    if (!isReauthable) {
+      await ctx.runMutation(
+        internal.payments_stripe._stampApprovalStripeAction,
+        { bookingId: booking._id, stripeAction: "increment_failed" },
+      );
+      return { status: "increment_failed_hard", reason: err?.message };
+    }
+    // Reauth fallback: void the current PI and create a fresh PI for the target
+    // amount, off-session against the saved PaymentMethod.
+    return await reauthFlow(ctx, {
+      booking,
+      payment,
+      targetCents,
+      stripe,
+    });
+  }
+}
+
 /** Increments the manual-capture authorization to the booking's current
  *  `mechanic_set_price_cents` (or `running_approved_ceiling_cents`, whichever
- *  is larger). Falls through to a reauth flow when Stripe rejects the
- *  increment (card brand doesn't support incremental auth, or the card was
- *  later declined). Idempotent — skips when the hold already matches. */
+ *  is larger). On a hard increment failure, reverts the booking to
+ *  `reauth_required` and pushes the customer — the estimate-flow contract, so a
+ *  mechanic isn't left thinking they're approved on a stale hold. Idempotent —
+ *  skips when the hold already matches. */
+export const _completeAuthorizationAdjustment = internalMutation({
+  args: { bookingId: v.id("bookings"), stateAfterHold: v.string() },
+  handler: async (ctx, args) => {
+    const booking = await ctx.db.get(args.bookingId);
+    if (booking?.payment_approval_state !== "hold_processing") return;
+    await ctx.db.patch(args.bookingId, {
+      payment_approval_state: args.stateAfterHold,
+      updated_at: Date.now(),
+    });
+  },
+});
+
 export const adjustAuthorization = internalAction({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    stateAfterHold: v.optional(v.string()),
+  },
   handler: async (
     ctx,
     args,
   ): Promise<{ status: string; targetCents?: number; reason?: string }> => {
+    const completeHold = async () => {
+      if (!args.stateAfterHold) return;
+      await ctx.runMutation(internal.payments_stripe._completeAuthorizationAdjustment, {
+        bookingId: args.bookingId,
+        stateAfterHold: args.stateAfterHold,
+      });
+    };
     const result: any = await ctx.runQuery(
       internal.payments_stripe._getBookingForPayment,
       { bookingId: args.bookingId },
@@ -1866,66 +1965,41 @@ export const adjustAuthorization = internalAction({
     );
     const activePiId = resolveActivePaymentIntentId(payment);
     if (!activePiId) {
+      await completeHold();
       return { status: "skipped", reason: "no payment intent" };
     }
-
-    const currentHold =
-      payment.incremented_total_cents ??
-      payment.hold_amount_cents ??
-      Math.round((payment.amount ?? 0) * 100);
 
     const target = Math.max(
       booking.mechanic_set_price_cents ?? 0,
       booking.running_approved_ceiling_cents ?? 0,
     );
 
-    if (target <= currentHold) {
-      return { status: "skipped", reason: "hold already covers target" };
-    }
-
     const stripe = getStripe();
-    try {
-      await stripe.paymentIntents.incrementAuthorization(activePiId, {
-        amount: target,
-      });
+    const outcome = await raiseHoldToTarget(ctx, {
+      booking,
+      payment,
+      targetCents: target,
+      stripe,
+    });
+    if (outcome.status === "increment_failed_hard") {
+      // Surface the failure instead of letting the booking sit with a stale
+      // hold while the mechanic thinks they're approved. Same exit as a failed
+      // reauth: revert to reauth_required + push the customer.
       await ctx.runMutation(
-        internal.payments_stripe._recordAuthorizationAdjustment,
-        { bookingId: args.bookingId, incrementedTotalCents: target },
+        internal.payments_stripe._revertBookingToPendingForReauth,
+        { bookingId: args.bookingId },
       );
-      await ctx.runMutation(internal.payments_stripe._stampApprovalStripeAction, {
-        bookingId: args.bookingId,
-        stripeAction: "increment_authorization",
-      });
-      return { status: "ok", targetCents: target };
-    } catch (err: any) {
-      const code = err?.code ?? err?.raw?.code ?? "";
-      const isReauthable =
-        code === "incremental_authorization_not_supported" ||
-        code === "card_declined" ||
-        code === "payment_intent_unexpected_state";
-      if (!isReauthable) {
-        // Surface the failure instead of letting the booking sit with a stale
-        // hold while the mechanic thinks they're approved. Same exit as a
-        // failed reauth: revert to reauth_required + push the customer.
-        await ctx.runMutation(
-          internal.payments_stripe._stampApprovalStripeAction,
-          { bookingId: args.bookingId, stripeAction: "increment_failed" },
-        );
-        await ctx.runMutation(
-          internal.payments_stripe._revertBookingToPendingForReauth,
-          { bookingId: args.bookingId },
-        );
-        return { status: "reauth_required", reason: err?.message };
-      }
-      // Reauth fallback: void the current $20 PI and create a fresh PI for
-      // the target amount, off-session against the saved PaymentMethod.
-      return await reauthFlow(ctx, {
-        booking,
-        payment,
-        targetCents: target,
-        stripe,
-      });
+      return { status: "reauth_required", reason: outcome.reason };
     }
+    if (
+      outcome.status === "ok" ||
+      outcome.status === "reauth_ok" ||
+      (outcome.status === "skipped" &&
+        outcome.reason === "hold already covers target")
+    ) {
+      await completeHold();
+    }
+    return outcome;
   },
 });
 
@@ -2231,11 +2305,16 @@ export const _computeFinalTotalForBooking = internalQuery({
         ? (latestApproved.labor_cents as number)
         : Math.round((booking.labor_cost ?? 0) * 100);
 
+    // Robust shop-set state so the capture path honors the agreed set price
+    // (no reconcile-down) even for a booking that never stamped the range flags.
+    const shopSet = await resolveShopSetForBooking(ctx, booking);
+
     return {
       booking,
       partsSnapshot: parts,
       partsSubtotalCents: partsCents,
       laborCents,
+      isShopSet: shopSet.isShopSet,
       // Caller will recompute tax + fee.
     };
   },
@@ -2273,6 +2352,7 @@ export const finalizeAndChargeForBooking = internalAction({
       return { status: "skipped", reason: "booking not found" };
     }
     const { booking, partsSnapshot, partsSubtotalCents, laborCents } = computed;
+    const isShopSetBooking = computed.isShopSet === true;
 
     // Decline branch (or explicit flag): capture at the approved ceiling and
     // skip the actuals comparison. Honors min(ceiling, finalCents) so we
@@ -2350,12 +2430,16 @@ export const finalizeAndChargeForBooking = internalAction({
 
     const mechanicSet = booking.mechanic_set_price_cents ?? 0;
     if (mechanicSet <= 0) {
-      // Should never happen on a non-legacy booking — the pre-job submit is a
-      // prerequisite for marking complete. Log loudly so we catch the
-      // upstream miss instead of silently capturing.
-      console.error(
-        `[finalizeAndChargeForBooking] mechanic_set_price_cents missing on non-legacy booking ${String(args.bookingId)}; capturing at approved ceiling`,
-      );
+      // Expected for a shop-set booking that never runs the pre-job estimate —
+      // e.g. a fixed-price diagnostic-only booking, whose agreed price lives in
+      // the disclosed range, not `mechanic_set_price_cents`. Capture at that
+      // ceiling. For a NON-shop-set booking this is the "pre-job submit was a
+      // prerequisite and got skipped" miss, so log loudly to catch it.
+      if (!isShopSetBooking) {
+        console.error(
+          `[finalizeAndChargeForBooking] mechanic_set_price_cents missing on non-legacy booking ${String(args.bookingId)}; capturing at approved ceiling`,
+        );
+      }
       const safeCap =
         booking.running_approved_ceiling_cents ??
         booking.disclosed_range_high_cents ??
@@ -2384,13 +2468,18 @@ export const finalizeAndChargeForBooking = internalAction({
       );
     }
 
-    // Fixed price: the customer pays the agreed flat total (base + any approved
-    // added scope), full stop — never a reconciliation against actual parts/
-    // labor. Reconciling would UNDER-charge when actuals land below the flat
-    // rate (its whole point is the shop eats that spread) and needlessly probe a
+    // Shop-set price (fixed OR range): the customer pays the agreed total (the
+    // set price the front desk chose inside the band, plus any approved added
+    // scope), full stop — never a reconciliation against actual parts/labor.
+    // Reconciling would UNDER-charge when actuals land below the set price (its
+    // whole point is the shop eats that spread) and needlessly probe a
     // re-approval when they land above. Capture the agreed amount, exactly like
-    // the over-actuals branch below already does for every booking.
-    if (booking.is_fixed_price === true) {
+    // the over-actuals branch below already does for every booking. (For a
+    // mixed booking the agreed total already folds in the dynamic portion, so
+    // capture-agreed still pays exactly what the customer approved.) Uses the
+    // robustly-resolved flag so a booking that never stamped the range at create
+    // still captures the agreed set price, never a reconcile-down.
+    if (isShopSetBooking) {
       return await captureAtAmount(
         ctx,
         args.bookingId,
@@ -2456,11 +2545,11 @@ async function captureAtAmount(
   partsSnapshot: any,
   applicationFeeCents?: number,
 ): Promise<{ status: string; reason?: string }> {
-  const payment: any = await ctx.runQuery(
+  let payment: any = await ctx.runQuery(
     internal.payments_stripe._getPaymentByBookingId,
     { bookingId },
   );
-  const activePiId = resolveActivePaymentIntentId(payment);
+  let activePiId = resolveActivePaymentIntentId(payment);
   if (!activePiId) {
     return { status: "skipped", reason: "no payment intent" };
   }
@@ -2468,6 +2557,44 @@ async function captureAtAmount(
     return { status: "skipped", reason: "already completed" };
   }
   const stripe = getStripe();
+
+  // Raise the hold to the intended capture before we cap. The deposit-path hold
+  // starts at the $20 booking deposit and is only lifted to the agreed price by
+  // the estimate-approval flow; completions that skip that flow (diagnostic-only
+  // bookings, and any other under-held path) would otherwise capture just the
+  // $20 and strand the rest as "awaiting settlement." `captureCents` is bounded
+  // by the disclosed range / approved ceiling in every finalize branch, so
+  // raising the hold to it never exceeds what the customer already authorized.
+  // On any raise failure we fall through to the cap-at-hold + shortfall path
+  // below (never $0), so the settlement safety net is unchanged.
+  const currentHoldCents: number =
+    payment.incremented_total_cents ??
+    payment.hold_amount_cents ??
+    BOOKING_DEPOSIT_CENTS;
+  if (Math.round(captureCents) > Math.round(currentHoldCents)) {
+    const bookingForRaise: any = await ctx.runQuery(
+      internal.payments_stripe._getBookingForPayment,
+      { bookingId },
+    );
+    const booking = bookingForRaise?.booking;
+    if (booking) {
+      const raised = await raiseHoldToTarget(ctx, {
+        booking,
+        payment,
+        targetCents: Math.round(captureCents),
+        stripe,
+      });
+      if (raised.status === "ok" || raised.status === "reauth_ok") {
+        // A reauth swaps the active PI id, and both paths bump
+        // incremented_total_cents — re-read so the cap below sees the new hold.
+        payment = await ctx.runQuery(
+          internal.payments_stripe._getPaymentByBookingId,
+          { bookingId },
+        );
+        activePiId = resolveActivePaymentIntentId(payment) ?? activePiId;
+      }
+    }
+  }
   // Never ask Stripe to capture more than the live hold authorizes — an over-
   // capture 400s and would otherwise strand the whole charge. Cap at what the
   // authorization actually covers (Option A: capture the ceiling, never $0);

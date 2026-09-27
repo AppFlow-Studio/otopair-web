@@ -157,6 +157,7 @@ const ENGINE_SPEC_TABLE: Record<string, EngineSpecFacts> = {
   S55: { minL: 3.0, maxL: 3.0, cylinders: 6, note: "BMW M 3.0 I6" },
   S58: { minL: 3.0, maxL: 3.0, cylinders: 6, note: "BMW M 3.0 I6" },
   S63: { minL: 4.4, maxL: 4.4, cylinders: 8, note: "BMW M 4.4 V8" },
+  S68: { minL: 4.4, maxL: 4.4, cylinders: 8, note: "BMW M 4.4 V8 (G90 M5 PHEV)" },
   // ── Mercedes-Benz ──
   M133: { minL: 2.0, maxL: 2.0, cylinders: 4, note: "MB AMG 2.0 I4" },
   M139: { minL: 2.0, maxL: 2.0, cylinders: 4, note: "MB AMG 2.0 I4" },
@@ -303,6 +304,21 @@ export function contradictsDecodedEngine(
   return { known: true, contradicts: false };
 }
 
+/**
+ * The displacement a known engine code pins, when the code's family is a
+ * single displacement. Used to correct a decoder's displacement when the code
+ * and cylinder count agree but the litres don't — vPIC decodes the 2021 AMG
+ * GT 63 4-door (EngineModel M177, 8 cyl) as "3" litres. Null for unknown codes
+ * and families that span displacements.
+ */
+export function engineCodePinnedDisplacement(
+  code: string | null | undefined,
+): { displacementL: number; cylinders?: number } | null {
+  const hit = findEngineSpecFacts(code);
+  if (!hit || hit.facts.minL !== hit.facts.maxL) return null;
+  return { displacementL: hit.facts.minL, cylinders: hit.facts.cylinders };
+}
+
 // ─── Year-pinned engine code by vehicle (deterministic forward fallback) ──────
 //
 // The generation-aware engine-code guidance used to live only inside the
@@ -343,6 +359,20 @@ const KNOWN_ENGINE_BY_VEHICLE: Record<string, KnownEngineRow[]> = {
   "nissan|altima": [
     { from: 2019, to: 2026, displacementL: 2.5, cylinders: 4, code: "PR25DD", note: "6th-gen Altima 2.5" },
     { from: 2007, to: 2018, displacementL: 2.5, cylinders: 4, code: "QR25DE", note: "pre-2019 Altima 2.5" },
+  ],
+  // BMW M halo lines — vPIC decodes these with no EngineModel, and the search
+  // fallback used to leave the descriptor "4.4l_8cyl" on the spec card.
+  "bmw|m3": [
+    { from: 2015, to: 2018, displacementL: 3.0, cylinders: 6, code: "S55", note: "F80 M3 3.0 twin-turbo I6" },
+    { from: 2021, to: 2027, displacementL: 3.0, cylinders: 6, code: "S58", note: "G80 M3 3.0 twin-turbo I6" },
+  ],
+  "bmw|m4": [
+    { from: 2015, to: 2020, displacementL: 3.0, cylinders: 6, code: "S55", note: "F82 M4 3.0 twin-turbo I6" },
+    { from: 2021, to: 2027, displacementL: 3.0, cylinders: 6, code: "S58", note: "G82 M4 3.0 twin-turbo I6" },
+  ],
+  "bmw|m5": [
+    { from: 2018, to: 2024, displacementL: 4.4, cylinders: 8, code: "S63", note: "F90 M5 4.4 twin-turbo V8" },
+    { from: 2025, to: 2027, displacementL: 4.4, cylinders: 8, code: "S68", note: "G90 M5 4.4 V8 PHEV" },
   ],
   "nissan|rogue": [
     { from: 2014, to: 2020, displacementL: 2.5, cylinders: 4, code: "QR25DE", note: "T32 Rogue 2.5" },

@@ -19,6 +19,7 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { CheckCircle2, Clock, Wrench, XCircle } from "lucide-react";
+import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 
 type Variant = "dark" | "light";
 
@@ -332,9 +333,10 @@ function ExtraWorkRow({
                   {p.quantity > 1 ? `${p.quantity} × ` : ""}
                   {p.part_name}
                   {p.oem_number ? (
-                    <span className={`ml-1.5 text-[11px] ${mutedText}`}>
-                      {p.oem_number}
-                    </span>
+                    <CopyableOemNumber
+                      value={p.oem_number}
+                      className={`ml-1.5 align-baseline text-[11px] ${mutedText}`}
+                    />
                   ) : null}
                 </span>
                 {p.line_total_cents != null ? (

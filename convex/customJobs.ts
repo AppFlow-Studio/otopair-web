@@ -37,6 +37,7 @@ import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { detectTier, resolveLaborHours } from "./lib/quoteEngine";
 import { resolveLaborRate, VehicleTier } from "./lib/vehicleTiers";
 import { isBrakeSlug, type AxlePosition } from "./lib/brakeScope";
+import { normalizeShopServicePrice } from "./lib/shopServicePricing";
 
 /**
  * Bump (or open) the cross-shop dedupe ledger row for a proposed service name.
@@ -407,6 +408,29 @@ export async function completeCustomJobsForBooking(
   const byKey = new Map<string, any>();
   for (const row of rows) byKey.set(row.match_key, row);
 
+  // Lines the mechanic added mid-job but never got the customer to confirm
+  // (pending_confirmation on the booking's custom_services copy) are DRAFTS.
+  // The customer never approved them, so they must NOT complete or bill. Terminal
+  // them as "cancelled" — kept for audit, the same spirit as a declined line —
+  // and skip them in both completion passes below.
+  const booking: any = await ctx.db.get(args.bookingId);
+  const unconfirmedKeys = new Set<string>();
+  for (const line of ((booking?.custom_services ?? []) as any[])) {
+    if (line?.name && line.pending_confirmation === true) {
+      unconfirmedKeys.add(serviceMatchKey(String(line.name)));
+    }
+  }
+  const isUnconfirmed = (row: any) =>
+    unconfirmedKeys.has(row.match_key ?? serviceMatchKey(row.name));
+  for (const row of rows) {
+    if (row.status === "planned" && isUnconfirmed(row)) {
+      await ctx.db.patch(row._id, {
+        status: "cancelled",
+        updated_at: args.now,
+      });
+    }
+  }
+
   // Actuals beat the quote. A line quoted with one part and finished with
   // another should record the one that went in.
   const actualParts = actualPartsByMatchKey(args.partsUsed);
@@ -424,6 +448,9 @@ export async function completeCustomJobsForBooking(
     // an outcome for it (the mechanic opened the survey before the decline
     // landed), skip it — the row stays "declined".
     if (row.status === "declined") continue;
+    // Never confirmed by the customer → cancelled above, never billed here even
+    // if the survey still carried an outcome for it.
+    if (isUnconfirmed(row)) continue;
     const actualMinutes = outcome.actual_minutes ?? row.actual_minutes;
     const fitted = partsFor(row.match_key);
     await ctx.db.patch(row._id, {
@@ -462,6 +489,8 @@ export async function completeCustomJobsForBooking(
   for (const row of rows) {
     if (row.status !== "planned") continue;
     if (row.updated_at === args.now) continue;
+    // Unconfirmed drafts were cancelled above — don't auto-complete them.
+    if (isUnconfirmed(row)) continue;
     // No outcome reported, but parts may still have been fitted — record them
     // rather than closing the row emptier than the evidence allows.
     const fitted = partsFor(row.match_key);
@@ -481,22 +510,25 @@ export async function completeCustomJobsForBooking(
 }
 
 /**
- * Stamp the custom_jobs a mid-job cycle just introduced with that cycle's
+ * Stamp the custom_jobs a pre/mid-job cycle just introduced with that cycle's
  * approval id, so a later customer decline can revert exactly those lines and
  * nothing from a prior approved cycle.
  *
  * Called from performSubmission right after the booking_approvals row is
- * inserted, only for the mid-job cycle. Stamps only rows that are still
- * "planned", off-catalog and added mid-job, and not already bound to a LIVE
- * approval. A row whose stamp points at an approval that was withdrawn, expired
- * or declined is re-stampable — that's how a withdraw+resubmit re-binds only the
- * lines the new cycle carries.
+ * inserted, for the pre_job and mid_job cycles. `source` scopes the stamp to the
+ * lines THIS cycle added (`custom_jobs.source === source`, i.e. "pre_job" or
+ * "mid_job") so a pre-job submit never binds a mid-job line and vice versa.
+ * Stamps only rows that are still "planned", off-catalog, added in this cycle,
+ * and not already bound to a LIVE approval. A row whose stamp points at an
+ * approval that was withdrawn, expired or declined is re-stampable — that's how
+ * a withdraw+resubmit re-binds only the lines the new cycle carries.
  */
-export async function stampMidJobCustomJobs(
+export async function stampIntroducedCustomJobs(
   ctx: any,
   args: {
     bookingId: Id<"bookings">;
     approvalId: Id<"booking_approvals">;
+    source: "pre_job" | "mid_job";
     now: number;
   },
 ): Promise<number> {
@@ -518,7 +550,7 @@ export async function stampMidJobCustomJobs(
 
   let stamped = 0;
   for (const row of rows) {
-    if (row.source !== "mid_job") continue;
+    if (row.source !== args.source) continue;
     if (row.status !== "planned") continue;
     if (await stampStillHolds(row.introduced_by_approval_id)) continue;
     await ctx.db.patch(row._id, {
@@ -871,7 +903,8 @@ async function resolveAddedServicePricing(
     if (rate.rate != null) laborRateCents = Math.round(rate.rate * 100);
   }
 
-  // Flat-price override for (shop, service, tier), if the shop set one.
+  // Shop override for (shop, service, tier). A custom-job draft needs one
+  // provisional number, so an unequal range uses its midpoint.
   let fixedPriceCents: number | null = null;
   if (args.booking?.shop_id) {
     const row: any = await ctx.db
@@ -883,7 +916,10 @@ async function resolveAddedServicePricing(
           .eq("tier", tier),
       )
       .unique();
-    if (row) fixedPriceCents = row.price_cents;
+    const price = normalizeShopServicePrice(row);
+    if (price) {
+      fixedPriceCents = Math.round((price.lowCents + price.highCents) / 2);
+    }
   }
 
   return { laborMinutes, laborRateCents, fixedPriceCents, tier };
@@ -1094,12 +1130,25 @@ async function addCustomServiceForBooking(
   // Catalog service? Seed the line's parts from the OEM catalog/enrichment so
   // the scope dialog opens with them listed. Best-effort — a gap just means the
   // mechanic fills them in by hand, exactly as before.
-  const seededParts = catalogServiceId
-    ? await oemPartsForServiceOnVehicle(ctx, {
-        vin: booking.vin,
-        serviceId: catalogServiceId,
-      })
-    : null;
+  //
+  // BUT never seed parts for a service that is ALREADY BOOKED on this booking:
+  // those parts already belong to the booked line (service_id-stamped in
+  // priced_parts_snapshot). Duplicating them onto this added, name-keyed line
+  // makes the same part surface twice — and the post-job parts step's OEM-only
+  // dedup can then bind the booked service's part to THIS added job instead
+  // (parts "bound to the added job, not the cabin-air-filter job").
+  const catalogAlreadyBooked =
+    catalogServiceId != null &&
+    (booking.service_ids ?? []).some(
+      (sid: any) => String(sid) === String(catalogServiceId),
+    );
+  const seededParts =
+    catalogServiceId && !catalogAlreadyBooked
+      ? await oemPartsForServiceOnVehicle(ctx, {
+          vin: booking.vin,
+          serviceId: catalogServiceId,
+        })
+      : null;
 
   // recordCustomJobsForBooking is idempotent per (booking, match_key), so a
   // double-tap patches the existing row instead of duplicating it.
@@ -1480,6 +1529,14 @@ export const listForBooking = query({
       booking && typeof (booking as any).vin === "string"
         ? (booking as any).vin
         : null;
+    // Services already booked on this booking. A line that resolves to one of
+    // these must NOT read-fill its parts from the catalog: those parts belong to
+    // the booked line (service_id-stamped), and duplicating them onto this
+    // name-keyed line lets the post-job step's OEM dedup bind them to this added
+    // job instead of the booked service. Keep the added line parts-less here.
+    const bookedServiceIdSet = new Set(
+      ((booking as any)?.service_ids ?? []).map((sid: any) => String(sid)),
+    );
     let servicesCache: any[] | null = null;
 
     // Whether each off-catalog line is STILL awaiting the customer — read from
@@ -1526,7 +1583,7 @@ export const listForBooking = query({
           servicesCache,
         );
         if (serviceId) {
-          if (needsParts) {
+          if (needsParts && !bookedServiceIdSet.has(String(serviceId))) {
             const seeded = await oemPartsForServiceOnVehicle(ctx, {
               vin,
               serviceId,

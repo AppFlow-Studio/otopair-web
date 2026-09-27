@@ -17,10 +17,17 @@ import {
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { isFutureScheduleSlot } from "@/lib/follow-up-slot-validation";
+import DatePicker from "@/components/ui/date-picker";
 
 function getDayRange(d: Date) {
   const s = dateToString(d);
   return { dateFrom: s, dateTo: s };
+}
+
+function localDateFromISO(isoDate: string): Date {
+  const [year, month, day] = isoDate.split("-").map(Number);
+  return new Date(year, month - 1, day);
 }
 
 function hhmmToMinutes(hhmm: string): number {
@@ -178,6 +185,10 @@ export default function ScheduleSlotPicker({
       }
     : null;
 
+  const canConfirmPending =
+    pending !== null &&
+    isFutureScheduleSlot(pending.date, pending.time, new Date());
+
   if (!open || typeof document === "undefined") return null;
 
   return createPortal(
@@ -221,6 +232,15 @@ export default function ScheduleSlotPicker({
             >
               Today
             </button>
+            <DatePicker
+              className="w-40"
+              value={dateToString(currentDate)}
+              onChange={(next) => {
+                if (!next) return;
+                setCurrentDate(localDateFromISO(next));
+                setPending(null);
+              }}
+            />
             <button
               type="button"
               onClick={() => setCurrentDate((d) => addDays(d, 1))}
@@ -258,6 +278,9 @@ export default function ScheduleSlotPicker({
               currentDate={currentDate}
               draftBooking={draftBooking}
               onSelectEmptyCell={(info) => {
+                if (!isFutureScheduleSlot(info.date, info.startTime, new Date())) {
+                  return;
+                }
                 setPending({
                   date: info.date,
                   time: info.startTime,
@@ -279,8 +302,15 @@ export default function ScheduleSlotPicker({
           </button>
           <button
             type="button"
-            onClick={() => pending && onConfirm(pending)}
-            disabled={!pending}
+            onClick={() => {
+              if (
+                pending &&
+                isFutureScheduleSlot(pending.date, pending.time, new Date())
+              ) {
+                onConfirm(pending);
+              }
+            }}
+            disabled={!canConfirmPending}
             className={drawerPrimaryButtonClassName}
           >
             Confirm slot

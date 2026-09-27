@@ -55,6 +55,7 @@ import {
 } from "@/lib/labor-units";
 import SurveyDialogShell from "@/components/survey-dialog-shell";
 import ScheduleSlotPicker from "@/components/booking/schedule-slot-picker";
+import { isSchedulableRecommendation } from "@/lib/scheduled-recommendation-validation";
 import ServiceOptionsPicker from "@/components/booking/service-options-picker";
 import TireSpecPicker from "@/components/booking/tire-spec-picker";
 import {
@@ -3804,8 +3805,17 @@ function canAdvance(
     return state.laborStepValid && !state.laborOverCap;
   }
   if (step === "recommendations") {
-    // Every rec for a has_options service must carry a pick.
+    // Scheduled follow-ups must be bookable on the driver app, so they require
+    // a catalog service. Every rec for a has_options service must also carry a pick.
     return state.recommendations.every((r) => {
+      if (
+        !isSchedulableRecommendation({
+          recommendedServiceId: r.recommended_service_id,
+          scheduledAt: r.scheduled_at,
+        })
+      ) {
+        return false;
+      }
       if (!r.recommended_service_id) return true;
       if (r.service_slug === "tire-replacement") return r.tire_specs != null;
       if (r.service_has_options) return r.selected_service_option != null;
@@ -7367,10 +7377,13 @@ function RecommendationsStep({
                       <button
                         type="button"
                         onClick={() => setSlotPickerIndex(index)}
+                        disabled={!rec.recommended_service_id}
                         className="mt-1 inline-flex h-9 w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-3 text-[12px] font-medium text-primary transition-colors hover:bg-primary/10"
                       >
                         <CalendarClock className="h-3.5 w-3.5" />
-                        Pick date &amp; time
+                        {rec.recommended_service_id
+                          ? "Pick date & time"
+                          : "Pick a service to schedule"}
                       </button>
                     )}
                   </div>
@@ -7493,6 +7506,7 @@ function RecommendationsStep({
         onCancel={() => setSlotPickerIndex(null)}
         onConfirm={(slot) => {
           if (slotPickerIndex === null) return;
+          if (!recommendations[slotPickerIndex]?.recommended_service_id) return;
           const [h, m] = slot.time.split(":").map(Number);
           const [y, mo, d] = slot.date.split("-").map(Number);
           const ts = new Date(y, mo - 1, d, h, m, 0, 0).getTime();

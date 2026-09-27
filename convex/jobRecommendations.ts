@@ -28,6 +28,7 @@ import { jobRecommendationInputValidator } from "./lib/vehicle_passports";
 // and counting them separately would understate every cluster.
 import { bumpPendingServiceSubmission } from "./customJobs";
 import { ensureJobActualRecord } from "./lib/job_actuals";
+import { isSchedulableRecommendation } from "../lib/scheduled-recommendation-validation";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -345,6 +346,20 @@ export async function submitRecommendationsForBooking(
   for (const rec of recommendations) {
     const hasService = !!rec.recommended_service_id;
     const freeform = (rec.freeform_service_name ?? "").trim();
+    const scheduledAt =
+      typeof rec.scheduled_at === "number" && rec.scheduled_at > 0
+        ? rec.scheduled_at
+        : null;
+    if (
+      !isSchedulableRecommendation({
+        recommendedServiceId: rec.recommended_service_id
+          ? String(rec.recommended_service_id)
+          : null,
+        scheduledAt,
+      })
+    ) {
+      throw new Error("Pick a catalog service before scheduling a follow-up.");
+    }
     if (!hasService && freeform.length === 0) continue;
 
     let pendingId: Id<"pending_service_submissions"> | undefined;
@@ -397,10 +412,7 @@ export async function submitRecommendationsForBooking(
         typeof rec.target_mileage === "number" && rec.target_mileage > 0
           ? rec.target_mileage
           : undefined,
-      scheduled_at:
-        typeof rec.scheduled_at === "number" && rec.scheduled_at > 0
-          ? rec.scheduled_at
-          : undefined,
+      scheduled_at: scheduledAt ?? undefined,
       scheduled_mechanic_id: rec.scheduled_mechanic_id ?? undefined,
       selected_service_option: rec.selected_service_option ?? undefined,
       tire_specs: rec.tire_specs ?? undefined,

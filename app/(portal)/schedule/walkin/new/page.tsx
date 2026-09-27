@@ -17,6 +17,17 @@ function todayIso(): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
+/** Current wall-clock time as "h:mm AM/PM" — what the Time field should
+ *  default to for a walk-in, because the car is here NOW. */
+function nowTime12h(): string {
+  const d = new Date();
+  const h = d.getHours();
+  const m = String(d.getMinutes()).padStart(2, "0");
+  const suffix = h >= 12 ? "PM" : "AM";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}:${m} ${suffix}`;
+}
+
 function formatTodayLabel(): string {
   const d = new Date();
   return d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
@@ -166,11 +177,24 @@ export default function WalkInNewPage() {
     return out;
   }, [todaysHours]);
 
-  // Prefill Time once shop hours load, so the default submit doesn't error
-  // with "outside shop hours". Only fires if the user hasn't typed anything.
+  /* Prefill Time with NOW, not with opening time.
+   *
+   * This used to default to `todaysHours.open` with the note "so the default
+   * submit doesn't error with 'outside shop hours'" — a workaround for
+   * createByShop dropping the allowOutsideShopHours override, which meant a
+   * walk-in logged after closing was rejected outright.
+   *
+   * That workaround made the booking quietly wrong: a car that arrived at 6:45
+   * was recorded as arriving at 9:00. Every downstream duration, late-monitor
+   * and "estimated ready" read off that time. The override is now plumbed
+   * through, so the honest default is the actual clock.
+   *
+   * Still only fires when the user hasn't typed anything, and still waits for
+   * hours to load so the surrounding hour options render alongside it.
+   */
   useEffect(() => {
     if (time || !todaysHours) return;
-    setTime(formatTime12h(todaysHours.open));
+    setTime(nowTime12h());
   }, [time, todaysHours]);
 
   // Resolve the picked service to a display name for the SMS preview.

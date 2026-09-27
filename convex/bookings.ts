@@ -12640,6 +12640,26 @@ export const createByShop = mutation({
       preferredMechanicId: holdConsume.pinnedMechanicId ?? args.mechanicId,
       excludeSessionId: holdConsume.excludeSessionId,
       allowAfterClose: args.allowOutsideShopHours === true,
+      // Pass the real override through, not just the after-close half.
+      //
+      // `assertWindowInsideShopHours` already has a full bypass —
+      // `if (allowOutsideShopHours) return ...` skips every check, including
+      // the start-time one. Collapsing the flag onto `allowAfterClose` here
+      // meant only the END check could ever be relaxed, so the bypass was
+      // unreachable from this mutation.
+      //
+      // The walk-in page has been sending `allowOutsideShopHours: true` all
+      // along and getting half of what it asked for: a walk-in logged after
+      // closing failed on "The requested start time is outside the shop's
+      // operating hours", which is exactly when walk-ins happen — the car
+      // that rolls in at 6:45 when the shop shuts at 6. Its workaround was to
+      // prefill the time field with the shop's OPENING time so the default
+      // submit wouldn't error, which made the booking a small lie about when
+      // the car actually arrived.
+      //
+      // Safe because it is opt-in per call: the customer-facing booking path
+      // never passes this, so a driver still can't book 3am.
+      allowOutsideShopHours: args.allowOutsideShopHours === true,
     });
 
     const status = args.status ?? "pending_shop_acceptance";

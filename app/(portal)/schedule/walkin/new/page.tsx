@@ -114,7 +114,11 @@ export default function WalkInNewPage() {
   // service on submit), or "__other__" (free-text into customServiceName).
   const [selectedServiceId, setSelectedServiceId] = useState<string>("");
   const [customServiceName, setCustomServiceName] = useState<string>("");
-  const [date, setDate] = useState<string>(todayIso());
+  /* Fixed to today, deliberately — a walk-in is a car that is already here.
+     Kept as state rather than inlined so a run that crosses midnight still
+     submits the date the form was opened on, which is the day the car
+     actually arrived. */
+  const [date] = useState<string>(todayIso());
   const [time, setTime] = useState("");
   // Assignment: either a mechanic id, "" (unassigned/pick later), or "__other__"
   // (bay / custom label typed into customAssignment).
@@ -523,13 +527,16 @@ export default function WalkInNewPage() {
 
             {/* DATE & BAY/TIME */}
             <div className="mt-8 grid grid-cols-1 gap-6 sm:grid-cols-2">
+              {/* A walk-in is a car that is HERE. Not editable, and not a date
+                  picker: the field let the front desk choose 09/30 on 09/27,
+                  which produces a "walk-in" for a car nobody has. The time
+                  stays free — a shop logging this afternoon's arrival at 4pm,
+                  or catching up after close, is a real thing. The day is not.
+                  Scheduling a future appointment is Create booking's job. */}
               <FieldGroup label="Date">
-                <TextInput
-                  value={date}
-                  onChange={setDate}
-                  placeholder={`Today · ${formatTodayLabel()}`}
-                  type="date"
-                />
+                <div className="flex h-11 items-center rounded-xl border border-border bg-muted/40 px-3 text-sm text-foreground">
+                  Today · {formatTodayLabel()}
+                </div>
               </FieldGroup>
               <FieldGroup
                 label="Mechanic & time"
@@ -537,7 +544,7 @@ export default function WalkInNewPage() {
                   todaysHours
                     ? `Shop hours today: ${formatTime12h(todaysHours.open)} – ${formatTime12h(todaysHours.close)}`
                     : scheduleContext?.hours
-                      ? "Shop is closed today — pick another date or expect an out-of-hours warning."
+                      ? "Shop is closed today — this will be logged outside opening hours."
                       : undefined
                 }
               >

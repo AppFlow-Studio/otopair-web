@@ -96,6 +96,23 @@ export function formatShopTime(
   return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}${abbreviation ? ` ${abbreviation}` : ""}`;
 }
 
+/** Formats a shop-local range and appends its DST-aware timezone once. */
+export function formatShopTimeRange(
+  startTime: string,
+  endTime: string,
+  date: string | undefined,
+  timezone = DEFAULT_SHOP_TIMEZONE,
+): string {
+  const start = formatShopTime(startTime, date, timezone).replace(/\s+\S+$/, "");
+  return `${start} – ${formatShopTime(endTime, date, timezone)}`;
+}
+
+/** Short timezone label for a device-local clock, used before a shop is chosen. */
+export function localTimezoneAbbreviation(date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZoneName: "short" }).formatToParts(date);
+  return parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+}
+
 export const US_STATE_TIMEZONE: Record<string, string> = {
   AL: "America/Chicago",
   AK: "America/Anchorage",

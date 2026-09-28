@@ -32,13 +32,39 @@ export const getById = query({
   },
 });
 
+/** Newest first. `created_at` is optional on the table, so fall back to the
+ *  system `_creationTime` rather than sinking undated rows to the bottom.
+ *
+ *  Ordering belongs here, not in each consumer: the app's shop page, the
+ *  mechanic sheet and the shop portal all render this list, and none of them
+ *  sorted — so every one of them showed the newest review last (Ahmad,
+ *  2026-09-24). */
+function newestFirst<T extends { created_at?: number | null; _creationTime: number }>(
+  rows: T[],
+): T[] {
+  return [...rows].sort(
+    (a, b) => (b.created_at ?? b._creationTime) - (a.created_at ?? a._creationTime),
+  );
+}
+
 export const getByShopId = query({
-  args: { shopId: v.id("shops") },
+  args: {
+    shopId: v.id("shops"),
+    /** Moderation view only. Defaults to false so every ordinary caller —
+     *  the app's shop page, the shop portal — sees what a customer sees. */
+    includeHidden: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
-    const reviews = await ctx.db
+    const all = await ctx.db
       .query("reviews")
       .withIndex("by_shop_id", (q) => q.eq("shop_id", args.shopId))
       .collect();
+    // convex/opsReviews.ts states the contract outright: "Consumer reads must
+    // filter hidden_at." This one never did, so a review ops had hidden was
+    // still rendered on the shop page in the app — moderation that moderated
+    // nothing. Same omission in getByMechanicId below.
+    const visible = args.includeHidden ? all : all.filter((r) => r.hidden_at == null);
+    const reviews = newestFirst(visible);
     return await Promise.all(
       reviews.map(async (review) => {
         const mechanic = review.mechanic_id ? await ctx.db.get(review.mechanic_id) : null;
@@ -52,10 +78,12 @@ export const getByShopId = query({
 export const getByMechanicId = query({
   args: { mechanicId: v.id("mechanics") },
   handler: async (ctx, args) => {
-    const reviews = await ctx.db
+    const all = await ctx.db
       .query("reviews")
       .withIndex("by_mechanic_id", (q) => q.eq("mechanic_id", args.mechanicId))
       .collect();
+    // See getByShopId — hidden reviews must not reach a customer-facing read.
+    const reviews = newestFirst(all.filter((r) => r.hidden_at == null));
     return await Promise.all(
       reviews.map(async (review) => {
         const shop = await ctx.db.get(review.shop_id);
@@ -71,6 +99,32 @@ export const getByMechanicId = query({
  * mobile My Bookings screen to decide whether to show the "Leave a review"
  * card on a completed booking.
  */
+/**
+ * This user's SHOP review for one booking, or null.
+ *
+ * `listReviewedBookingIdsForUser` answers "has it been reviewed" but not
+ * "what did they say", so a screen showing a rating had nothing to render
+ * from — the past-service page drew five empty outline stars whether or not
+ * a review existed, which read as the review not having saved (#303).
+ *
+ * Shop review only (mechanic_id undefined): that is the row the visit-level
+ * star rating represents.
+ */
+export const getMyReviewForBooking = query({
+  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("reviews")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
+      .collect();
+    return (
+      rows.find(
+        (r) => r.mechanic_id === undefined && r.user_id === args.userId,
+      ) ?? null
+    );
+  },
+});
+
 export const listReviewedBookingIdsForUser = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {

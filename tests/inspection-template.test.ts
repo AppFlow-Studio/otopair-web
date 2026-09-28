@@ -1179,32 +1179,66 @@ describe("pre-check / MPI phase split (Spec v2 §1.1)", () => {
     expect(isZoneDoneForPhase(undefined, "pre")).toBe(false);
   });
 
-  it("never mirrors a measured reading between corners", () => {
+  it.each([
+    ["FL", "FR"], ["FR", "FL"], ["RL", "RR"], ["RR", "RL"],
+  ] as const)("copies entered phase readings from %s to %s, but not photos or other-phase data", (from, to) => {
     const state = createInspectionState();
-    const source = state.zones.FL!;
-    source.measures.tread = "7";
-    source.measures.psi = "40";
-    source.tri.wear = "y";
-    source.text.tire_brand = "Michelin";
-    source.text.tire_size = "225/45R18";
-    source.text.pad_brand = "Akebono";
+    const source = state.zones[from]!;
+    const destination = state.zones[to]!;
+    source.measures = { ...source.measures, tread: "7", psi: "40", tread_inner: "8", tread_center: "7", tread_outer: "6", pad_inner: "5", pad_outer: "6", rotor: "24" };
+    source.tri = { wear: "y", brake_visual: "g", caliper: "r", brake_hose: "y", steering_play: "g", ball_joint_play: "y", wheel_bearing_play: "r" };
+    source.text = { tire_brand: "Michelin", tire_model: "Pilot", tire_size: "225/45R18", pad_brand: "Akebono" };
+    source.select = { run_flat: "no", tire_type: "Summer", tread_mode: "detailed", rotor_applicable: "yes", rotor_unit: "in" };
+    source.descriptors.desc = ["scored"];
+    source.methods = { pad_method: "gauge", rotor_tool: "micrometer" };
+    source.photoIds = ["source-photo"];
+    destination.measures.psi = "43";
+    destination.tri.wear = "r";
+    destination.statuses.wear = "not_visible";
+    destination.measures.pad_inner = "9";
+    destination.photoIds = ["destination-photo"];
 
-    const destination = state.zones.FR!;
-    destination.measures.psi = "43"; // staggered setup, Aug 20
+    const pre = patchInspectionZone(state, to, cornerCopyPatch(source, destination, "pre")).zones[to]!;
+    expect(pre.measures).toMatchObject({ tread: "7", psi: "40", tread_inner: "8", tread_center: "7", tread_outer: "6", pad_inner: "9" });
+    expect(pre.tri).toMatchObject({ wear: "y", brake_visual: "g" });
+    expect(pre.text).toMatchObject({ tire_brand: "Michelin", tire_model: "Pilot", tire_size: "225/45R18" });
+    expect(pre.select).toMatchObject({ run_flat: "no", tire_type: "Summer", tread_mode: "detailed" });
+    expect(pre.statuses.wear).toBeUndefined();
+    expect(pre.text.pad_brand ?? "").toBe("");
+    expect(pre.photoIds).toEqual(["destination-photo"]);
+    expect(pre.done).toBe(false);
 
-    const pre = cornerCopyPatch(source, destination, "pre");
-    expect(pre.text?.tire_brand).toBe("Michelin");
-    expect(pre.text?.tire_size).toBe("225/45R18");
-    // The bug this closes: pressure and tread used to travel with the copy.
-    expect(pre.measures?.psi).toBe("43");
-    expect(pre.measures?.tread ?? "").toBe("");
-    expect(pre.tri?.wear ?? "").not.toBe("y");
-    // Pad brand belongs to the other half — not copied during the pre-check.
-    expect(pre.text?.pad_brand ?? "").toBe("");
+    const mpi = patchInspectionZone(state, to, cornerCopyPatch(source, pre, "mpi")).zones[to]!;
+    expect(mpi.measures).toMatchObject({ pad_inner: "5", pad_outer: "6", rotor: "24", psi: "40" });
+    expect(mpi.tri).toMatchObject({ caliper: "r", brake_hose: "y", steering_play: "g", ball_joint_play: "y", wheel_bearing_play: "r" });
+    expect(mpi.select).toMatchObject({ rotor_applicable: "yes", rotor_unit: "in", tread_mode: "detailed" });
+    expect(mpi.descriptors.desc).toEqual(["scored"]);
+    expect(mpi.text.pad_brand).toBe("Akebono");
+    expect(mpi.methods).toMatchObject({ pad_method: "gauge", rotor_tool: "micrometer" });
+    expect(mpi.photoIds).toEqual(["destination-photo"]);
+    expect(mpi.done).toBe(false);
+  });
 
-    const mpi = cornerCopyPatch(source, destination, "mpi");
-    expect(mpi.text?.pad_brand).toBe("Akebono");
-    expect(mpi.text?.tire_brand ?? "").toBe("");
+  it("replaces stale destination answers with blank or unavailable source fields", () => {
+    const state = createInspectionState();
+    const source = state.zones.RL!;
+    const destination = state.zones.RR!;
+    source.statuses.psi = "not_visible";
+    destination.measures.psi = "36";
+    destination.statuses.tread = "not_visible";
+    destination.tri.wear = "r";
+    destination.descriptors.desc = ["warped"];
+
+    const pre = patchInspectionZone(state, "RR", cornerCopyPatch(source, destination, "pre")).zones.RR!;
+    expect(pre.measures.psi).toBe("");
+    expect(pre.statuses.psi).toBe("not_visible");
+    expect(pre.statuses.tread).toBeUndefined();
+    expect(pre.tri.wear).toBeUndefined();
+    expect(pre.descriptors.desc).toEqual(["warped"]);
+
+    const mpi = patchInspectionZone(state, "RR", cornerCopyPatch(source, pre, "mpi")).zones.RR!;
+    expect(mpi.descriptors.desc).toEqual([]);
+    expect(mpi.statuses.psi).toBe("not_visible");
   });
 
   it("does not block zone completion on a field from the other half", () => {

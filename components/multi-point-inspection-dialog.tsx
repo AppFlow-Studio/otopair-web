@@ -1027,12 +1027,9 @@ function MultiPointInspectionDialogBody({
     [],
   );
 
-  // Mirror a corner onto its same-axle sibling (FL↔FR, RL↔RR). Only identity
-  // fields travel, and which ones depends on the phase — sidewall data during
-  // the pre-check, pad brand and rotor presence during the MPI half. Every
-  // measured value stays put: mirroring tread or pressure is how a staggered
-  // setup gets recorded as the same psi on both axles. No-op if the source
-  // corner is still blank (guards against wiping the sibling with empties).
+  // Copy the active phase's corner values to the same-axle sibling (FL↔FR,
+  // RL↔RR). The destination reopens so the mechanic can adjust differences.
+  // No-op if the source is still blank.
   const copyCornerToOpposite = useCallback(
     (sourceId: ZoneId) => {
       const opposite = OPPOSITE_CORNER[sourceId as CornerZoneId];
@@ -2409,12 +2406,10 @@ function MultiPointInspectionDialogBody({
                               {sourceLabel} complete
                             </p>
                             <p className="mt-0.5 text-muted-foreground">
-                              Copy these readings to {oppositeLabel}, then adjust
-                              the few that differ.
+                              Copy all {phase === "pre" ? "pre-check" : "wheel-off"} readings and specs to {oppositeLabel}, then review and adjust what differs.
                               {siblingHasInput ? (
                                 <span className="mt-0.5 block text-amber-700">
-                                  This replaces the readings already entered
-                                  there.
+                                  This replaces the {phase === "pre" ? "pre-check" : "wheel-off"} answers already entered there.
                                 </span>
                               ) : null}
                             </p>

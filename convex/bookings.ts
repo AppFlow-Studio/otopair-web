@@ -6737,7 +6737,7 @@ async function validateTieredInspectionInput({
     }
   }
   for (const [zoneId, zoneState] of Object.entries(state.zones)) {
-    if (!zoneState?.done) continue;
+    if (!isZoneDoneForPhase(zoneState, phase)) continue;
     const result = validateZoneForCompletion(state, zoneId as keyof typeof INSPECTION_ZONES_BY_ID, context);
     if (!result.valid) {
       throw new Error(`${INSPECTION_ZONES_BY_ID[zoneId as keyof typeof INSPECTION_ZONES_BY_ID].label}: ${result.error}`);

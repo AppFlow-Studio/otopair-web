@@ -13732,6 +13732,26 @@ export const createByShop = mutation({
       preferredMechanicId: holdConsume.pinnedMechanicId ?? args.mechanicId,
       excludeSessionId: holdConsume.excludeSessionId,
       allowAfterClose: args.allowOutsideShopHours === true,
+      // Pass the real override through, not just the after-close half.
+      //
+      // `assertWindowInsideShopHours` already has a full bypass —
+      // `if (allowOutsideShopHours) return ...` skips every check, including
+      // the start-time one. Collapsing the flag onto `allowAfterClose` here
+      // meant only the END check could ever be relaxed, so the bypass was
+      // unreachable from this mutation.
+      //
+      // The walk-in page has been sending `allowOutsideShopHours: true` all
+      // along and getting half of what it asked for: a walk-in logged after
+      // closing failed on "The requested start time is outside the shop's
+      // operating hours", which is exactly when walk-ins happen — the car
+      // that rolls in at 6:45 when the shop shuts at 6. Its workaround was to
+      // prefill the time field with the shop's OPENING time so the default
+      // submit wouldn't error, which made the booking a small lie about when
+      // the car actually arrived.
+      //
+      // Safe because it is opt-in per call: the customer-facing booking path
+      // never passes this, so a driver still can't book 3am.
+      allowOutsideShopHours: args.allowOutsideShopHours === true,
     });
 
     const status = args.status ?? "pending_shop_acceptance";
@@ -18796,8 +18816,19 @@ export const getBookingByIdForCustomer = query({
         }
       : null;
 
+    // Stripe hold lifecycle. `.order("desc").first()` rather than `.unique()`:
+    // a reauth can leave a second row behind, and `.unique()` would throw out
+    // of a QUERY — blanking the whole Booking Details sheet, which is a worse
+    // failure than the one being fixed here.
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_booking_id", (q: any) => q.eq("booking_id", booking._id))
+      .order("desc")
+      .first();
+
     return {
       id: booking._id,
+      userId: booking.user_id,
       status: booking.status,
       scheduledDate: booking.scheduled_date,
       scheduledTime: booking.scheduled_time,
@@ -18818,6 +18849,39 @@ export const getBookingByIdForCustomer = query({
       totalCost: booking.total_cost,
       statusHistory,
       lateMonitor,
+
+      // ── Payment ────────────────────────────────────────────────────────
+      // Read by the Payment section of the mobile BookingDetailsSheet, and
+      // never returned — so that section fell through every branch to the
+      // "Pending confirmation" placeholder and stayed there. Bug #336.
+      mechanicSetPriceCents: booking.mechanic_set_price_cents ?? null,
+      /**
+       * The agreed price, or null while nothing is agreed.
+       * `estimate_approved_at_ms` is stamped on all three agreed paths — the
+       * customer's explicit approval, the reauth approval, and an in-range
+       * auto-approval — so it is the one honest "this number is settled" signal.
+       */
+      approvedTotalCents:
+        booking.estimate_approved_at_ms != null
+          ? (booking.running_approved_ceiling_cents ??
+             booking.mechanic_set_price_cents ??
+             null)
+          : null,
+      laborCost: booking.labor_cost ?? null,
+      partsCost: booking.parts_cost ?? null,
+      shopState: (shop as any)?.state ?? null,
+      shopZip: (shop as any)?.zip ?? null,
+      holdAmountCents: payment?.hold_amount_cents ?? null,
+      finalCaptureAmountCents:
+        booking.final_capture_amount_cents ??
+        payment?.captured_amount_cents ??
+        null,
+      finalPartsUsedAtCapture: booking.final_parts_used_at_capture ?? null,
+      // Cast: mobile's schema declares `payments.captured_at_ms`, this repo's
+      // copy does not yet. The field exists on the live deployment (mobile's
+      // schema is the superset); the cast keeps this file compiling without
+      // dragging an unrelated schema change into a bug fix.
+      capturedAtMs: (payment as any)?.captured_at_ms ?? null,
     };
   },
 });

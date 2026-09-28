@@ -1511,6 +1511,19 @@ export const getReauthBreakdownForBooking = query({
           justification_text: v.optional(v.string()),
         }),
       ),
+      /**
+       * The mechanic's scope-justification photos, resolved to signed URLs.
+       *
+       * They already rendered on the customer's approve/decline screen, but
+       * never here — and here is the only screen an IN-RANGE change is ever
+       * shown on (it auto-approves, so there is no decision to make and the
+       * customer meets the change as a hold to confirm). Bug #326.
+       *
+       * `[]` on the quote fallback — an original quote has no mechanic scope.
+       */
+      scopePhotos: v.array(
+        v.object({ storage_id: v.id("_storage"), url: v.string() }),
+      ),
     }),
   ),
   handler: async (ctx, args) => {
@@ -1540,6 +1553,20 @@ export const getReauthBreakdownForBooking = query({
     );
 
     if (eff) {
+      // Same resolution as getOpenApprovalForBooking: a storage id that no
+      // longer resolves is dropped rather than rendering a broken tile.
+      const scopePhotos = (
+        await Promise.all(
+          (((eff as any).scope_photo_ids ?? []) as Id<"_storage">[]).map(
+            async (storage_id) => {
+              const url = await ctx.storage.getUrl(storage_id);
+              return url ? { storage_id, url } : null;
+            },
+          ),
+        )
+      ).filter(
+        (p): p is { storage_id: Id<"_storage">; url: string } => p !== null,
+      );
       const parts = ((eff.parts_snapshot ?? []) as any[])
         .filter((p) => !p?.not_used && p?.supplied_by !== "customer")
         .map((p) => {
@@ -1568,6 +1595,7 @@ export const getReauthBreakdownForBooking = query({
         laborHours: (eff.labor_hours ?? null) as number | null,
         notes: (eff.notes ?? null) as string | null,
         parts,
+        scopePhotos,
       };
     }
 
@@ -1609,6 +1637,7 @@ export const getReauthBreakdownForBooking = query({
       laborHours: null,
       notes: null,
       parts,
+      scopePhotos: [],
     };
   },
 });

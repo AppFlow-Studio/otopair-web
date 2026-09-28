@@ -7,15 +7,18 @@
  *
  * Auth boundaries:
  *   - fileDispute / getDisputeForBooking: customer must own the booking.
- *   - listOpenDisputes / resolveDispute: ops-only (any authenticated user
- *     today; tighten with a role gate when the ops surface lands).
+ *   - listOpenDisputes / resolveDispute: ops-only, gated on a director
+ *     session. resolveDispute additionally needs the `money.write`
+ *     capability, so `support` and `readonly` can triage but not decide.
  */
 
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { Id } from "./_generated/dataModel";
+import { requireDirector, logAudit } from "./directorGate";
 
 const DISPUTE_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const MAX_PHOTOS = 4;
 
 const ALLOWED_REASONS = new Set([
   "wrong_part",
@@ -51,6 +54,7 @@ export const fileDispute = mutation({
     reason: v.string(),
     disputedPartKeys: v.optional(v.array(v.string())),
     notes: v.optional(v.string()),
+    photoIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -100,6 +104,12 @@ export const fileDispute = mutation({
       reason: args.reason,
       disputed_part_keys: args.disputedPartKeys,
       notes: args.notes,
+      // Capped server-side too — the client limit is a convenience, not a
+      // guarantee.
+      photo_ids:
+        args.photoIds && args.photoIds.length > 0
+          ? args.photoIds.slice(0, MAX_PHOTOS)
+          : undefined,
       status: "open",
       filed_at_ms: now,
     });
@@ -128,10 +138,11 @@ export const getDisputeForBooking = query({
 });
 
 export const listOpenDisputes = query({
-  args: {},
-  handler: async (ctx) => {
-    const user = await getCurrentUserOrNull(ctx);
-    if (!user) return [];
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    // Was: any authenticated user. That put every customer's dispute — reason,
+    // free-text notes, booking — behind nothing but being signed in.
+    await requireDirector(ctx, args.token);
     const open = await ctx.db
       .query("booking_disputes")
       .withIndex("by_status", (q: any) => q.eq("status", "open"))
@@ -148,6 +159,7 @@ export const listOpenDisputes = query({
 
 export const resolveDispute = mutation({
   args: {
+    token: v.string(),
     disputeId: v.id("booking_disputes"),
     resolution: v.union(
       v.literal("no_refund"),
@@ -158,8 +170,13 @@ export const resolveDispute = mutation({
     resolutionNotes: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    const user = await getCurrentUserOrNull(ctx);
-    if (!user) throw new Error("Your session has expired. Please sign in again.");
+    // This decides whether a customer gets their money back. It was reachable
+    // by ANY signed-in user with a dispute id — the file header flagged it as a
+    // known TODO ("tighten with a role gate when the ops surface lands"), and
+    // it is harmless only for as long as resolving moves no money. The moment
+    // a Stripe refund is wired to this row that becomes "any user can refund
+    // themselves", so the gate goes in first, not alongside. #374.
+    const actor = await requireDirector(ctx, args.token, "money.write");
 
     const dispute: any = await ctx.db.get(args.disputeId);
     if (!dispute) throw new Error("Dispute not found.");
@@ -186,7 +203,14 @@ export const resolveDispute = mutation({
       resolution_refund_cents: refund,
       resolution_notes: args.resolutionNotes,
       resolved_at_ms: Date.now(),
-      resolved_by_user_id: user._id,
+      resolved_by_director_id: actor.userId,
+    });
+    // Money decisions are audited like every other portal write.
+    await logAudit(ctx, actor, {
+      entity_type: "booking_dispute",
+      entity_id: String(args.disputeId),
+      action: "resolve",
+      detail: `${args.resolution} · ${refund} cents`,
     });
     return { ok: true, status };
   },

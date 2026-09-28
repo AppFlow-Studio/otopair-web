@@ -41,6 +41,7 @@ import NotificationBell from "@/components/notification-bell";
 import ActiveJobStrip from "@/components/active-job-strip";
 import MechanicPickupAlert from "@/components/mechanic/pickup-alert";
 import { PortalAuthBoundary } from "@/components/portal/portal-auth-boundary";
+import { shopTimezoneAbbreviation, shopTodayISO } from "@/lib/shopTimezone";
 
 const ownerManagerLinks = [
   { href: "/schedule", label: "Schedule", icon: Calendar },
@@ -341,6 +342,14 @@ function AuthenticatedPortalLayout({
       }
     | null
     | undefined;
+  const shopContext = useQuery(api.bookings.getMyShopJobContext) as
+    | { shopTimezone?: string }
+    | null
+    | undefined;
+  const shopTimezone = shopContext?.shopTimezone;
+  const timezoneLabel = shopTimezone
+    ? shopTimezoneAbbreviation(shopTodayISO(shopTimezone), "12:00", shopTimezone)
+    : null;
   const unconfirmedBookingCount = useQuery(api.schedule.getUnconfirmedBookingCount) ?? 0;
   const notificationUnreadCount =
     useQuery(api.mechanicNotifications.getFeed)?.unreadCount ?? 0;
@@ -839,6 +848,9 @@ function AuthenticatedPortalLayout({
             </button>
             <Image src="/logo.png" alt="Otopair" width={28} height={28} />
             <span className="text-base font-semibold text-gray-900">Otopair</span>
+            {timezoneLabel ? (
+              <span className="hidden text-xs text-gray-500 sm:inline">Times: {timezoneLabel}</span>
+            ) : null}
             {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
               <ActiveJobStrip />
             )}
@@ -918,6 +930,9 @@ function AuthenticatedPortalLayout({
               {!isOnboarding && (isOwnerManager || isFrontDesk || isMechanic) && (
                 <>
                   <ActiveJobStrip />
+                  {timezoneLabel ? (
+                    <span className="text-xs text-gray-500">All appointment times: {timezoneLabel}</span>
+                  ) : null}
                   <div className="ml-auto">
                     <NotificationBell />
                   </div>

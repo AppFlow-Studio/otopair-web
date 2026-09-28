@@ -193,6 +193,7 @@ export default function PreviousBookingsPage() {
             {segment === "bookings" ? (
               <BookingsTable
                 bookings={bookings}
+                shopTimezone={context.shopTimezone}
                 selectedJobId={selectedJobId}
                 onSelect={(id) =>
                   setSelectedJobId((prev) => (prev === id ? null : id))
@@ -263,6 +264,7 @@ export default function PreviousBookingsPage() {
 
 function BookingsTable({
   bookings,
+  shopTimezone,
   selectedJobId,
   onSelect,
 }: {
@@ -279,6 +281,7 @@ function BookingsTable({
         totalCost?: number;
       }[]
     | undefined;
+  shopTimezone?: string;
   selectedJobId: Id<"bookings"> | null;
   onSelect: (id: Id<"bookings">) => void;
 }) {
@@ -335,7 +338,7 @@ function BookingsTable({
                 </td>
                 <td className="px-3 py-4 text-muted-foreground">
                   {job.scheduledDate
-                    ? formatJobDate(job.scheduledDate, job.scheduledTime ?? "")
+                    ? formatJobDate(job.scheduledDate, job.scheduledTime ?? "", shopTimezone)
                     : "—"}
                 </td>
                 <td className="px-3 py-4 text-right pr-5 font-medium text-foreground">

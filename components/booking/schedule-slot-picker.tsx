@@ -18,6 +18,7 @@ import {
 } from "@/components/drawer-panel-styles";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { isFutureScheduleSlot } from "@/lib/follow-up-slot-validation";
+import { shopTodayCalendarDate } from "@/lib/shopTimezone";
 import DatePicker from "@/components/ui/date-picker";
 
 function getDayRange(d: Date) {
@@ -83,6 +84,7 @@ export default function ScheduleSlotPicker({
   const dateRange = useMemo(() => getDayRange(currentDate), [currentDate]);
 
   const context = useQuery(api.schedule.getScheduleContext, open ? {} : "skip");
+  const shopContext = useQuery(api.bookings.getMyShopJobContext, open ? {} : "skip");
   const bookings = useQuery(
     api.schedule.getBookingsForRange,
     open ? dateRange : "skip",
@@ -227,7 +229,7 @@ export default function ScheduleSlotPicker({
             </button>
             <button
               type="button"
-              onClick={() => setCurrentDate(new Date())}
+              onClick={() => setCurrentDate(shopTodayCalendarDate(shopContext?.shopTimezone))}
               className="rounded-md border border-border px-3 py-1.5 text-xs font-medium transition-colors hover:bg-muted"
             >
               Today

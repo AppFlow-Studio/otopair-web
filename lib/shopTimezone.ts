@@ -1,6 +1,101 @@
 // Maps 2-letter US state/territory codes to their primary IANA timezone.
 // For states that span multiple zones, the most populous zone is used as the
 // auto-detected default — the shop owner can override in Settings.
+export const DEFAULT_SHOP_TIMEZONE = "America/New_York";
+
+function timezoneParts(timezone: string, date: Date) {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+  return Object.fromEntries(
+    parts.filter((part) => part.type !== "literal").map((part) => [part.type, part.value]),
+  );
+}
+
+function timezoneOffsetMs(timezone: string, date: Date) {
+  const parts = timezoneParts(timezone, date);
+  return Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second),
+  ) - date.getTime();
+}
+
+/** The ISO business date at a shop, independent of the viewer's device clock. */
+export function shopTodayISO(timezone = DEFAULT_SHOP_TIMEZONE, now = new Date()): string {
+  const parts = timezoneParts(timezone, now);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+/** A local calendar Date representing the shop's current business day. */
+export function shopTodayCalendarDate(
+  timezone = DEFAULT_SHOP_TIMEZONE,
+  now = new Date(),
+): Date {
+  const [year, month, day] = shopTodayISO(timezone, now).split("-").map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function shopLocalDateTime(date: string, time: string, timezone: string) {
+  const [year, month, day] = date.split("-").map(Number);
+  const [hour, minute] = time.split(":").map(Number);
+  const utcGuess = Date.UTC(year, month - 1, day, hour, minute);
+  const initialOffset = timezoneOffsetMs(timezone, new Date(utcGuess));
+  const adjusted = utcGuess - initialOffset;
+  return new Date(adjusted - timezoneOffsetMs(timezone, new Date(adjusted)) + initialOffset);
+}
+
+/** Start and end instants for the shop's current business day. */
+export function shopTodayBounds(
+  timezone = DEFAULT_SHOP_TIMEZONE,
+  now = new Date(),
+): { start: number; end: number } {
+  const today = shopTodayISO(timezone, now);
+  const [year, month, day] = today.split("-").map(Number);
+  const tomorrow = new Date(Date.UTC(year, month - 1, day + 1)).toISOString().slice(0, 10);
+  return {
+    start: shopLocalDateTime(today, "00:00", timezone).getTime(),
+    end: shopLocalDateTime(tomorrow, "00:00", timezone).getTime(),
+  };
+}
+
+/** Short, DST-aware label such as "EDT" or "PST" for a shop-local appointment. */
+export function shopTimezoneAbbreviation(
+  date: string,
+  time: string,
+  timezone = DEFAULT_SHOP_TIMEZONE,
+): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    timeZoneName: "short",
+  }).formatToParts(shopLocalDateTime(date, time, timezone));
+  return parts.find((part) => part.type === "timeZoneName")?.value ?? "";
+}
+
+/** Formats a stored shop-local HH:MM appointment time with its timezone label. */
+export function formatShopTime(
+  time: string,
+  date: string | undefined,
+  timezone = DEFAULT_SHOP_TIMEZONE,
+): string {
+  const [hours, minutes] = time.split(":").map(Number);
+  if (!Number.isFinite(hours) || !Number.isFinite(minutes)) return time;
+  const hour = hours % 12 || 12;
+  const suffix = hours >= 12 ? "PM" : "AM";
+  const abbreviation = shopTimezoneAbbreviation(date ?? shopTodayISO(timezone), time, timezone);
+  return `${hour}:${String(minutes).padStart(2, "0")} ${suffix}${abbreviation ? ` ${abbreviation}` : ""}`;
+}
+
 export const US_STATE_TIMEZONE: Record<string, string> = {
   AL: "America/Chicago",
   AK: "America/Anchorage",

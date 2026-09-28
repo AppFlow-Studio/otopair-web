@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { jobListTotal } from "@/lib/booking-total";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { shopTodayBounds } from "@/lib/shopTimezone";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { notify, runAction } from "@/lib/feedback";
@@ -167,13 +168,11 @@ export default function BookingsPage() {
     return new Set(customerLateNotificationSent.map((a: any) => String(a.bookingId)));
   }, [customerLateNotificationSent]);
 
-  const today = todayString();
-  // Local-midnight window for the "created today" half of the Today filter.
-  const todayWindow = useMemo(() => {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    return { start, end: start + 86_400_000 };
-  }, []);
+  const today = todayString((context as { shopTimezone?: string } | null | undefined)?.shopTimezone);
+  const todayWindow = useMemo(
+    () => shopTodayBounds((context as { shopTimezone?: string } | null | undefined)?.shopTimezone),
+    [context],
+  );
 
   const filteredJobs = useMemo(() => {
     if (!allJobs) return undefined;
@@ -903,7 +902,7 @@ export default function BookingsPage() {
                                 )}
                               </td>
                               <td className="px-3 py-4 text-muted-foreground whitespace-nowrap">
-                                {formatJobDate(job.scheduledDate, job.scheduledTime)}
+                                {formatJobDate(job.scheduledDate, job.scheduledTime, (context as { shopTimezone?: string } | null | undefined)?.shopTimezone)}
                               </td>
                               <td className="px-3 py-4 text-right pr-5 font-medium text-foreground whitespace-nowrap">
                                 {(() => {

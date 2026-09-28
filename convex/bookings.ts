@@ -651,6 +651,7 @@ export const getByUserIdWithDetails = query({
           vin: booking.vin,
           shopName,
           shopPhone,
+          shopTimezone: shop?.timezone ?? DEFAULT_SHOP_TIMEZONE,
           mechanicName,
           mechanicImageUrl,
           vehicleDisplay,
@@ -10658,6 +10659,7 @@ export const getMyShopJobContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
+      shopTimezone: shop.timezone ?? DEFAULT_SHOP_TIMEZONE,
       userRole: primary.role,
       hours: hours.map((hour: any) => ({
         _id: hour._id,

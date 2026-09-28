@@ -48,6 +48,7 @@ import {
   templateForSystem,
 } from "@/lib/diagnostic-checklist-templates";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatShopTime, shopTodayISO } from "@/lib/shopTimezone";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -126,10 +127,6 @@ function getCancelReasons(status?: string | null) {
 /*  Helpers                                                             */
 /* ------------------------------------------------------------------ */
 
-function todayString() {
-  return new Date().toISOString().slice(0, 10);
-}
-
 function formatDurationMinutes(minutes: number): string {
   const total = Math.round(minutes);
   if (total < 60) return `${total} min`;
@@ -139,24 +136,13 @@ function formatDurationMinutes(minutes: number): string {
   return `${h} hr ${m} min`;
 }
 
-function formatTime(time: string): string {
-  if (!time) return "";
-  const [hours, minutes] = time.split(":").map(Number);
-  const d = new Date();
-  d.setHours(hours, minutes, 0, 0);
-  return d.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
-}
-
 function formatBookingDate(
   scheduledDate: string,
   scheduledTime: string,
+  timezone?: string,
 ): string {
-  const today = todayString();
-  const timeLabel = formatTime(scheduledTime);
+  const today = shopTodayISO(timezone);
+  const timeLabel = formatShopTime(scheduledTime, scheduledDate, timezone);
   if (scheduledDate === today) return `Today, ${timeLabel}`;
   const d = new Date(scheduledDate + "T00:00:00");
   const dateLabel = d.toLocaleDateString("en-US", {
@@ -465,6 +451,10 @@ function OutOfScopeCard({ job }: { job: JobDetailData }) {
 const RECOMMENDATION_RESPONSE_WINDOW_MS = 10 * 60 * 1000;
 
 function RecommendedServiceCard({ job }: { job: JobDetailData }) {
+  const shopContext = useQuery(api.bookings.getMyShopJobContext) as
+    | { shopTimezone?: string }
+    | null
+    | undefined;
   const decide = useMutation(api.bookings.customerDecideRecommendation);
   const [busy, setBusy] = useState<"confirmed" | "declined" | null>(null);
   const state = job.recommendationState ?? "none";
@@ -551,6 +541,7 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
           Proposed: {formatBookingDate(
             job.recommendedScheduledDate,
             job.recommendedScheduledTime,
+            shopContext?.shopTimezone,
           )}
         </p>
       ) : (
@@ -853,6 +844,11 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     ref,
   ) {
     const entityLabel = useEntityLabel();
+    const shopContext = useQuery(api.bookings.getMyShopJobContext) as
+      | { shopTimezone?: string }
+      | null
+      | undefined;
+    const shopTimezone = shopContext?.shopTimezone;
     const [assigningMechanicId, setAssigningMechanicId] = useState("");
     const [showMechanicPicker, setShowMechanicPicker] = useState(false);
     const [isActioning, setIsActioning] = useState(false);
@@ -1340,7 +1336,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
             </p>
             <p className="mt-0.5 text-muted-foreground">
               {job.vehicle ? `${job.vehicle} · ` : ""}
-              {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+              {formatBookingDate(job.scheduledDate, job.scheduledTime, shopTimezone)}
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
               Reason: <span className="text-foreground">{reason}</span>
@@ -2634,7 +2630,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   customerEmail={job.customerEmail}
                   scheduleLabel={
                     <>
-                      {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+                      {formatBookingDate(job.scheduledDate, job.scheduledTime, shopTimezone)}
                       {job.estimatedLaborMinutes != null &&
                       job.estimatedLaborMinutes > 0 ? (
                         <span className="text-muted-foreground">
@@ -3042,6 +3038,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
+                  shopTimezone,
                 )}`
               : ""
           }
@@ -3072,6 +3069,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
+                  shopTimezone,
                 )}`
               : ""
           }
@@ -3156,6 +3154,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
+                  shopTimezone,
                 )}`
               : ""
           }
@@ -3224,6 +3223,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
               ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
+                  shopTimezone,
                 )}`
               : ""
           }

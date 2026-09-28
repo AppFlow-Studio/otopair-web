@@ -42,6 +42,7 @@ export default function MyBookingsPage() {
   const [rescheduleError, setRescheduleError] = useState("");
   const [isRescheduling, setIsRescheduling] = useState(false);
   const jobDetailRef = useRef<JobDetailPanelHandle>(null);
+  const initialShopDateSet = useRef(false);
 
   const context = useQuery(api.bookings.getMyShopJobContext);
   const allJobs = useQuery(api.bookings.listForMyMechanic, {});
@@ -60,7 +61,15 @@ export default function MyBookingsPage() {
   const proposeReschedule = useMutation(api.bookings.proposeReschedule);
 
   const mechanics = useMemo(() => context?.mechanics ?? [], [context?.mechanics]);
-  const today = todayString();
+  const today = todayString((context as { shopTimezone?: string } | null | undefined)?.shopTimezone);
+
+  useEffect(() => {
+    if (!context?.shopTimezone || initialShopDateSet.current) return;
+    setDateFrom(today);
+    setDateTo(today);
+    initialShopDateSet.current = true;
+  }, [context?.shopTimezone, today]);
+
   const isDefaultDateRange =
     dateFrom === today && dateTo === today && !timeFrom && !timeTo;
 
@@ -327,7 +336,7 @@ export default function MyBookingsPage() {
                           </div>
                         </td>
                         <td className="px-3 py-4 text-muted-foreground">
-                          {formatJobDate(job.scheduledDate, job.scheduledTime)}
+                          {formatJobDate(job.scheduledDate, job.scheduledTime, (context as { shopTimezone?: string } | null | undefined)?.shopTimezone)}
                         </td>
                         <td className="px-3 py-4 text-right pr-5 font-medium text-foreground">
                           {(() => {

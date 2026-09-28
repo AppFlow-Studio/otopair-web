@@ -58,6 +58,7 @@ import {
 import {
   enqueueNotificationOutbox,
   buildCustomerPushPayload,
+  resolveApprovalAsks,
 } from "./lib/notificationOutbox";
 import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 
@@ -1061,6 +1062,13 @@ export const applyApprovalDecision = mutation({
         approvedPatch.labor_cost = (open.labor_cents ?? 0) / 100;
       }
       await ctx.db.patch(args.bookingId, approvedPatch);
+      // The ask has been answered — retire it so the bell stops offering an
+      // action that no longer exists. #343.
+      await resolveApprovalAsks(ctx, {
+        bookingId: args.bookingId,
+        reason: "user_action",
+        now,
+      });
       // The customer just said yes to the (pre/mid-job) estimate → surface any
       // off-catalog lines it carried on their booking card. They were staged
       // `pending_confirmation` at add-time so an unapproved line never showed on
@@ -1135,6 +1143,12 @@ export const applyApprovalDecision = mutation({
       estimate_decided_by_user_id: user._id,
       sla_expires_at_ms: undefined,
       updated_at: now,
+    });
+    // Declining answers the ask just as much as approving does. #343.
+    await resolveApprovalAsks(ctx, {
+      bookingId: args.bookingId,
+      reason: "user_action",
+      now,
     });
     if (cycle === "post_job" && ctx.scheduler?.runAfter) {
       // Capture at the prior approved ceiling. finalizeAndChargeForBooking
@@ -1284,6 +1298,12 @@ export const _recordApprovalApproved = internalMutation({
       total_cost: (open.mechanic_set_price_cents ?? 0) / 100,
       updated_at: now,
     };
+    // Approved via the reauth path — same ask, same retirement. #343.
+    await resolveApprovalAsks(ctx, {
+      bookingId: args.bookingId,
+      reason: "user_action",
+      now,
+    });
     // Shop-set (fixed OR range): the approval row's parts/labor are the on-top
     // delta only — don't erase the locked base breakdown. (Mirrors
     // applyApprovalDecision.)
@@ -1514,10 +1534,12 @@ export const getReauthBreakdownForBooking = query({
       /**
        * The mechanic's scope-justification photos, resolved to signed URLs.
        *
-       * They already rendered on the customer's approve/decline screen, but
-       * never here — and here is the only screen an IN-RANGE change is ever
-       * shown on (it auto-approves, so there is no decision to make and the
-       * customer meets the change as a hold to confirm). Bug #326.
+       * These already rendered on the approve/decline screen. They never
+       * reached HERE — and here is the only screen an IN-RANGE change is ever
+       * shown on: it auto-approves, so there is no open row and no decision to
+       * make, and the customer meets the change for the first time as a hold to
+       * confirm. The photos were being filed against the one path that skips
+       * the screen that renders them. Bug #326.
        *
        * `[]` on the quote fallback — an original quote has no mechanic scope.
        */
@@ -2108,6 +2130,13 @@ export const withdrawPendingApproval = mutation({
       mechanic_set_price_cents: undefined,
       updated_at: now,
     });
+    // The shop pulled the estimate back; the customer's card would open onto
+    // nothing. #343.
+    await resolveApprovalAsks(ctx, {
+      bookingId: args.bookingId,
+      reason: "superseded",
+      now,
+    });
 
     await enqueueCustomerApprovalPush(ctx, {
       booking,
@@ -2146,6 +2175,12 @@ export const _markApprovalExpired = internalMutation({
       payment_approval_state: "sla_expired",
       sla_expires_at_ms: undefined,
       updated_at: now,
+    });
+    // Window closed — the card can no longer be acted on. #343.
+    await resolveApprovalAsks(ctx, {
+      bookingId: args.bookingId,
+      reason: "expired",
+      now,
     });
   },
 });

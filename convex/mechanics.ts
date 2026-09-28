@@ -68,6 +68,14 @@ async function getMechanicForOwner(ctx: any, mechanicId: any) {
   return mechanic;
 }
 
+/** Local copy of shops.ts's resolver — same convention this file already uses
+ *  for `resolveMechanicPhotoUrl`: small ctx-helpers are duplicated rather than
+ *  exported across modules. */
+async function resolveShopLogoUrl(ctx: any, shop: any): Promise<string | null> {
+  if (!shop?.logo_storage_id) return null;
+  return await ctx.storage.getUrl(shop.logo_storage_id);
+}
+
 async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
   if (!photo) return null;
 
@@ -344,14 +352,36 @@ async function buildMechanicCard(
   const mechanic = await ctx.db.get(mechanicId as any);
   if (!mechanic) return null;
   const shop = await ctx.db.get(mechanic.shop_id);
-  const photoUrl = await resolveMechanicPhotoUrl(ctx, mechanic.photo);
   const mechanicName = `${mechanic.first_name} ${mechanic.last_name}`.trim();
-  const initials = `${mechanic.first_name?.[0] ?? ""}${mechanic.last_name?.[0] ?? ""}`.toUpperCase();
+
+  // The card's TITLE is the shop name when there is a shop, so the avatar has
+  // to be the shop's too. It used to pair the shop name with the mechanic's
+  // photo and initials, which read as a mismatch — "JB" next to "Chelala
+  // Service Center" (Ahmad, 2026-09-24). Shop logo, shop initials; the
+  // mechanic's own photo/initials only when this card is falling back to
+  // naming the mechanic.
+  const showingShop = Boolean(shop?.name);
   const displayName = shop?.name ?? (mechanicName.length > 0 ? mechanicName : "Mechanic");
+
+  const image = showingShop
+    ? await resolveShopLogoUrl(ctx, shop)
+    : await resolveMechanicPhotoUrl(ctx, mechanic.photo);
+
+  // Initials from whatever name is on the card: "Chelala Service Center" → CS,
+  // "James Bond" → JB. Two words max so a long shop name doesn't overflow.
+  const initialsSource = showingShop ? String(shop.name) : mechanicName;
+  const initials = initialsSource
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((word: string) => word[0] ?? "")
+    .join("")
+    .toUpperCase();
+
   return {
     id: mechanic._id as string,
     name: displayName,
-    image: photoUrl,
+    image,
     initials: initials.length > 0 ? initials : "M",
     lastVisit: lastVisitLabel,
     isPreferred,

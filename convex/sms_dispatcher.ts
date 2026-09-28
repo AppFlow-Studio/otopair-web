@@ -220,6 +220,15 @@ export const dispatchPendingSms = internalAction({
         ? template(row.payload)
         : `Otopair update for your booking.`;
 
+      // Held by default. Telnyx went live for walk-in phone verification on
+      // 2026-09-26; these twelve templates had been stubbing since they were
+      // written, and enabling the key would have put all of them on real
+      // customers' phones in the same minute. Opt in deliberately, per
+      // deployment, with SMS_NOTIFICATIONS_ENABLED=true.
+      //
+      // Held rows still run the full path and still record a result, so
+      // nothing queues up waiting to flood the day someone flips it.
+      const notificationsLive = process.env.SMS_NOTIFICATIONS_ENABLED === "true";
       const result: any = await ctx.runAction(
         (internal as any).lib.sms_provider.sendSms,
         {
@@ -228,6 +237,7 @@ export const dispatchPendingSms = internalAction({
           bookingId: row.bookingId ?? undefined,
           shopId: row.shopId ?? undefined,
           outboxId: row.outboxId,
+          stubOnly: !notificationsLive,
         },
       );
 

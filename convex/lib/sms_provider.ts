@@ -30,15 +30,41 @@ export const sendSms = internalAction({
     bookingId: v.optional(v.id("bookings")),
     shopId: v.optional(v.id("shops")),
     outboxId: v.optional(v.id("notification_outbox")),
+    /**
+     * Force the stub path even when Telnyx IS configured.
+     *
+     * Configuring Telnyx is one switch for the whole app: the same shim backs
+     * walk-in verification AND the twelve notification templates in
+     * sms_dispatcher, which have been silently stubbing since they were
+     * written. Turning the key on would put all of them on real handsets in
+     * the same minute. This lets one caller go live while the rest keep
+     * behaving exactly as they do today — same logging, same result shape, no
+     * queue building up to flood later.
+     */
+    stubOnly: v.optional(v.boolean()),
   },
   handler: async (_ctx, args) => {
-    const apiKey =
-      process.env.TELNYX_API_KEY ?? process.env.TELNYX_MESSAGING_KEY;
+    const apiKey = args.stubOnly
+      ? undefined
+      : (process.env.TELNYX_API_KEY ?? process.env.TELNYX_MESSAGING_KEY);
     const fromNumber =
       process.env.TELNYX_FROM_NUMBER ?? process.env.TELNYX_NUMBER;
     const profileId = process.env.TELNYX_MESSAGING_PROFILE_ID;
 
     if (!apiKey || (!fromNumber && !profileId)) {
+      if (args.stubOnly) {
+        console.info(
+          "[sms_provider] Held by stubOnly — not sending. Flip SMS_NOTIFICATIONS_ENABLED=true to go live.",
+          { to: args.to, outboxId: args.outboxId },
+        );
+        return {
+          providerMessageId: null as string | null,
+          status: "stubbed" as const,
+          to: args.to,
+          body: args.body,
+          stubbedAt: Date.now(),
+        };
+      }
       console.warn(
         "[sms_provider] Telnyx not configured. Need TELNYX_API_KEY plus either TELNYX_FROM_NUMBER or TELNYX_MESSAGING_PROFILE_ID. Falling back to stub.",
         {

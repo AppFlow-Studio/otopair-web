@@ -18851,15 +18851,19 @@ export const getBookingByIdForCustomer = query({
       lateMonitor,
 
       // ── Payment ────────────────────────────────────────────────────────
-      // Read by the Payment section of the mobile BookingDetailsSheet, and
-      // never returned — so that section fell through every branch to the
-      // "Pending confirmation" placeholder and stayed there. Bug #336.
+      // Every field below is read by the Payment section of BookingDetailsSheet
+      // and none of them were ever returned, so the section fell through every
+      // branch to the "Pending confirmation" placeholder and stayed there
+      // forever. Bug #336.
       mechanicSetPriceCents: booking.mechanic_set_price_cents ?? null,
       /**
        * The agreed price, or null while nothing is agreed.
+       *
        * `estimate_approved_at_ms` is stamped on all three agreed paths — the
        * customer's explicit approval, the reauth approval, and an in-range
-       * auto-approval — so it is the one honest "this number is settled" signal.
+       * auto-approval — so it is the one honest "this number is settled"
+       * signal. The ceiling is the amount that was agreed to; the set price
+       * backs it up for rows written before the ceiling was tracked.
        */
       approvedTotalCents:
         booking.estimate_approved_at_ms != null
@@ -18867,6 +18871,8 @@ export const getBookingByIdForCustomer = query({
              booking.mechanic_set_price_cents ??
              null)
           : null,
+      // Dollars, matching the rest of the booking row. The client recomputes
+      // the disclosed band from these with the same helper Review & Pay uses.
       laborCost: booking.labor_cost ?? null,
       partsCost: booking.parts_cost ?? null,
       shopState: (shop as any)?.state ?? null,
@@ -18877,11 +18883,7 @@ export const getBookingByIdForCustomer = query({
         payment?.captured_amount_cents ??
         null,
       finalPartsUsedAtCapture: booking.final_parts_used_at_capture ?? null,
-      // Cast: mobile's schema declares `payments.captured_at_ms`, this repo's
-      // copy does not yet. The field exists on the live deployment (mobile's
-      // schema is the superset); the cast keeps this file compiling without
-      // dragging an unrelated schema change into a bug fix.
-      capturedAtMs: (payment as any)?.captured_at_ms ?? null,
+      capturedAtMs: payment?.captured_at_ms ?? null,
     };
   },
 });

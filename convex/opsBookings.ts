@@ -563,7 +563,11 @@ export const auditTimeline = query({
         events.push({
           at: d.resolved_at_ms,
           kind: "dispute_resolved",
-          actor: await resolveActor(d.resolved_by_user_id),
+          // Prefer the director id: `resolved_by_user_id` on legacy rows is
+          // the customer, not ops (resolveDispute was ungated until #374).
+          actor: await resolveActor(
+            (d as any).resolved_by_director_id ?? d.resolved_by_user_id,
+          ),
           title: `dispute ${d.status.replace(/_/g, " ")}`,
           detail:
             [

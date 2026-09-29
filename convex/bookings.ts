@@ -709,13 +709,13 @@ export const getByUserIdWithDetails = query({
 
 /**
  * MUTATION: deleteBooking
- * Hard-deletes a booking row. Wired to the testing-only trash button on the
- * My Bookings cards so dev/staging users can clear out test data without
- * having to wait for completion or cascade through the proper lifecycle.
- * NOT intended for production user-facing flows — those should soft-delete
- * via the cancellation path.
+ * Hard-deletes a booking row, for clearing out dev/staging test data without
+ * cascading through the proper lifecycle. Internal: the testing-only trash
+ * button that used to call it is gone, and as a public mutation it let anyone
+ * delete any booking by id (bug #436 audit). Run it with `npx convex run`.
+ * Production flows soft-delete via the cancellation path.
  */
-export const deleteBooking = mutation({
+export const deleteBooking = internalMutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
     // Idempotent — if the row was already deleted (e.g. duplicate fire from
@@ -15485,8 +15485,10 @@ export const proposeReschedule = mutation({
 export const customerApproveReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -15620,8 +15622,11 @@ export const customerApproveReschedule = mutation({
 export const shopCancelReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+
+    await requireShopStaff(ctx, user._id, booking.shop_id);
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -15760,8 +15765,10 @@ export const shopCancelReschedule = mutation({
 export const customerDeclineReschedule = mutation({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (booking.user_id !== user._id) throw new Error("Not your booking.");
 
     if (booking.status !== "pending_customer_acceptance") {
       throw new Error("Booking is not pending customer acceptance");
@@ -17937,6 +17944,10 @@ export const createTireQuoteRequest = mutation({
     service_ids: v.optional(v.array(v.id("services"))),
   },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (args.user_id !== user._id) {
+      throw new Error("Cannot create a quote request for another user.");
+    }
     if (
       !areTireReplacementPositionsValid(
         args.tire_specs.quantity,
@@ -18413,6 +18424,10 @@ export const createRotorQuoteRequest = mutation({
     service_ids: v.optional(v.array(v.id("services"))),
   },
   handler: async (ctx, args) => {
+    const user = await getCurrentUser(ctx);
+    if (args.user_id !== user._id) {
+      throw new Error("Cannot create a quote request for another user.");
+    }
     const normalizedVin = args.vin.toUpperCase().trim();
     const now = Date.now();
 

@@ -493,6 +493,7 @@ import type * as undoMechanicVerification from "../undoMechanicVerification.js";
 import type * as urgency from "../urgency.js";
 import type * as userAddresses from "../userAddresses.js";
 import type * as users from "../users.js";
+import type * as vdbProxy from "../vdbProxy.js";
 import type * as vehicleDocuments from "../vehicleDocuments.js";
 import type * as vehicleDocuments_node from "../vehicleDocuments_node.js";
 import type * as vehicleEnrichment_adversarialVerification from "../vehicleEnrichment/adversarialVerification.js";
@@ -1151,6 +1152,7 @@ declare const fullApi: ApiFromModules<{
   urgency: typeof urgency;
   userAddresses: typeof userAddresses;
   users: typeof users;
+  vdbProxy: typeof vdbProxy;
   vehicleDocuments: typeof vehicleDocuments;
   vehicleDocuments_node: typeof vehicleDocuments_node;
   "vehicleEnrichment/adversarialVerification": typeof vehicleEnrichment_adversarialVerification;

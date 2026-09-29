@@ -1800,6 +1800,24 @@ export default function SchedulePage() {
             <span className="hidden sm:inline">Create booking</span>
           </button>
 
+          {/* New walk-in — the counter path, sat next to the calendar path.
+              Both create the same booking (same mutation, same
+              `source: "mechanic_walk_in"`); the difference is that the walk-in
+              page also mints the customer's tracker link. It lived only on
+              /bookings, which meant a front-desk person working from the
+              schedule had no way to reach it without leaving the page. Same
+              button as there, deliberately — two different-looking buttons for
+              one destination is its own confusion. */}
+          <button
+            type="button"
+            onClick={() => router.push("/schedule/walkin/new")}
+            className="inline-flex shrink-0 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-semibold text-emerald-700 transition-colors hover:bg-emerald-100"
+          >
+            <User className="w-4 h-4" />
+            <span className="sm:hidden">Walk-in</span>
+            <span className="hidden sm:inline">New walk-in</span>
+          </button>
+
           {/* Mechanic filter — inline on desktop; folded into the controls sheet below xl */}
           {context.mechanics.length > 0 && (
             <Select

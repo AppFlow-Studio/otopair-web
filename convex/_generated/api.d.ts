@@ -91,6 +91,7 @@ import type * as devOnly_importPorscheBundle from "../devOnly/importPorscheBundl
 import type * as devOnly_laborValidation from "../devOnly/laborValidation.js";
 import type * as devOnly_laborWebSpread from "../devOnly/laborWebSpread.js";
 import type * as devOnly_makeCoverageAudit from "../devOnly/makeCoverageAudit.js";
+import type * as devOnly_mintWalkinLink from "../devOnly/mintWalkinLink.js";
 import type * as devOnly_oilCoverage from "../devOnly/oilCoverage.js";
 import type * as devOnly_olpProbe from "../devOnly/olpProbe.js";
 import type * as devOnly_partResurrectSweep from "../devOnly/partResurrectSweep.js";
@@ -654,6 +655,7 @@ import type * as vehicles from "../vehicles.js";
 import type * as vinQueueQueries from "../vinQueueQueries.js";
 import type * as walkinVinRepair from "../walkinVinRepair.js";
 import type * as walkin_claims from "../walkin_claims.js";
+import type * as walkin_phone_verify from "../walkin_phone_verify.js";
 import type * as ymmtCatalog from "../ymmtCatalog.js";
 import type * as ymmtPipeline from "../ymmtPipeline.js";
 
@@ -747,6 +749,7 @@ declare const fullApi: ApiFromModules<{
   "devOnly/laborValidation": typeof devOnly_laborValidation;
   "devOnly/laborWebSpread": typeof devOnly_laborWebSpread;
   "devOnly/makeCoverageAudit": typeof devOnly_makeCoverageAudit;
+  "devOnly/mintWalkinLink": typeof devOnly_mintWalkinLink;
   "devOnly/oilCoverage": typeof devOnly_oilCoverage;
   "devOnly/olpProbe": typeof devOnly_olpProbe;
   "devOnly/partResurrectSweep": typeof devOnly_partResurrectSweep;
@@ -1310,6 +1313,7 @@ declare const fullApi: ApiFromModules<{
   vinQueueQueries: typeof vinQueueQueries;
   walkinVinRepair: typeof walkinVinRepair;
   walkin_claims: typeof walkin_claims;
+  walkin_phone_verify: typeof walkin_phone_verify;
   ymmtCatalog: typeof ymmtCatalog;
   ymmtPipeline: typeof ymmtPipeline;
 }>;

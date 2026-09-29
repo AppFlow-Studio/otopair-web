@@ -164,3 +164,63 @@ export async function enqueueNotificationOutbox(
 
   return insertedId;
 }
+
+/**
+ * Categories whose notification is an ASK: it exists only so the customer can
+ * act on it, and it is meaningless once the underlying decision is made.
+ */
+export const APPROVAL_ASK_CATEGORIES = [
+  "booking_pre_job_pending",
+  "booking_mid_job_pending",
+  "booking_post_job_pending",
+] as const;
+
+/**
+ * Close out a booking's outstanding approval asks.
+ *
+ * The outbox already has the right machinery — `resolved_at` is the RESOLVE
+ * axis and the customer feed shows rows where it is null. Nothing on the
+ * approval side ever set it, so an "Update from your mechanic" card outlived
+ * the decision it was asking for: still listed, still carrying its call to
+ * action, and opening onto "No estimate is waiting for your review" because
+ * the open row it points at is gone. Bug #343.
+ *
+ * Deliberately NOT tied to the push. The push has already been delivered and
+ * cannot be recalled; what we control is the in-app feed, which is where the
+ * customer went back to and tapped again.
+ *
+ * `reason` drives copy elsewhere: "user_action" when they decided,
+ * "superseded" when the shop withdrew, "expired" when the SLA ran out.
+ */
+export async function resolveApprovalAsks(
+  ctx: any,
+  args: {
+    bookingId: unknown;
+    reason: "user_action" | "superseded" | "expired";
+    now?: number;
+  },
+): Promise<number> {
+  const now = args.now ?? Date.now();
+  const rows = await ctx.db
+    .query("notification_outbox")
+    .withIndex("by_booking_id", (q: any) => q.eq("booking_id", args.bookingId))
+    .collect();
+  const open = rows.filter(
+    (r: any) =>
+      r.resolved_at == null &&
+      (APPROVAL_ASK_CATEGORIES as readonly string[]).includes(r.category),
+  );
+  for (const r of open) {
+    await ctx.db.patch(r._id, {
+      status: "resolved",
+      // Resolving implies seen: the row is leaving the feed, so leaving it
+      // unread would keep it in the bell's unread COUNT with nothing behind it.
+      read_at: r.read_at ?? now,
+      resolved_at: now,
+      resolved_reason: args.reason,
+      processed_at: r.processed_at ?? now,
+      updated_at: now,
+    });
+  }
+  return open.length;
+}

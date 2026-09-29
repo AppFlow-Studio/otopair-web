@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -69,6 +69,23 @@ export default function CustomerSchedulingAlerts() {
     | undefined;
   const acknowledgeLate = useMutation((api as any).bookings.acknowledgeCustomerLate);
   const markRead = useMutation(api.notifications.markNotificationRead);
+  const resolve = useMutation(api.notifications.resolveNotification);
+
+  // Bug #288. "Got it" used markNotificationRead, which sets read_at and
+  // nothing else — but getMyNotifications filters on `resolved_at == null`, so
+  // the row stayed in the feed and the card never moved. Worse, the mutation
+  // short-circuits once read_at is set, so every tap after the first wasn't
+  // even a write. resolveNotification is the mutation that actually clears it.
+  //
+  // The local dismissal mirrors the mobile banner: hide the card the instant
+  // it's tapped, independent of how fast the server round-trips, so a slow or
+  // failing mutation can never read as a dead button again.
+  const [dismissedIds, setDismissedIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const dismiss = useCallback((id: string) => {
+    setDismissedIds((prev) => new Set(prev).add(id));
+  }, []);
 
   // When the viewer is signed in to the portal as a mechanic, only surface
   // customer-facing scheduling alerts for bookings whose assigned mechanic
@@ -90,16 +107,22 @@ export default function CustomerSchedulingAlerts() {
   const lateRow = useMemo(
     () =>
       notifications?.find(
-        (n) => n.category === CUSTOMER_LATE_CATEGORY && shouldShowForViewer(n),
+        (n) =>
+          n.category === CUSTOMER_LATE_CATEGORY &&
+          shouldShowForViewer(n) &&
+          !dismissedIds.has(String(n._id)),
       ) ?? null,
-    [notifications, isMechanicViewer, viewerMechanicId],
+    [notifications, isMechanicViewer, viewerMechanicId, dismissedIds],
   );
   const resolutionRow = useMemo(
     () =>
       notifications?.find(
-        (n) => n.category === RESOLUTION_CATEGORY && shouldShowForViewer(n),
+        (n) =>
+          n.category === RESOLUTION_CATEGORY &&
+          shouldShowForViewer(n) &&
+          !dismissedIds.has(String(n._id)),
       ) ?? null,
-    [notifications, isMechanicViewer, viewerMechanicId],
+    [notifications, isMechanicViewer, viewerMechanicId, dismissedIds],
   );
 
   if (!lateRow && !resolutionRow) return null;
@@ -140,7 +163,9 @@ export default function CustomerSchedulingAlerts() {
               </button>
               {lateRow.booking_id && (
                 <Link
-                  href={`/my-bookings?highlight=${lateRow.booking_id}&action=reschedule`}
+                  href={`/schedule?action=focus-booking&bookingId=${lateRow.booking_id}${
+                    lateRow.scheduledDate ? `&date=${lateRow.scheduledDate}` : ""
+                  }`}
                   className="rounded-md border border-amber-600 px-3 py-1.5 text-sm font-medium text-amber-800 hover:bg-amber-100"
                 >
                   Reschedule
@@ -181,7 +206,11 @@ export default function CustomerSchedulingAlerts() {
             <div className="mt-2 flex gap-2">
               {resolutionRow.booking_id && (
                 <Link
-                  href={`/my-bookings?highlight=${resolutionRow.booking_id}&action=reschedule`}
+                  href={`/schedule?action=focus-booking&bookingId=${resolutionRow.booking_id}${
+                    resolutionRow.scheduledDate
+                      ? `&date=${resolutionRow.scheduledDate}`
+                      : ""
+                  }`}
                   className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
                 >
                   Reschedule
@@ -189,7 +218,12 @@ export default function CustomerSchedulingAlerts() {
               )}
               <button
                 className="rounded-md border border-blue-600 px-3 py-1.5 text-sm font-medium text-blue-800 hover:bg-blue-100"
-                onClick={() => markRead({ notificationId: resolutionRow._id })}
+                onClick={() => {
+                  dismiss(String(resolutionRow._id));
+                  void resolve({ notificationId: resolutionRow._id }).catch(
+                    () => {},
+                  );
+                }}
               >
                 Got it
               </button>

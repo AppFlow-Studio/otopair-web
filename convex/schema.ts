@@ -45,6 +45,35 @@ import { tierValidator } from "./lib/vehicleTiers";
 export default defineSchema({
   // Short-lived 2FA verification codes. Server-only — the client never reads
   // the code; it submits an entered value to `two_factor.verifyCode`.
+  /**
+   * SMS verification codes for the WALK-IN claim flow.
+   *
+   * Deliberately not `two_factor_codes`: that table is keyed on
+   * `clerkUserId`, and the whole point of walk-in is that the person has no
+   * account yet. The only identity they have is the tracker/claim token in
+   * their link, so that is the key.
+   *
+   * The code is stored HASHED. These rows are readable by anything with db
+   * access, and a plaintext 6-digit code next to the phone number it unlocks
+   * is a credential sitting in a table.
+   */
+  walkin_phone_codes: defineTable({
+    /** The claim/tracker token from the link — the unauthenticated identity. */
+    token: v.string(),
+    /** E.164 number the code was sent to, snapshotted so a later change to
+     *  the user row can't silently re-point an outstanding code. */
+    phone: v.string(),
+    code_hash: v.string(),
+    expires_at_ms: v.number(),
+    /** Wrong guesses so far. Burned at MAX_ATTEMPTS. */
+    attempts: v.number(),
+    /** Drives the resend cooldown the screen counts down from. */
+    last_sent_at_ms: v.number(),
+    /** How many codes we've sent for this token — the per-token send cap. */
+    sends: v.number(),
+    consumed_at_ms: v.optional(v.number()),
+  }).index("by_token", ["token"]),
+
   two_factor_codes: defineTable({
     clerkUserId: v.string(),
     method: v.string(), // "email" | "sms"
@@ -2284,6 +2313,10 @@ export default defineSchema({
     // Wave 7.3 (Day 9) — per-user PII-read counter (separate from moat).
     pii_reads_window: v.optional(v.number()),
     pii_reads_window_start: v.optional(v.number()),
+    /** When this user proved the phone on file by entering an SMS code
+     *  (walk-in claim flow). Absent = never verified; verifying is optional
+     *  by design, so absence is not a problem state. */
+    phone_verified_at_ms: v.optional(v.number()),
   })
     .index("by_clerkUserId", ["clerkUserId"])
     .index("by_isPendingDeletion", ["isPendingDeletion"])
@@ -6642,6 +6675,10 @@ export default defineSchema({
     // Optional OEM part numbers the customer is disputing.
     disputed_part_keys: v.optional(v.array(v.string())),
     notes: v.optional(v.string()),
+    /** Photos the customer attached. Part of the v1 scope for #374 — the
+     *  notes placeholder already invited them long before they could be sent.
+     *  Capped at 4 on the client and again server-side. */
+    photo_ids: v.optional(v.array(v.id("_storage"))),
 
     // "open" | "in_review" | "resolved_refund" | "resolved_no_refund"
     // | "withdrawn"
@@ -6649,7 +6686,13 @@ export default defineSchema({
 
     filed_at_ms: v.number(),
     resolved_at_ms: v.optional(v.number()),
+    /** @deprecated Wrong table. A dispute is resolved by OPS, who live in
+     *  `director_users`, not `users`. Kept for rows written before the role
+     *  gate landed — where it recorded the CUSTOMER, since resolveDispute was
+     *  callable by any signed-in user. New rows write
+     *  `resolved_by_director_id`. */
     resolved_by_user_id: v.optional(v.id("users")),
+    resolved_by_director_id: v.optional(v.id("director_users")),
     resolution_notes: v.optional(v.string()),
     // "no_refund" | "partial_refund" | "full_refund"
     resolution: v.optional(v.string()),

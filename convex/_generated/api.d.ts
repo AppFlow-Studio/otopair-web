@@ -188,6 +188,7 @@ import type * as labor_quote_snapshots from "../labor_quote_snapshots.js";
 import type * as landing from "../landing.js";
 import type * as lib_appleMapsGeocode from "../lib/appleMapsGeocode.js";
 import type * as lib_bookingEnrichment from "../lib/bookingEnrichment.js";
+import type * as lib_bookingErrors from "../lib/bookingErrors.js";
 import type * as lib_bookingMoney from "../lib/bookingMoney.js";
 import type * as lib_booking_field_redaction from "../lib/booking_field_redaction.js";
 import type * as lib_brakeScope from "../lib/brakeScope.js";
@@ -849,6 +850,7 @@ declare const fullApi: ApiFromModules<{
   landing: typeof landing;
   "lib/appleMapsGeocode": typeof lib_appleMapsGeocode;
   "lib/bookingEnrichment": typeof lib_bookingEnrichment;
+  "lib/bookingErrors": typeof lib_bookingErrors;
   "lib/bookingMoney": typeof lib_bookingMoney;
   "lib/booking_field_redaction": typeof lib_booking_field_redaction;
   "lib/brakeScope": typeof lib_brakeScope;

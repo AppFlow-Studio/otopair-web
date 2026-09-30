@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { composeVehicleLabel } from "@/components/flagship/oto-flow";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 // Makes that should stay uppercase rather than title-cased ("BMW", not "Bmw").
 const ACRONYM_MAKES = new Set(["BMW", "GMC", "RAM", "MINI"]);
@@ -80,7 +81,7 @@ export async function GET(
     });
   } catch (err) {
     return NextResponse.json(
-      { error: "VIN decode failed", detail: String(err) },
+      { error: "VIN decode failed", detail: formatBookingError(err, "VIN decode failed") },
       { status: 500 }
     );
   }

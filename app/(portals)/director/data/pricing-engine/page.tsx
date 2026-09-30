@@ -14,6 +14,7 @@ import { api } from "@/convex/_generated/api";
 import { usePortalSession, useCan } from "@/app/(portals)/portal-session";
 import { CoSignCeremony } from "@/components/portal/CoSignCeremony";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { errorMessage } from "@/lib/feedback";
 
 const pill = "inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold";
 const fmtDate = (ms: number) => new Date(ms).toLocaleString();
@@ -172,7 +173,7 @@ export default function PricingEnginePage() {
       setGateBusy(false);
     } catch (e) {
       setGateBusy(false);
-      setGateError(e instanceof Error ? e.message : "Verification failed.");
+      setGateError(errorMessage(e, "Verification failed."));
     }
   }
 

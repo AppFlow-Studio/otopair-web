@@ -23,6 +23,7 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH } from '../../Primitives'
 import { CopyableMono, StatusPill, SkeletonBlock, Empty, Linkify, ConfirmPopup, SourceChip, SourceTypeBadge, STREAM_SOURCE, timeAgo, fmtWhenExact } from './helpers'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 const inputStyle: React.CSSProperties = {
   border: '1px solid var(--slate-200)', borderRadius: 6, padding: '6px 8px',
@@ -92,7 +93,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
       patchFlag(field, { saving: false, saved: 'Confirmed as-is', mode: 'idle' })
       setFlagPending(null)
     } catch (e) {
-      patchFlag(field, { saving: false, error: e instanceof Error ? e.message : 'Failed to save' })
+      patchFlag(field, { saving: false, error: errorMessage(e, 'Failed to save') })
       setFlagPending(null)
     }
   }
@@ -108,7 +109,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
       patchFlag(field, { saving: false, saved: `Adjusted → ${v}`, mode: 'idle' })
       setFlagPending(null)
     } catch (e) {
-      patchFlag(field, { saving: false, error: e instanceof Error ? e.message : 'Failed to save' })
+      patchFlag(field, { saving: false, error: errorMessage(e, 'Failed to save') })
       setFlagPending(null)
     }
   }
@@ -154,7 +155,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
       if (!res.ok) { setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false, error: resolveFieldErrorMessage(res.reason) } })); return }
       setPriceForms(s => ({ ...s, [partId]: { price: '', sourceUrl: '', saving: false, saved: true, error: '' } }))
     } catch (e) {
-      setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false, error: e instanceof Error ? e.message : 'Failed to save' } }))
+      setPriceForms(s => ({ ...s, [partId]: { ...st, saving: false, error: errorMessage(e, 'Failed to save') } }))
     }
   }
 
@@ -175,7 +176,7 @@ export function ReviewSidebar({ token, item, onClose, onResolved, goDeepDive }: 
       setPending(null)
       onResolved()
     } catch (e) {
-      setBusy(null); setPending(null); setErr(e instanceof Error ? e.message : 'The action failed. Nothing was changed.')
+      setBusy(null); setPending(null); setErr(errorMessage(e, 'The action failed. Nothing was changed.'))
     }
   }
 

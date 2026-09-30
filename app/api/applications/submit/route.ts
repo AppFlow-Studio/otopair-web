@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
         user_agent: req.headers.get("user-agent") ?? undefined,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = err instanceof Error ? err.message : String(err); // raw-error-ok: matched only, then rethrown
       if (message.includes("DUPLICATE_PENDING_APPLICATION")) {
         return NextResponse.json(
           {

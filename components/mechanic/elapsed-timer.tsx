@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useClockNow, workedMsAt, type JobClock } from "@/lib/use-job-clock";
 
 function formatElapsed(ms: number) {
   const total = Math.max(0, Math.floor(ms / 1000));
@@ -12,49 +12,33 @@ function formatElapsed(ms: number) {
 }
 
 /**
- * Worked time on a job — wall clock since `startedAtMs`, minus any span the
- * clock was stopped for (`blockedMs`, server-derived): clock-stopping blockers
- * like parts waits, plus the time the mechanic spent in the Flag Issue flow
- * (recorded as spans on close — see jobBlockers.clockStoppedSpans).
+ * Worked time on a job — the server's job clock (lib/jobClock) evaluated at
+ * this render's `now`: wall clock since the labor clock started, minus every
+ * span it was stopped for (clock-stopping blockers, recorded Flag Issue time,
+ * and the mechanic's persisted Pause). It ticks only while that number grows.
  *
- * `paused` only stops the re-render loop. It is NOT what excludes stopped time
- * — that's `blockedMs`. Freezing alone used to be the whole mechanism, which
- * meant the number sat still during a pause and then jumped to full wall clock
- * on resume, so the pause never actually reduced anything. The mechanic reads
- * this number and types it into the post-job survey, so it has to be worked
- * time; the server derives the same figure the same way.
+ * There is deliberately no `paused` prop any more (bug #348). Freezing the tick
+ * was once the whole pause mechanism, so the number sat still and then jumped
+ * back to wall clock on resume or remount — the pause never reduced anything.
+ * A pause now lives in the clock itself, so every surface stops together.
+ * `freeze` only holds the display (the Flag Issue flow, until its span is
+ * recorded); it never changes what the clock counts.
  */
 export default function ElapsedTimer({
-  startedAtMs,
-  paused = false,
-  blockedMs = 0,
+  clock,
+  freeze = false,
   className,
 }: {
-  startedAtMs: number | null | undefined;
-  paused?: boolean;
-  /** Milliseconds the work clock was stopped. Server-derived. */
-  blockedMs?: number;
+  clock: JobClock | null | undefined;
+  /** Hold the displayed value without changing the math. Display-only. */
+  freeze?: boolean;
   className?: string;
 }) {
-  const [now, setNow] = useState(() => Date.now());
+  const now = useClockNow(clock, freeze);
 
-  useEffect(() => {
-    if (paused || startedAtMs == null) return;
-    // Resync on (re)start so unpausing lands on the real time immediately rather
-    // than showing a stale `now` — with a freshly grown blockedMs that would
-    // read as a one-second dip until the first tick.
-    setNow(Date.now());
-    const id = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(id);
-  }, [paused, startedAtMs]);
-
-  if (startedAtMs == null) {
+  if (!clock || clock.startedAtMs == null) {
     return <span className={className}>--:--:--</span>;
   }
 
-  return (
-    <span className={className}>
-      {formatElapsed(now - startedAtMs - Math.max(0, blockedMs))}
-    </span>
-  );
+  return <span className={className}>{formatElapsed(workedMsAt(clock, now))}</span>;
 }

@@ -13,6 +13,11 @@ import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "./mechanic/now-working-overlay";
 import OverrunExtendCard from "./mechanic/overrun-extend-card";
+import {
+  clockFromLegacyRow,
+  isJobClockPaused,
+  jobClockPauseSource,
+} from "@/lib/use-job-clock";
 
 function shortBookingCode(id: string) {
   return `BKG-${id.slice(-4).toUpperCase()}`;
@@ -64,16 +69,6 @@ export default function ActiveJobStrip({
       overrunCheckin.status === "awaiting_extension" ||
       overrunCheckin.status === "front_desk_escalated");
 
-  // A clock-stopping blocker pauses the job. The pill lives in the header on
-  // every page (the schedule included), so freezing its timer here is what
-  // keeps "paused on the job" from reading as "still running" everywhere else.
-  const pauseBlockers = useQuery(
-    api.jobBlockers.listForBooking,
-    mechanicBookingId ? { bookingId: mechanicBookingId } : "skip",
-  );
-  const jobPaused = Boolean(pauseBlockers?.clockPaused);
-  const jobBlockedMs = (pauseBlockers?.blockedMinutes ?? 0) * 60_000;
-
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), 3000);
@@ -116,6 +111,19 @@ export default function ActiveJobStrip({
     if (!header.job) return null;
     const job = header.job;
     const bookingId = job.bookingId as Id<"bookings">;
+    // The pill lives in the header on every page (the schedule included), so it
+    // reads the same server clock as the full-screen pane — a Pause pressed
+    // there, or a clock-stopping blocker, stops this timer too (bug #348).
+    const jobClock = clockFromLegacyRow({
+      clock: job.clock ?? null,
+      startedAt: job.startedAtMs,
+      blockedMinutes: job.blockedMinutes ?? 0,
+    });
+    const jobPaused = job.clock
+      ? isJobClockPaused(jobClock)
+      : Boolean(job.clockPaused);
+    const jobPausedLabel =
+      jobClockPauseSource(jobClock) === "blocker" ? "Paused (blocked)" : "Paused";
 
     return (
       <div className="relative">
@@ -143,12 +151,10 @@ export default function ActiveJobStrip({
               jobPaused ? "text-amber-200/90" : "text-emerald-200/80"
             }`}
           >
-            {jobPaused ? "Paused" : "Now working"}
+            {jobPaused ? jobPausedLabel : "Now working"}
           </span>
           <ElapsedTimer
-            startedAtMs={job.startedAtMs}
-            paused={jobPaused}
-            blockedMs={jobBlockedMs}
+            clock={jobClock}
             className={`font-mono text-sm font-semibold tabular-nums ${
               jobPaused ? "text-amber-200" : "text-white"
             }`}
@@ -210,7 +216,7 @@ export default function ActiveJobStrip({
                         jobPaused ? "text-amber-300/90" : "text-emerald-300/80"
                       }`}
                     >
-                      {jobPaused ? "Paused" : "Now working"}
+                      {jobPaused ? jobPausedLabel : "Now working"}
                     </p>
                     <p className="truncate text-sm font-medium text-slate-100">
                       {job.vehicleLabel}
@@ -230,9 +236,7 @@ export default function ActiveJobStrip({
 
               <div className="mt-3 flex items-center justify-between gap-3 rounded-xl bg-white/5 px-3 py-2">
                 <ElapsedTimer
-                  startedAtMs={job.startedAtMs}
-                  paused={jobPaused}
-                  blockedMs={jobBlockedMs}
+                  clock={jobClock}
                   className={`font-mono text-lg font-semibold tabular-nums ${
                     jobPaused ? "text-amber-200" : "text-white"
                   }`}
@@ -281,6 +285,7 @@ export default function ActiveJobStrip({
               serviceSummary: job.serviceSummary,
               startedAt: job.startedAtMs,
               scheduledDate: null,
+              clock: jobClock,
             },
           ]}
           onClose={() => {
@@ -309,9 +314,15 @@ export default function ActiveJobStrip({
     serviceSummary: j.serviceSummary ?? "",
     startedAt: j.startedAt ?? null,
     scheduledDate: j.scheduledDate ?? null,
+    clock: j.clock ?? null,
     blockedMinutes: j.blockedMinutes ?? 0,
     clockPaused: j.clockPaused ?? false,
   }));
+  // A paused job is still in the bay, but the front desk should see at a glance
+  // that its clock is stopped — the pill used to read "active" either way.
+  const pausedCount = ownerJobs.filter((j) =>
+    j.clock ? isJobClockPaused(j.clock) : Boolean(j.clockPaused),
+  ).length;
 
   return (
     <>
@@ -335,6 +346,11 @@ export default function ActiveJobStrip({
         <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[11px] font-bold tabular-nums text-emerald-950">
           {header.count}
         </span>
+        {pausedCount > 0 ? (
+          <span className="inline-flex h-5 items-center rounded-full bg-amber-400/20 px-1.5 text-[10px] font-semibold tabular-nums text-amber-200">
+            {pausedCount} paused
+          </span>
+        ) : null}
         <span className="hidden items-center gap-1 text-[11px] font-medium text-slate-300 sm:inline-flex">
           <span className="mx-0.5 h-3 w-px bg-white/15" />
           View

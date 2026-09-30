@@ -20,6 +20,7 @@ import type { FunctionReturnType } from 'convex/server'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, PageNav, fmtWhen, fmtWhenExact, RunChip, DateRangeFilter, dateInRange } from './helpers'
+import { errorMessage } from '@/lib/feedback'
 
 type UnpricedPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanUnpricedParts>['flags'][number]
 
@@ -183,7 +184,7 @@ export function UnpricedPartDrawer({ token, flag, onClose, goDeepDive }: {
       if (!res.ok) { setBusy(false); setPending(false); setErr(ERROR_MESSAGES[res.reason] ?? 'Failed to save.'); return }
       setBusy(false); setPending(false); setDone(true)
     } catch (e) {
-      setBusy(false); setPending(false); setErr(e instanceof Error ? e.message : 'Failed to save.')
+      setBusy(false); setPending(false); setErr(errorMessage(e, 'Failed to save.'))
     }
   }
 

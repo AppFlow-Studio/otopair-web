@@ -12,6 +12,7 @@
  * /payouts(.*) — no separate route matcher to keep in sync.
  */
 
+import { errorMessage } from "@/lib/feedback";
 import { use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -67,7 +68,7 @@ export default function ShopInvoicePage({
       if (!res.ok) setSyncError(res.reason ?? "Couldn't sync with Stripe.");
       // On success the query re-runs on its own — Convex reactivity.
     } catch (err) {
-      setSyncError(err instanceof Error ? err.message : "Couldn't sync with Stripe.");
+      setSyncError(errorMessage(err, "Couldn't sync with Stripe."));
     } finally {
       setSyncing(false);
     }

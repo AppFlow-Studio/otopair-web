@@ -24,6 +24,7 @@ import {
   PICKUP_RESPONSES,
   templatesForCategory,
 } from "@/components/messages/shared";
+import { errorMessage } from "@/lib/feedback";
 
 const PICKUP_CATEGORIES = new Set(["cancel_or_pickup", "pickup_arrangement"]);
 
@@ -57,7 +58,7 @@ export function ReplyComposer({
     try {
       await fn();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Couldn't send. Try again.");
+      setError(errorMessage(err, "Couldn't send. Try again."));
     } finally {
       setSending(false);
     }

@@ -20,8 +20,9 @@
  *    identical to one being pressed for three different jobs.
  *
  *    The fix is at the point of reading, not the point of storing:
- *    `blockedMinutesForBooking` is exposed so worked time is derivable, and the
- *    overlay's elapsed timer PAUSES on a clock-stopping blocker so what the
+ *    `blockedMinutesForBooking` is exposed so worked time is derivable, and
+ *    every elapsed timer reads the same `clock` (lib/jobClock: blockers +
+ *    flag-issue admin time + the manual Pause) and stops on it, so what the
  *    mechanic sees — and therefore types — is worked time.
  *
  *    Note what is deliberately NOT done: `bookings.actual_duration_minutes` keeps
@@ -34,6 +35,14 @@ import { v } from "convex/values";
 import { query, mutation } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 import { postjobPhotoValidator } from "./lib/vehicle_passports";
+import { throwBookingError } from "./lib/bookingErrors";
+import {
+  buildJobClock,
+  isClockStoppedAt,
+  loadJobClockInput,
+  stoppedMinutesAt,
+  stoppedMsUpTo,
+} from "./lib/jobClock";
 
 const MINUTE_MS = 60_000;
 
@@ -160,141 +169,136 @@ export const KIND_POLICY: Record<
   },
 };
 
-async function getCurrentUser(ctx: any) {
+async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
-  if (!identity) throw new Error("Not authenticated");
-  const user = await ctx.db
+  if (!identity) return null;
+  return await ctx.db
     .query("users")
     .withIndex("by_clerkUserId", (q: any) =>
       q.eq("clerkUserId", identity.subject),
     )
     .unique();
+}
+
+async function getCurrentUser(ctx: any) {
+  const identity = await ctx.auth.getUserIdentity();
+  if (!identity) throw new Error("Not authenticated");
+  const user = await getCurrentUserOrNull(ctx);
   if (!user) throw new Error("User not found");
   return user;
 }
 
-async function requireShopStaffForBooking(ctx: any, bookingId: Id<"bookings">) {
-  const user = await getCurrentUser(ctx);
-  const booking = await ctx.db.get(bookingId);
-  if (!booking) throw new Error("Booking not found");
-  if (!booking.shop_id) throw new Error("Booking has no shop");
-
+/** Active shop_users membership OR the shop's owner. */
+async function isShopStaff(ctx: any, userId: any, shopId: any): Promise<boolean> {
   const shopUser = await ctx.db
     .query("shop_users")
     .withIndex("by_user_and_shop", (q: any) =>
-      q.eq("user_id", user._id).eq("shop_id", booking.shop_id),
+      q.eq("user_id", userId).eq("shop_id", shopId),
     )
     .first();
-  if (!shopUser?.is_active) {
-    const owned = await ctx.db
-      .query("shops")
-      .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", user._id))
-      .filter((q: any) => q.eq(q.field("_id"), booking.shop_id))
-      .first();
-    if (!owned) throw new Error("Not authorized for this shop");
+  if (shopUser?.is_active) return true;
+  const owned = await ctx.db
+    .query("shops")
+    .withIndex("by_owner_user_id", (q: any) => q.eq("owner_user_id", userId))
+    .filter((q: any) => q.eq(q.field("_id"), shopId))
+    .first();
+  return !!owned;
+}
+
+export async function requireShopStaffForBooking(
+  ctx: any,
+  bookingId: Id<"bookings">,
+) {
+  const user = await getCurrentUser(ctx);
+  const booking = await ctx.db.get(bookingId);
+  if (!booking) {
+    throwBookingError(
+      "BOOKING_NOT_FOUND",
+      "We couldn't find that booking. It may have been cancelled or removed.",
+      { bookingId: String(bookingId) },
+    );
+  }
+  if (!booking.shop_id) throw new Error("Booking has no shop");
+  if (!(await isShopStaff(ctx, user._id, booking.shop_id))) {
+    throw new Error("Not authorized for this shop");
   }
   return { user, booking };
 }
 
+/** Same check as requireShopStaffForBooking, for queries: null instead of a
+ *  throw, so a customer (or a signed-out tab) subscribing never errors. */
+export async function getShopStaffForBookingOrNull(
+  ctx: any,
+  bookingId: Id<"bookings">,
+): Promise<{ user: any; booking: any } | null> {
+  const user = await getCurrentUserOrNull(ctx);
+  if (!user) return null;
+  const booking = await ctx.db.get(bookingId);
+  if (!booking?.shop_id) return null;
+  if (!(await isShopStaff(ctx, user._id, booking.shop_id))) return null;
+  return { user, booking };
+}
+
 /**
- * Every wall-clock span during which this booking's work clock was stopped.
+ * Blockers and flag-issue admin pauses stop the work clock only while the job
+ * is actually running. After completion or cancellation a blocker would push
+ * "Your service is paused" to a customer whose car is done, and an admin span
+ * would shrink labour that was already billed (bug #348).
+ */
+function assertJobInProgress(booking: any, attemptedAction: string, message: string) {
+  if (booking.status !== "in_progress") {
+    throwBookingError("JOB_NOT_IN_PROGRESS", message, {
+      bookingId: String(booking._id),
+      currentStatus: booking.status,
+      attemptedAction,
+    });
+  }
+}
+
+/*
+ * ── STOPPED TIME ─────────────────────────────────────────────────────────────
+ * The spans themselves (clock-stopping blockers, flag-issue admin pauses, and
+ * the mechanic's manual Pause) are merged in lib/jobClock — the one place a new
+ * pause source gets added. Only clock-STOPPING blocker kinds count: a safety
+ * hold or a damage report doesn't pause anything (the mechanic keeps working),
+ * so counting them would under-report labour, the same error in the other
+ * direction.
  *
- * Two sources, merged into one list (mergedSpanMinutes de-overlaps them, so an
- * admin pause opened during a blocker is never subtracted twice):
- *
- *  1. Clock-stopping blockers. Only those kinds count — a safety hold or a
- *     damage report doesn't pause anything (the mechanic keeps working), so
- *     counting them would under-report labour, the same error in the other
- *     direction.
- *
- *  2. Flag-issue admin pauses. Time the mechanic spent in the Flag Issue flow —
- *     writing up extra scope in the sheet and the mid-job scope dialog — rather
- *     than turning a wrench. Recorded as closed spans on `job_admin_pauses` by
- *     NowWorkingPane when the flow closes.
- *
- * NOTE — a mid-job re-quote *waiting on the customer* used to be source 2, on
- * the theory that the mechanic was idle until the customer answered (Abdul,
+ * NOTE — a mid-job re-quote *waiting on the customer* used to be a source too,
+ * on the theory that the mechanic was idle until the customer answered (Abdul,
  * Aug 20). It was pulled (Temur, Aug 23): that wait is open-ended and outside
  * the shop's control, and a mechanic with a car on the lift rarely stands still
  * for it — they move to other work, so stopping the clock for the whole wait
- * under-billed real labour. The narrower, genuinely-idle admin window above
- * replaced it.
+ * under-billed real labour. The narrower, genuinely-idle admin window replaced
+ * it.
  */
-async function clockStoppedSpans(
-  ctx: any,
-  bookingId: Id<"bookings">,
-  now: number,
-): Promise<Array<{ start: number; end: number }>> {
-  const [blockers, adminPauses] = await Promise.all([
-    ctx.db
-      .query("job_blockers")
-      .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
-      .collect(),
-    ctx.db
-      .query("job_admin_pauses")
-      .withIndex("by_booking", (q: any) => q.eq("booking_id", bookingId))
-      .collect(),
-  ]);
-
-  const blockerSpans = blockers
-    .filter((r: any) => r.stops_clock)
-    .map((r: any) => ({
-      start: r.opened_at,
-      end: Math.max(r.opened_at, r.resolved_at ?? now),
-    }));
-
-  const adminSpans = adminPauses.map((r: any) => ({
-    start: r.opened_at,
-    end: Math.max(r.opened_at, r.closed_at),
-  }));
-
-  return [...blockerSpans, ...adminSpans];
-}
-
-/** Merge overlapping spans and total them. Overlaps are merged rather than
- *  summed: two parts on back-order at once is one stoppage, not two — and a flag
- *  sheet opened while already blocked is not a second pause. Adding them would
- *  subtract the same wall-clock hour twice. */
-function mergedSpanMinutes(spans: Array<{ start: number; end: number }>): number {
-  const sorted = [...spans].sort((a, b) => a.start - b.start);
-  let total = 0;
-  let cursor = -1;
-  for (const span of sorted) {
-    const start = Math.max(span.start, cursor);
-    if (span.end > start) {
-      total += span.end - start;
-      cursor = span.end;
-    }
-  }
-  return Math.round(total / MINUTE_MS);
-}
 
 /**
- * Total minutes this booking spent with the work clock stopped — unresolved
- * clock-stopping blockers (counted up to `now`) plus recorded flag-issue admin
- * pauses.
+ * Total minutes this booking spent with the work clock stopped, up to `now` —
+ * blockers (open ones counted up to `now`), flag-issue admin pauses and manual
+ * pauses, merged, clamped to the labor clock's window, rounded once.
  */
 export async function blockedMinutesForBooking(
   ctx: any,
   bookingId: Id<"bookings">,
   now: number,
 ): Promise<number> {
-  return mergedSpanMinutes(await clockStoppedSpans(ctx, bookingId, now));
+  const input = await loadJobClockInput(ctx, bookingId);
+  return Math.round(stoppedMsUpTo(input, now) / MINUTE_MS);
 }
 
 /** Whether the work clock is stopped right now — an unresolved clock-stopping
- *  blocker. (Flag-issue admin pauses are recorded as already-closed spans, so
- *  they never read as "currently paused" here; the live pause while the flag
- *  flow is open is a client-screen concern.) Derived here so every surface reads
- *  one answer instead of recomputing the predicate. */
+ *  blocker or an open manual pause. (Flag-issue admin pauses are recorded as
+ *  already-closed spans, so they never read as "currently paused"; the live
+ *  pause while the flag flow is open is a client-screen concern.) Derived here
+ *  so every surface reads one answer instead of recomputing the predicate. */
 export async function isClockPausedForBooking(
   ctx: any,
   bookingId: Id<"bookings">,
   now: number,
 ): Promise<boolean> {
-  return (await clockStoppedSpans(ctx, bookingId, now)).some(
-    (span) => span.end >= now,
-  );
+  const input = await loadJobClockInput(ctx, bookingId);
+  return isClockStoppedAt(buildJobClock(input), now);
 }
 
 /** Open a blocker. */
@@ -317,6 +321,13 @@ export const openBlocker = mutation({
     const { user, booking } = await requireShopStaffForBooking(
       ctx,
       args.bookingId,
+    );
+    // Read in this transaction, so a completion that lands first makes this
+    // retry and fail here — before any "Your service is paused" row is queued.
+    assertJobInProgress(
+      booking,
+      "open_blocker",
+      "This job isn't in progress any more, so there's nothing to flag.",
     );
     const policy = KIND_POLICY[args.kind as BlockerKind];
 
@@ -514,7 +525,7 @@ export const resolveBlocker = mutation({
  * The client's opened_at/closed_at are treated as hints and clamped: the end
  * can't be in the future, the span is bounded (MAX_ADMIN_PAUSE_MS), and a span
  * under a second is dropped as a mis-fire. This is what makes the on-screen
- * pause durable — folded into clockStoppedSpans, it reaches blocked_minutes and
+ * pause durable — merged by lib/jobClock, it reaches blocked_minutes and
  * the auto-derived labour, not just the one screen it happened on.
  */
 export const recordFlagAdminPause = mutation({
@@ -527,6 +538,11 @@ export const recordFlagAdminPause = mutation({
     const { user, booking } = await requireShopStaffForBooking(
       ctx,
       args.bookingId,
+    );
+    assertJobInProgress(
+      booking,
+      "record_flag_admin_pause",
+      "This job isn't in progress any more, so that time wasn't recorded.",
     );
     const now = Date.now();
 
@@ -553,15 +569,22 @@ export const recordFlagAdminPause = mutation({
   },
 });
 
-/** Blockers on one booking, with the derived clock impact. */
+/** Blockers on one booking, with the derived clock impact. Shop staff only —
+ *  null for anyone else (never throws, so a stale subscription can't error). */
 export const listForBooking = query({
   args: { bookingId: v.id("bookings") },
   handler: async (ctx, args) => {
+    const staff = await getShopStaffForBookingOrNull(ctx, args.bookingId);
+    if (!staff) return null;
     const rows = await ctx.db
       .query("job_blockers")
       .withIndex("by_booking", (q) => q.eq("booking_id", args.bookingId))
       .collect();
     rows.sort((a, b) => b.opened_at - a.opened_at);
+    const clock = buildJobClock(await loadJobClockInput(ctx, args.bookingId));
+    // Legacy fields for cached bundles that predate `clock`. They carry the
+    // query-time Date.now() staleness `clock` exists to avoid — new code reads
+    // `clock` and evaluates it at its own now (lib/jobClock.workedMsAt).
     const now = Date.now();
     return {
       blockers: rows.map((r) => ({
@@ -577,12 +600,12 @@ export const listForBooking = query({
         photo_count: (r.photos ?? []).length,
       })),
       openCount: rows.filter((r) => r.resolved_at == null).length,
-      blockedMinutes: await blockedMinutesForBooking(ctx, args.bookingId, now),
-      // Derived server-side so the four surfaces that show a running clock
-      // (overlay, overlay's multi-job picker, header pill, now-working banner)
-      // can't disagree — and so a new pause source is added in one place
-      // instead of four.
-      clockPaused: await isClockPausedForBooking(ctx, args.bookingId, now),
+      // One clock for every surface that shows a running timer (overlay,
+      // picker, header pill, drawer pill) — blockers, flag-issue admin time
+      // and manual pauses merged in lib/jobClock (bug #348).
+      clock,
+      blockedMinutes: stoppedMinutesAt(clock, now),
+      clockPaused: isClockStoppedAt(clock, now),
     };
   },
 });

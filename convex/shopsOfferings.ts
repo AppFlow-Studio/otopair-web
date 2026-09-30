@@ -7,6 +7,7 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import { requireDirector, logAudit } from "./directorGate";
+import { setShopServiceOffered } from "./lib/shopServiceOffering";
 
 // --- Authored return types (see dataOverview.ts header) -----------------------
 
@@ -81,18 +82,20 @@ export const toggleOffering = mutation({
     const shop = await ctx.db.get(shopId);
     const service = await ctx.db.get(serviceId);
     if (!shop || !service) throw new Error("Shop or service no longer exists.");
+    // Read ALL rows for the key (bug #404): duplicates exist, and patching only
+    // `.first()` left them disagreeing while the listings count ANY true row
+    // as offered. "Already" means every row already says so.
     const existing = await ctx.db
       .query("shop_services")
       .withIndex("by_shop_and_service", (q) => q.eq("shop_id", shopId).eq("service_id", serviceId))
-      .first();
-    if (existing) {
-      if ((existing.is_offered !== false) === offered)
-        throw new Error(`${service.name} is already ${offered ? "offered" : "not offered"} there.`);
-      await ctx.db.patch(existing._id, { is_offered: offered });
-    } else {
-      if (!offered) throw new Error("Nothing to turn off — no offering row exists.");
-      await ctx.db.insert("shop_services", { shop_id: shopId, service_id: serviceId, is_offered: true });
+      .collect();
+    if (existing.length === 0 && !offered) {
+      throw new Error("Nothing to turn off — no offering row exists.");
     }
+    if (existing.length > 0 && existing.every((row) => row.is_offered === offered)) {
+      throw new Error(`${service.name} is already ${offered ? "offered" : "not offered"} there.`);
+    }
+    await setShopServiceOffered(ctx, shopId, serviceId, offered);
     await logAudit(ctx, actor, {
       entity_type: "shop_service",
       entity_id: `${String(shopId)}:${String(serviceId)}`,

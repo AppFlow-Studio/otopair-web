@@ -4,6 +4,7 @@ import { fetchQuery } from "convex/nextjs";
 import type Stripe from "stripe";
 import { api } from "@/convex/_generated/api";
 import { getStripe } from "@/lib/stripe";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 export const dynamic = "force-dynamic";
 
@@ -120,7 +121,7 @@ export async function GET(request: Request) {
       series,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load payouts overview.";
+    const message = formatBookingError(error, "Failed to load payouts overview.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

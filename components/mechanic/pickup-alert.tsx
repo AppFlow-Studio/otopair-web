@@ -24,6 +24,7 @@ import {
   DeclinePickupDialog,
   ReleaseVehicleDialog,
 } from "@/components/pickup/release-vehicle-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 type PickupRequest = {
   bookingId: Id<"bookings">;
@@ -97,7 +98,7 @@ export default function MechanicPickupAlert() {
       setTakeoverKey((cur) => (cur === k ? null : cur));
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : "Couldn't send that — try again.",
+        errorMessage(e, "Couldn't send that — try again."),
       );
     } finally {
       setSubmittingKey((cur) => (cur === k ? null : cur));

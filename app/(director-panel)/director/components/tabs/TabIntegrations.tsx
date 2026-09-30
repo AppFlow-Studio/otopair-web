@@ -7,6 +7,7 @@ import type { Id } from '@/convex/_generated/dataModel'
 import { Badge, Button, Card, Input, Select, MicroH, IconExternal, IconX } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
+import { errorMessage } from '@/lib/feedback'
 
 type BillingType = 'subscription' | 'pay_as_you_go' | 'free'
 
@@ -135,7 +136,7 @@ const EditModal = ({ service, onClose, actorName, actorId }: {
       }
       onClose()
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Save failed.')
+      setErr(errorMessage(e, 'Save failed.'))
       setBusy(false)
     }
   }

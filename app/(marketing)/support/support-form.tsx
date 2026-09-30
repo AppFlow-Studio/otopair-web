@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { CheckCircle2, ChevronLeft, Loader2 } from "lucide-react";
 import { PillButton, PillLink } from "@/components/flagship/pill-button";
 import { serif } from "@/components/flagship/landing/reveal";
+import { errorMessage } from "@/lib/feedback";
 
 const STEPS = [
   { key: "you", title: "About you", helper: "How we reach you about this request." },
@@ -67,7 +68,7 @@ export default function SupportForm() {
     try {
       validateStep(step);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Please check your entries.");
+      setError(errorMessage(err, "Please check your entries."));
       return;
     }
     setError(null);

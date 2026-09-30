@@ -16,6 +16,7 @@ import {
   type PartSubcategoryGroup,
 } from '@/convex/lib/partSubcategories'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 // ── types ───────────────────────────────────────────────────────────────────
 
@@ -396,7 +397,7 @@ const PartsRuleModal = ({ mode, onClose, usage, serviceCategories }: {
       setSaving(false)
       onClose()
     } catch (e: any) {
-      setError(e?.message ?? 'Unexpected error')
+      setError(errorMessage(e, 'Unexpected error'))
       setSaving(false)
     }
   }

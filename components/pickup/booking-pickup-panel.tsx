@@ -29,6 +29,7 @@ import {
   DeclinePickupDialog,
   ReleaseVehicleDialog,
 } from "@/components/pickup/release-vehicle-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 type PickupResponse = "acknowledged" | "bringing_out" | "declined";
 type CommsResponse = "acknowledged" | "bringing_out";
@@ -70,7 +71,7 @@ export default function BookingPickupPanel({
     try {
       await respond({ bookingId, response });
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send the response");
+      setError(errorMessage(e, "Couldn't send the response"));
     } finally {
       setPending(null);
     }

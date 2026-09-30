@@ -1,6 +1,6 @@
 "use client";
 
-import { notify } from "@/lib/feedback";
+import { errorMessage, notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -317,7 +317,8 @@ function OwnerDashboardPage({
         const s = selectedJob.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
         const isActive = s === "confirmed" || s === "in_progress";
-        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        // !e.repeat: a held 'a' must not open the accept confirm and keep firing (bug #403).
+        if (e.key === "a" && isPending) { e.preventDefault(); if (!e.repeat) jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
         if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
@@ -356,7 +357,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Reschedule proposed - awaiting customer approval");
     } catch (error: unknown) {
       setRescheduleError(
-        error instanceof Error ? error.message : "Could not propose reschedule.",
+        errorMessage(error, "Could not propose reschedule."),
       );
     } finally {
       setIsRescheduling(false);
@@ -382,7 +383,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Details draft saved");
       handleCloseActualsDialog();
     } catch (error: unknown) {
-      setSuccessMessage(error instanceof Error ? error.message : "Could not save details.");
+      setSuccessMessage(errorMessage(error, "Could not save details."));
       throw error;
     }
   }
@@ -398,7 +399,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Details finalized");
       handleCloseActualsDialog();
     } catch (error: unknown) {
-      setSuccessMessage(error instanceof Error ? error.message : "Could not finalize details.");
+      setSuccessMessage(errorMessage(error, "Could not finalize details."));
       throw error;
     }
   }
@@ -412,7 +413,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Late-start delay applied");
     } catch (error: unknown) {
       setLateStartReviewError(
-        error instanceof Error ? error.message : "Could not apply the late-start delay.",
+        errorMessage(error, "Could not apply the late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -428,7 +429,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Late-start delay snoozed until the next checkpoint");
     } catch (error: unknown) {
       setLateStartReviewError(
-        error instanceof Error ? error.message : "Could not snooze the late-start delay.",
+        errorMessage(error, "Could not snooze the late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -462,7 +463,7 @@ function OwnerDashboardPage({
       setSuccessMessage("Manual late-start delay applied");
     } catch (error: unknown) {
       setLateStartReviewError(
-        error instanceof Error ? error.message : "Could not apply the manual late-start delay.",
+        errorMessage(error, "Could not apply the manual late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -706,6 +707,8 @@ function OwnerDashboardPage({
     serviceSummary: (row.booking.serviceNames ?? []).map(formatServiceDisplayName).join(" · "),
     startedAt: row.booking.startedAt ?? null,
     scheduledDate: row.booking.scheduledDate ?? null,
+    // The job clock, so a paused job reads paused here too (bug #348).
+    clock: row.clock ?? null,
     blockedMinutes: row.blockedMinutes ?? 0,
     clockPaused: row.clockPaused ?? false,
   }));
@@ -893,6 +896,7 @@ function OwnerDashboardPage({
           <JobActualsDialog
             open={actualsBookingId !== null}
           mode="edit"
+          bookingId={actualsBookingId}
           estimatedLaborMinutes={actualsJob?.estimatedLaborMinutes ?? null}
           laborRateCents={(actualsJob as any)?.shopLaborRateCents ?? null}
           jobActuals={actualsJob?.jobActuals ?? null}

@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { getStripe } from "@/lib/stripe";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 export async function POST() {
   try {
@@ -28,8 +29,7 @@ export async function POST() {
     const link = await getStripe().accounts.createLoginLink(accountId);
     return NextResponse.json({ url: link.url });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to open Stripe Express dashboard.";
+    const message = formatBookingError(error, "Failed to open Stripe Express dashboard.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

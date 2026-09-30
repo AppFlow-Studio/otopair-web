@@ -140,6 +140,16 @@ crons.interval(
   internal.slotHolds.releaseExpiredSlotHolds,
 );
 
+// Safety net for the orphan $20 checkout-authorization reaper (bug #393). Each
+// prebooking PaymentIntent already schedules its own reaper 30 min out; this
+// re-queues any the scheduler missed, reapers that died mid-cancel, and failed
+// Stripe cancels still inside their retry window.
+crons.interval(
+  "sweep-prebooking-authorizations",
+  { minutes: 10 },
+  internal.payments_stripe.sweepPrebookingAuthorizations,
+);
+
 crons.interval(
   "process-appointment-reminder-monitors",
   { minutes: 1 },

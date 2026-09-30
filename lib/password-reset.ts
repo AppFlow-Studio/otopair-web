@@ -171,7 +171,7 @@ export function getPasswordResetErrorMessage(
     clerkError?.code,
     clerkError?.message,
     clerkError?.longMessage,
-    error instanceof Error ? error.message : undefined,
+    error instanceof Error ? error.message : undefined, // raw-error-ok: matched only, never shown
   ]
     .filter((value): value is string => Boolean(value))
     .join(" ")

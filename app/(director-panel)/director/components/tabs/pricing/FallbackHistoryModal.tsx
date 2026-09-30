@@ -6,6 +6,7 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Badge, Button, Modal, IconCheck } from '../../Primitives'
 import { DirectorSessionCtx } from '../../DirectorSessionCtx'
+import { errorMessage } from '@/lib/feedback'
 
 type EntityType = 'baseline' | 'parts_multiplier' | 'labor_multiplier' | 'service_labor_hours'
 
@@ -121,7 +122,7 @@ export const FallbackHistoryModal = ({ entityType, entityId, title, subtitle, on
       if (!res.ok) setError(`Restore failed: ${res.reason}`)
       else setConfirming(null)
     } catch (e: any) {
-      setError(e?.message ?? 'Restore failed')
+      setError(errorMessage(e, 'Restore failed'))
     } finally {
       setBusy(false)
     }

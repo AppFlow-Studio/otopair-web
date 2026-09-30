@@ -75,7 +75,9 @@ test("tire and rotor quote creation hold their offered slots for ten minutes", a
   const tireBookingId = await insertQuoteBooking(t, seed.customerId);
   const rotorBookingId = await insertQuoteBooking(t, seed.customerId);
 
-  const tireResponseId = await t.mutation(api.tire_quote_responses.create, {
+  // Quote submit requires the shop's own staff (bug #404).
+  const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+  const tireResponseId = await owner.mutation(api.tire_quote_responses.create, {
     booking_id: tireBookingId,
     shop_id: seed.shopId,
     mechanic_id: seed.mechanicId,
@@ -87,7 +89,7 @@ test("tire and rotor quote creation hold their offered slots for ten minutes", a
     availability: { date: QUOTED_DATE, time: "09:00" },
     estimated_duration_minutes: 30,
   });
-  const rotorResponseId = await t.mutation(api.rotor_quote_responses.create, {
+  const rotorResponseId = await owner.mutation(api.rotor_quote_responses.create, {
     booking_id: rotorBookingId,
     shop_id: seed.shopId,
     mechanic_id: seed.mechanicId,

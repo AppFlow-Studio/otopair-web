@@ -12,6 +12,7 @@ import {
   type ScheduleBooking,
 } from "./schedule_overlap";
 import { isQuoteHoldActive } from "./quoteHoldOwnership";
+import { bookingError } from "./bookingErrors";
 
 export const DEFAULT_AVAILABILITY_DAYS = 35;
 
@@ -317,7 +318,10 @@ function assertWindowInsideShopHours(
 
   const hours = context.hours;
   if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
-    throw new Error("The shop is closed on the requested day.");
+    throw bookingError("OUTSIDE_SHOP_HOURS", "The shop is closed on the requested day.", {
+      reason: "closed_day",
+      overridable: false,
+    });
   }
 
   const startMinutes = hhmmToMinutes(startTime);
@@ -327,10 +331,17 @@ function assertWindowInsideShopHours(
   const closeMinutes = hhmmToMinutes(hours.close_time);
 
   if (startMinutes < openMinutes || startMinutes >= closeMinutes) {
-    throw new Error("The requested start time is outside the shop's operating hours.");
+    throw bookingError(
+      "OUTSIDE_SHOP_HOURS",
+      "The requested start time is outside the shop's operating hours.",
+      { reason: "starts_outside", overridable: true },
+    );
   }
   if (endMinutes > closeMinutes && !allowAfterClose) {
-    throw new Error("This booking would end after the shop closes.");
+    throw bookingError("OUTSIDE_SHOP_HOURS", "This booking would end after the shop closes.", {
+      reason: "ends_after_close",
+      overridable: true,
+    });
   }
 
   return endTime;
@@ -351,7 +362,9 @@ function assertMechanicActiveInContext(
 ) {
   const mechanic = getMechanicFromContext(context, mechanicId);
   if (!mechanic || String(mechanic.shop_id) !== String(shopId)) {
-    throw new Error("Requested mechanic is unavailable.");
+    throw bookingError("SLOT_UNAVAILABLE", "Requested mechanic is unavailable.", {
+      reason: "mechanic_inactive",
+    });
   }
   return mechanic;
 }
@@ -382,7 +395,11 @@ function assertMechanicWindowFreeInContext(
     context.bufferMinutes,
   );
   if (bookingConflict) {
-    throw new Error("Cannot assign this mechanic because that time is already booked.");
+    throw bookingError(
+      "SLOT_UNAVAILABLE",
+      "Cannot assign this mechanic because that time is already booked.",
+      { reason: "booked" },
+    );
   }
 
   const blockedConflict = overlapsBlockedSlot(
@@ -393,7 +410,11 @@ function assertMechanicWindowFreeInContext(
     toBlockedIntervals(context.blockedSlots),
   );
   if (blockedConflict) {
-    throw new Error("Cannot assign this mechanic because that time is blocked.");
+    throw bookingError(
+      "SLOT_UNAVAILABLE",
+      "Cannot assign this mechanic because that time is blocked.",
+      { reason: "blocked" },
+    );
   }
 
   const quoteHoldConflict = overlapsMechanicBooking(
@@ -406,7 +427,11 @@ function assertMechanicWindowFreeInContext(
     context.bufferMinutes,
   );
   if (quoteHoldConflict) {
-    throw new Error("Cannot assign this mechanic because that time is held by a quote.");
+    throw bookingError(
+      "SLOT_UNAVAILABLE",
+      "Cannot assign this mechanic because that time is held by a quote.",
+      { reason: "quote_hold" },
+    );
   }
 
   // 4th blocking source: another customer's in-flight checkout hold. The
@@ -422,7 +447,11 @@ function assertMechanicWindowFreeInContext(
     context.bufferMinutes,
   );
   if (slotHoldConflict) {
-    throw new Error("That time is being held by another customer. Please pick another slot.");
+    throw bookingError(
+      "SLOT_UNAVAILABLE",
+      "That time is being held by another customer. Please pick another slot.",
+      { reason: "held" },
+    );
   }
 }
 
@@ -547,6 +576,11 @@ function formatClock(hhmm: string) {
   return `${h12}:${String(m).padStart(2, "0")} ${suffix}`;
 }
 
+type BookingWindowIssue = {
+  message: string;
+  kind: "invalid_time" | "closed_day" | "starts_outside" | "ends_after_close" | "blocked";
+};
+
 /**
  * Hours + blocked-time check for a booking window, WITHOUT the booking/hold
  * overlap checks. Used on paths that confirm an already-placed booking
@@ -557,9 +591,10 @@ function formatClock(hhmm: string) {
  * With no mechanic assigned, the window is blocked only when EVERY active
  * mechanic (plus any shop-wide row) has it blocked.
  *
- * Returns a shop-friendly reason, or null when the window is fine.
+ * Returns a shop-friendly reason (plus its kind, for the typed error), or
+ * null when the window is fine.
  */
-export async function checkBookingWindowAgainstHoursAndBlocks(
+async function findBookingWindowIssue(
   ctx: any,
   {
     shopId,
@@ -574,9 +609,9 @@ export async function checkBookingWindowAgainstHoursAndBlocks(
     durationMinutes: number;
     mechanicId?: any;
   },
-): Promise<string | null> {
+): Promise<BookingWindowIssue | null> {
   if (!date || !/^\d{1,2}:\d{2}$/.test(startTime ?? "")) {
-    return "This booking has no valid scheduled time.";
+    return { message: "This booking has no valid scheduled time.", kind: "invalid_time" };
   }
   const [hours, activeMechanics, blockedRows] = await Promise.all([
     getShopHoursForDate(ctx, shopId, date),
@@ -586,17 +621,23 @@ export async function checkBookingWindowAgainstHoursAndBlocks(
   const endTime = getBookingEndTime(startTime, durationMinutes);
   const window = `${formatClock(startTime)}–${formatClock(endTime)}`;
   if (!hours || hours.is_closed || !hours.open_time || !hours.close_time) {
-    return `The shop is closed on ${date}.`;
+    return { message: `The shop is closed on ${date}.`, kind: "closed_day" };
   }
   const start = hhmmToMinutes(startTime);
   const end = hhmmToMinutes(endTime);
   const open = hhmmToMinutes(hours.open_time);
   const close = hhmmToMinutes(hours.close_time);
   if (start < open) {
-    return `${window} starts before the shop opens (${formatClock(hours.open_time)}).`;
+    return {
+      message: `${window} starts before the shop opens (${formatClock(hours.open_time)}).`,
+      kind: "starts_outside",
+    };
   }
   if (start >= close || end > close) {
-    return `${window} runs past closing (${formatClock(hours.close_time)}).`;
+    return {
+      message: `${window} runs past closing (${formatClock(hours.close_time)}).`,
+      kind: start >= close ? "starts_outside" : "ends_after_close",
+    };
   }
 
   const blocked = toBlockedIntervals(blockedRows);
@@ -609,30 +650,52 @@ export async function checkBookingWindowAgainstHoursAndBlocks(
       hhmmToMinutes(slot.startTime) < end &&
       hhmmToMinutes(slot.endTime) > start,
   );
-  if (shopWideBlocked) return `${window} overlaps the shop's blocked time.`;
+  if (shopWideBlocked) {
+    return { message: `${window} overlaps the shop's blocked time.`, kind: "blocked" };
+  }
   if (mechanicId) {
     if (isBlockedFor(String(mechanicId))) {
-      return `${window} overlaps the mechanic's blocked time.`;
+      return { message: `${window} overlaps the mechanic's blocked time.`, kind: "blocked" };
     }
     return null;
   }
   if (activeMechanics.length > 0 && activeMechanics.every((m: any) => isBlockedFor(String(m._id)))) {
-    return `${window} overlaps the shop's blocked time.`;
+    return { message: `${window} overlaps the shop's blocked time.`, kind: "blocked" };
   }
   return null;
 }
 
+export async function checkBookingWindowAgainstHoursAndBlocks(
+  ctx: any,
+  args: Parameters<typeof findBookingWindowIssue>[1],
+): Promise<string | null> {
+  return (await findBookingWindowIssue(ctx, args))?.message ?? null;
+}
+
 export async function assertBookingWindowAgainstHoursAndBlocks(
   ctx: any,
-  args: Parameters<typeof checkBookingWindowAgainstHoursAndBlocks>[1] & {
+  args: Parameters<typeof findBookingWindowIssue>[1] & {
     /** Prefix shown before the reason, e.g. "Can't accept:". */
     action?: string;
   },
 ) {
-  const reason = await checkBookingWindowAgainstHoursAndBlocks(ctx, args);
-  if (reason) {
-    throw new Error(args.action ? `${args.action} ${reason}` : reason);
+  const issue = await findBookingWindowIssue(ctx, args);
+  if (!issue) return;
+  // Same sentence as before, now typed: a blocked window is a slot conflict,
+  // anything about the shop's hours is OUTSIDE_SHOP_HOURS. Not overridable —
+  // these paths confirm an existing booking, and the shop proposes a new time
+  // instead.
+  const message = args.action ? `${args.action} ${issue.message}` : issue.message;
+  if (issue.kind === "blocked") {
+    throw bookingError("SLOT_UNAVAILABLE", message, { reason: "blocked" });
   }
+  if (issue.kind === "invalid_time") {
+    throw bookingError("INVALID_TIME", message);
+  }
+  throw bookingError("OUTSIDE_SHOP_HOURS", message, {
+    reason: issue.kind,
+    overridable: false,
+  });
 }
 
 export async function resolveAvailableMechanicForWindow(
@@ -727,7 +790,9 @@ export async function resolveAvailableMechanicForWindow(
   }
 
   if (!candidates[0]) {
-    throw new Error("No mechanic is available for the requested time.");
+    throw bookingError("SLOT_UNAVAILABLE", "No mechanic is available for the requested time.", {
+      reason: "no_mechanic",
+    });
   }
 
   const lowestCount = Math.min(...candidates.map((candidate) => candidate.count));

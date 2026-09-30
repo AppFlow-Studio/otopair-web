@@ -1,6 +1,6 @@
 "use client";
 
-import { notify } from "@/lib/feedback";
+import { errorMessage, notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
@@ -129,7 +129,7 @@ export default function PreviousBookingsPage() {
       setSuccessMessage("Reschedule proposed — awaiting customer approval");
     } catch (error: unknown) {
       setRescheduleError(
-        error instanceof Error ? error.message : "Could not propose reschedule.",
+        errorMessage(error, "Could not propose reschedule."),
       );
     } finally {
       setIsRescheduling(false);

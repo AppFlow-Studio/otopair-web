@@ -1,5 +1,6 @@
 "use client";
 
+import { errorMessage } from "@/lib/feedback";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
@@ -686,7 +687,7 @@ export default function TeamPage() {
       setDirectorySuccess("You're now on the schedule as a mechanic.");
     } catch (error) {
       setDirectoryError(
-        error instanceof Error ? error.message : "Failed to add yourself as a mechanic."
+        errorMessage(error, "Failed to add yourself as a mechanic.")
       );
     } finally {
       setSelfActionBusy(false);
@@ -710,7 +711,7 @@ export default function TeamPage() {
       // Close the dialog so the reason banner (in-progress job / nobody free)
       // is visible in the directory card.
       setDirectoryError(
-        error instanceof Error ? error.message : "Failed to remove yourself from the schedule."
+        errorMessage(error, "Failed to remove yourself from the schedule.")
       );
       setConfirmSelfRemove(false);
     } finally {
@@ -886,7 +887,7 @@ export default function TeamPage() {
       cb.setSuccess(`${getRoleLabel(form.role)} invitation sent.`);
       cb.onDone();
     } catch (error) {
-      cb.setError(error instanceof Error ? error.message : "Failed to save team member.");
+      cb.setError(errorMessage(error, "Failed to save team member."));
     } finally {
       cb.setSubmitting(false);
     }
@@ -951,7 +952,7 @@ export default function TeamPage() {
       }
       setDirectorySuccess(revokeExisting ? "Invitation resent." : "Invitation sent.");
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to send invitation.");
+      setDirectoryError(errorMessage(error, "Failed to send invitation."));
     } finally {
       setMechanicActionId(null);
     }
@@ -969,7 +970,7 @@ export default function TeamPage() {
       setDirectorySuccess(`Accepted on behalf of ${name}. They now appear on the schedule.`);
     } catch (error) {
       setDirectoryError(
-        error instanceof Error ? error.message : "Failed to accept invitation."
+        errorMessage(error, "Failed to accept invitation.")
       );
     } finally {
       setMechanicActionId(null);
@@ -984,7 +985,7 @@ export default function TeamPage() {
       await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
       setDirectorySuccess("Invitation revoked.");
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to revoke invitation.");
+      setDirectoryError(errorMessage(error, "Failed to revoke invitation."));
     } finally {
       setMechanicActionId(null);
     }
@@ -1022,7 +1023,7 @@ export default function TeamPage() {
       setDirectorySuccess("Mechanic photo updated.");
     } catch (error) {
       setDirectoryError(
-        error instanceof Error ? error.message : "Failed to update mechanic photo."
+        errorMessage(error, "Failed to update mechanic photo.")
       );
     } finally {
       setPendingPhotoMechanicId(null);
@@ -1041,7 +1042,7 @@ export default function TeamPage() {
       setDirectorySuccess("Mechanic photo removed.");
     } catch (error) {
       setDirectoryError(
-        error instanceof Error ? error.message : "Failed to remove mechanic photo."
+        errorMessage(error, "Failed to remove mechanic photo.")
       );
     } finally {
       setUploadingMechanicId(null);
@@ -1070,7 +1071,7 @@ export default function TeamPage() {
       setRemoveMechanicConfirm(null);
       setDirectorySuccess("Mechanic removed.");
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to remove mechanic.");
+      setDirectoryError(errorMessage(error, "Failed to remove mechanic."));
     } finally {
       setMechanicActionId(null);
     }
@@ -1084,7 +1085,7 @@ export default function TeamPage() {
       setRemoveMemberConfirm(null);
       setDirectorySuccess("Portal access removed.");
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to remove member.");
+      setDirectoryError(errorMessage(error, "Failed to remove member."));
     } finally {
       setRemovingMemberId(null);
     }
@@ -1098,7 +1099,7 @@ export default function TeamPage() {
       setNewRole("");
       setDirectorySuccess(`Role updated to ${getRoleLabel(role)}.`);
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to update role.");
+      setDirectoryError(errorMessage(error, "Failed to update role."));
     }
   }
 
@@ -1108,7 +1109,7 @@ export default function TeamPage() {
       await removeTeamMember({ invitationId });
       setDirectorySuccess("Invitation revoked.");
     } catch (error) {
-      setDirectoryError(error instanceof Error ? error.message : "Failed to revoke invitation.");
+      setDirectoryError(errorMessage(error, "Failed to revoke invitation."));
     }
   }
 

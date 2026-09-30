@@ -96,14 +96,15 @@ describe("CHECKIN-* early check-in flow", () => {
     });
 
     // Cancelled is not in the idempotent set (vehicle_at_shop/in_progress/completed),
-    // so the "Only confirmed" guard fires.
+    // so the not-confirmed guard fires — typed, so the portal can say who
+    // ended the booking instead of a raw error (bug #394).
     await expect(
       t
         .withIdentity(identityFor(seed.ownerClerkId))
         .mutation(api.bookings.markVehicleAtShop, {
           bookingId: seed.bookingId,
         }),
-    ).rejects.toThrow(/Only confirmed/);
+    ).rejects.toMatchObject({ data: { code: "BOOKING_ALREADY_CANCELLED" } });
   });
 
   test("CHECKIN-04: outside-hours early push requires explicit override", async () => {

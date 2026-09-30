@@ -41,7 +41,7 @@ export async function publicQuery<Q extends FunctionReference<"query", "public">
     if (digest === "DYNAMIC_SERVER_USAGE" || (err instanceof Error && /Dynamic server usage/.test(err.message))) {
       throw err;
     }
-    console.error(`[publicQuery] ${name} failed:`, err instanceof Error ? err.message : err);
+    console.error(`[publicQuery] ${name} failed:`, err instanceof Error ? err.message : err); // raw-error-ok: logged only
     return null;
   }
 }

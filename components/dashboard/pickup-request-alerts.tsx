@@ -21,6 +21,7 @@ import {
   DeclinePickupDialog,
   ReleaseVehicleDialog,
 } from "@/components/pickup/release-vehicle-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 type PickupResponse = "acknowledged" | "bringing_out" | "declined";
 // The two comms pings the shop can send without releasing the car. Decline is
@@ -68,7 +69,7 @@ export default function PickupRequestAlerts({
     } catch (e: unknown) {
       setErrorByRow((prev) => ({
         ...prev,
-        [key]: e instanceof Error ? e.message : "Couldn't send the response",
+        [key]: errorMessage(e, "Couldn't send the response"),
       }));
     } finally {
       setPending((p) => ({ ...p, [key]: null }));

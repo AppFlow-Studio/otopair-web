@@ -25,6 +25,7 @@ import type {
   PayoutsOverview,
   ShopPaymentInsights,
 } from "./types";
+import { errorMessage } from "@/lib/feedback";
 
 type Kind = "transactions" | "summary" | "payouts";
 
@@ -87,7 +88,7 @@ export function ExportMenu({
       }
       finish(kind);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Export failed.");
+      setError(errorMessage(err, "Export failed."));
     } finally {
       setBusy(null);
       setProgress(0);

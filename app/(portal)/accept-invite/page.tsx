@@ -1,5 +1,6 @@
 "use client";
 
+import { errorMessage as readableError } from "@/lib/feedback";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useQuery, useMutation } from "convex/react";
@@ -138,7 +139,7 @@ function AcceptInviteContent() {
         .catch((err: Error) => {
           setStatus("error");
           setErrorMessage(
-            err.message || "Something went wrong. Please try again."
+            readableError(err, "Something went wrong. Please try again.")
           );
         });
     }

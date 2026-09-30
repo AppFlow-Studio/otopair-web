@@ -5,7 +5,7 @@ import { useMutation } from "convex/react";
 import { useRouter } from "next/navigation";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { errorMessage, notify } from "@/lib/feedback";
+import { errorMessage, isStaleStateError, notify, readBookingError } from "@/lib/feedback";
 
 type NotificationItem = {
   kind: "booking" | "tire_quote" | "rotor_quote";
@@ -142,6 +142,23 @@ export function NotificationCard({
   const [declineReason, setDeclineReason] = useState("");
   const [modExpanded, setModExpanded] = useState(false);
   const [acknowledged, setAcknowledged] = useState(false);
+  // The time the card showed when Decline was pressed. Sent as the expected
+  // state instead of the live item fields at confirm time — the list is
+  // reactive, so a customer move while the confirm sat open would otherwise
+  // re-render the card and the decline would commit against the new time
+  // (bug #394).
+  const declineSnapshotRef = useRef<{
+    scheduledDate: string | null;
+    scheduledTime: string | null;
+  } | null>(null);
+
+  function openDeclineConfirm() {
+    declineSnapshotRef.current = {
+      scheduledDate: item.scheduledDate ?? null,
+      scheduledTime: item.scheduledTime ?? null,
+    };
+    setConfirmingDecline(true);
+  }
 
   const isBooking = item.kind === "booking";
   const hasModFlag = isBooking && item.modFlag?.affected === true;
@@ -162,14 +179,33 @@ export function NotificationCard({
     if (pending) return;
     setPending(true);
     setError(null);
+    const seen = declineSnapshotRef.current ?? {
+      scheduledDate: item.scheduledDate ?? null,
+      scheduledTime: item.scheduledTime ?? null,
+    };
     try {
       await cancelBooking({
         bookingId: item.bookingId,
         reason: declineReason.trim() || "declined_by_shop",
+        // A decline, not a cancel: if the request was accepted, cancelled by
+        // the customer, or moved to another time since this card rendered,
+        // the server rejects it instead of ending the booking (bug #394).
+        intent: "decline",
+        expectedScheduledDate: seen.scheduledDate ?? undefined,
+        expectedScheduledTime: seen.scheduledTime ?? undefined,
       });
       notify.success("Booking declined — the customer has been notified");
       onAfterAction?.();
     } catch (e: unknown) {
+      if (isStaleStateError(e)) {
+        // Someone got there first — say what happened and drop the confirm;
+        // the notification list re-renders from live data.
+        setConfirmingDecline(false);
+        setDeclineReason("");
+        setPending(false);
+        notify.info(readBookingError(e)!.message);
+        return;
+      }
       const msg = errorMessage(e, "Couldn't decline this booking.");
       setError(msg);
       notify.error(msg);
@@ -362,7 +398,7 @@ export function NotificationCard({
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmingDecline(true)}
+                onClick={openDeclineConfirm}
                 disabled={pending}
                 className="inline-flex items-center rounded-md border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >

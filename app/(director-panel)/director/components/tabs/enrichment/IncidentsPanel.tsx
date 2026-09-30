@@ -18,6 +18,7 @@ import { api } from '@/convex/_generated/api'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Modal, MicroH, Badge } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CopyableMono, timeAgo } from './helpers'
+import { errorMessage } from '@/lib/feedback'
 
 const SEVERITY_TONE: Record<string, 'red' | 'orange' | 'yellow'> = { sev1: 'red', sev2: 'orange', sev3: 'yellow' }
 const INCIDENT_STATUS_TONE: Record<string, 'red' | 'yellow' | 'green'> = { open: 'red', monitoring: 'yellow', resolved: 'green' }
@@ -84,7 +85,7 @@ function DeclareIncidentModal({ open, onClose, token }: { open: boolean; onClose
       await declare({ token, reason: reason.trim(), title: title.trim(), severity, summary: summary.trim(), root_cause: rootCause.trim() || undefined, affected_entity_type: 'vehicle_config' })
       setBusy(false); close()
     } catch (e) {
-      setBusy(false); setErr(e instanceof Error ? e.message : 'Failed to declare the incident.')
+      setBusy(false); setErr(errorMessage(e, 'Failed to declare the incident.'))
     }
   }
 
@@ -208,7 +209,7 @@ function AddAffectedForm({ token, incidentId }: { token: string; incidentId: str
       const res = await addAffected({ token, reason: reason.trim(), incidentId: incidentId as Id<'data_incidents'>, identifiers })
       setBusy(false); setResult(res); setText(''); setReason('')
     } catch (e) {
-      setBusy(false); setErr(e instanceof Error ? e.message : 'Failed to add vehicles.')
+      setBusy(false); setErr(errorMessage(e, 'Failed to add vehicles.'))
     }
   }
 
@@ -263,7 +264,7 @@ function AffectedConfigRow({ c, token, canWrite, canTrigger, goDeepDive }: {
       await setStatus({ token, reason: note.trim(), id: c.id as Id<'data_incident_configs'>, status: 'corrected' })
       setBusy(false); setCorrecting(false)
     } catch (e) {
-      setBusy(false); setErr(e instanceof Error ? e.message : 'Failed to save.')
+      setBusy(false); setErr(errorMessage(e, 'Failed to save.'))
     }
   }
   const reopen = async () => {

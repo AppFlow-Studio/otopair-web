@@ -73,7 +73,7 @@ export function useApprovalWorkflow({
     bookingId ? { bookingId: bookingId as Id<"bookings"> } : "skip",
   ) as ApprovalStateSnapshot | null | undefined;
 
-  const updateStatus = useMutation(api.bookings.updateStatus);
+  const accept = useMutation(api.bookings.accept);
   const cancel = useMutation(api.bookings.cancel);
   const withdraw = useMutation(api.booking_approvals.withdrawPendingApproval);
   const continueOriginal = useMutation(
@@ -121,23 +121,36 @@ export function useApprovalWorkflow({
   // arrived yet.
   const carIsAtShop = bookingStatus === "vehicle_at_shop";
 
-  const onStartWork = useCallback(async () => {
+  // `ack` = the customer's new time exactly as the popup's "accept the new
+  // time?" confirm showed it, after the server answered
+  // CUSTOMER_RESCHEDULE_PENDING. It is sent back as the expected schedule, so
+  // a second move by the customer while the confirm sat open is rejected
+  // instead of accepted unseen (bug #403).
+  const onStartWork = useCallback(async (ack?: { newDate: string; newTime: string }) => {
     if (!bookingId) return;
     // The approval popup only CONFIRMS an estimate — it never starts the job.
     // Starting (vehicle_at_shop -> in_progress) is a dedicated button on the
     // booking drawer / mechanic job card, so a price confirmation can never
-    // silently begin the labor clock. A booking already at/after the at-shop
-    // check-in therefore stays put here; only a not-yet-confirmed booking
-    // advances to `confirmed` (the normal check-in flow starts work later).
-    if (bookingStatus === "vehicle_at_shop" || bookingStatus === "in_progress") {
+    // silently begin the labor clock. Only a not-yet-accepted request moves
+    // (to `confirmed`), and it goes through the real Accept so the hours,
+    // pre-job-estimate and customer-reschedule checks run — the old
+    // updateStatus("confirmed") skipped them and could silently accept a time
+    // the customer had just moved (bug #403). Anything else stays put.
+    if (bookingStatus !== "pending" && bookingStatus !== "pending_shop_acceptance") {
       return;
     }
-    await updateStatus({
+    await accept({
       bookingId: bookingId as Id<"bookings">,
-      newStatus: "confirmed",
-      reason: "approval_confirmed",
+      expectedStatus: bookingStatus,
+      ...(ack
+        ? {
+            expectedScheduledDate: ack.newDate,
+            expectedScheduledTime: ack.newTime,
+            acknowledgeCustomerReschedule: true,
+          }
+        : {}),
     });
-  }, [bookingId, bookingStatus, updateStatus]);
+  }, [bookingId, bookingStatus, accept]);
 
   // "Continue with original services" after a decline: lift the booking out of
   // the `*_declined` dead-end (server rolls price to the standing/disclosed
@@ -153,6 +166,7 @@ export function useApprovalWorkflow({
     await cancel({
       bookingId: bookingId as Id<"bookings">,
       reason: "released_after_decline",
+      intent: "cancel",
     });
   }, [bookingId, cancel]);
 

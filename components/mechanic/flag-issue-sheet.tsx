@@ -38,6 +38,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
+import { errorMessage } from "@/lib/feedback";
 
 type Lane = "scope" | "later" | "blocked" | "vin";
 
@@ -152,7 +153,7 @@ export default function FlagIssueSheet({
       onClose();
       reset();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not flag that.");
+      setError(errorMessage(err, "Could not flag that."));
     } finally {
       setBusy(false);
     }
@@ -176,7 +177,7 @@ export default function FlagIssueSheet({
       onClose();
       reset();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not save that VIN.");
+      setError(errorMessage(err, "Could not save that VIN."));
     } finally {
       setBusy(false);
     }
@@ -208,7 +209,7 @@ export default function FlagIssueSheet({
       onClose();
       reset();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not flag that.");
+      setError(errorMessage(err, "Could not flag that."));
     } finally {
       setBusy(false);
     }

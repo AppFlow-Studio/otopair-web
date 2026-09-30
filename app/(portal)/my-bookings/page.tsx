@@ -1,6 +1,6 @@
 "use client";
 
-import { notify } from "@/lib/feedback";
+import { errorMessage, notify } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
@@ -147,7 +147,7 @@ export default function MyBookingsPage() {
       setSuccessMessage("Reschedule proposed — awaiting customer approval");
     } catch (error: unknown) {
       setRescheduleError(
-        error instanceof Error ? error.message : "Could not propose reschedule.",
+        errorMessage(error, "Could not propose reschedule."),
       );
     } finally {
       setIsRescheduling(false);

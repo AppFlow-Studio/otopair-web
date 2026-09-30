@@ -2,6 +2,7 @@
 
 "use client";
 
+import { errorMessage } from "@/lib/feedback";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
@@ -1173,7 +1174,7 @@ export default function ShopSetupPage() {
       setCurrentStep(1);
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to save shop details."
+        errorMessage(error, "Failed to save shop details.")
       );
     } finally {
       setSavingStep(null);
@@ -1197,7 +1198,7 @@ export default function ShopSetupPage() {
       setCurrentStep(2);
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to save operating hours."
+        errorMessage(error, "Failed to save operating hours.")
       );
     } finally {
       setSavingStep(null);
@@ -1289,9 +1290,7 @@ export default function ShopSetupPage() {
       setCurrentStep(3);
     } catch (error) {
       setStepError(
-        error instanceof Error
-          ? error.message
-          : "Failed to save labor rate and services."
+        errorMessage(error, "Failed to save labor rate and services.")
       );
     } finally {
       setSavingStep(null);
@@ -1387,7 +1386,7 @@ export default function ShopSetupPage() {
       setTimeout(() => setMechanicInviteSuccess(false), 4000);
     } catch (error) {
       setMechanicInviteError(
-        error instanceof Error ? error.message : "Failed to save mechanic. Please try again."
+        errorMessage(error, "Failed to save mechanic. Please try again.")
       );
     } finally {
       setSendingInvite(false);
@@ -1432,7 +1431,7 @@ export default function ShopSetupPage() {
       setTimeout(() => setMechanicInviteSuccess(false), 4000);
     } catch (error) {
       setMechanicInviteError(
-        error instanceof Error ? error.message : "Failed to send invitation. Please try again."
+        errorMessage(error, "Failed to send invitation. Please try again.")
       );
     } finally {
       setMechanicInviteActionId(null);
@@ -1495,7 +1494,7 @@ export default function ShopSetupPage() {
       setStepSuccess("Mechanic profile photo updated.");
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to update mechanic profile photo."
+        errorMessage(error, "Failed to update mechanic profile photo.")
       );
     } finally {
       pendingMechanicPhotoIdRef.current = null;
@@ -1518,7 +1517,7 @@ export default function ShopSetupPage() {
       setStepSuccess("Mechanic profile photo removed.");
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to remove mechanic profile photo."
+        errorMessage(error, "Failed to remove mechanic profile photo.")
       );
     } finally {
       pendingMechanicPhotoIdRef.current = null;
@@ -1547,7 +1546,7 @@ export default function ShopSetupPage() {
       setStepSuccess("Mechanic removed.");
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to remove mechanic."
+        errorMessage(error, "Failed to remove mechanic.")
       );
     } finally {
       setRemovingMechanicId(null);
@@ -1573,7 +1572,7 @@ export default function ShopSetupPage() {
       window.location.assign(data.url);
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to launch Stripe onboarding."
+        errorMessage(error, "Failed to launch Stripe onboarding.")
       );
       setLaunchingStripe(false);
     }
@@ -1598,7 +1597,7 @@ export default function ShopSetupPage() {
       router.replace(data.redirectTo ?? "/dashboard");
     } catch (error) {
       setStepError(
-        error instanceof Error ? error.message : "Failed to complete onboarding."
+        errorMessage(error, "Failed to complete onboarding.")
       );
     } finally {
       setFinishing(false);

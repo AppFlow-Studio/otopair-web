@@ -15,6 +15,10 @@ import {
 } from "../lib/scheduling-overhaul";
 import { detectTimezoneFromState } from "../lib/shopTimezone";
 import { getBookableShopIds } from "../lib/bookableShop";
+import {
+  logShopOfferingChange,
+  replaceShopOfferedServices,
+} from "./lib/shopServiceOffering";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
@@ -1057,29 +1061,21 @@ export const saveOnboardingLaborAndServices = mutation({
       onboarding_complete: false,
     });
 
-    const existing = await ctx.db
-      .query("shop_services")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .collect();
-    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
-    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
-
-    for (const row of existing) {
-      const shouldOffer = selectedIds.has(String(row.service_id));
-      if (row.is_offered !== shouldOffer) {
-        await ctx.db.patch(row._id, { is_offered: shouldOffer });
-      }
-    }
-
-    for (const serviceId of args.serviceIds) {
-      if (!byServiceId.has(String(serviceId))) {
-        await ctx.db.insert("shop_services", {
-          shop_id: primary.shop._id,
-          service_id: serviceId,
-          is_offered: true,
-        });
-      }
-    }
+    // One writer for the offering switch (bug #404): patches every duplicate
+    // row for a service, not just the first, so the booking guard and the
+    // portal checkbox read the same answer.
+    const { turnedOn, turnedOff } = await replaceShopOfferedServices(
+      ctx,
+      primary.shop._id,
+      args.serviceIds,
+    );
+    await logShopOfferingChange(ctx, {
+      shopId: primary.shop._id,
+      actor: user.email || String(user.clerkUserId ?? user._id),
+      source: "onboarding",
+      turnedOn,
+      turnedOff,
+    });
 
     return primary.shop._id;
   },
@@ -1418,29 +1414,24 @@ export const updateShopOfferedServices = mutation({
       throw new Error("Not authorized");
     }
 
-    const existing = await ctx.db
-      .query("shop_services")
-      .withIndex("by_shop_id", (q: any) => q.eq("shop_id", primary.shop._id))
-      .collect();
-    const byServiceId = new Map(existing.map((row: any) => [String(row.service_id), row]));
-    const selectedIds = new Set(args.serviceIds.map((id) => String(id)));
-
-    for (const row of existing) {
-      const shouldOffer = selectedIds.has(String(row.service_id));
-      if (row.is_offered !== shouldOffer) {
-        await ctx.db.patch(row._id, { is_offered: shouldOffer });
-      }
-    }
-
-    for (const serviceId of args.serviceIds) {
-      if (!byServiceId.has(String(serviceId))) {
-        await ctx.db.insert("shop_services", {
-          shop_id: primary.shop._id,
-          service_id: serviceId,
-          is_offered: true,
-        });
-      }
-    }
+    // Full-set replace through the shared writer (bug #404): every duplicate
+    // row for a service is patched, and the booking guard
+    // (lib/shopServiceOffering.ts) reads these rows inside each customer
+    // booking, so a booking racing this save either lands first or is refused.
+    const { turnedOn, turnedOff } = await replaceShopOfferedServices(
+      ctx,
+      primary.shop._id,
+      args.serviceIds,
+    );
+    // This save was unaudited, so "did the owner's switch-off actually land
+    // before that booking?" had no answer. Record what flipped, and when.
+    await logShopOfferingChange(ctx, {
+      shopId: primary.shop._id,
+      actor: user.email || String(user.clerkUserId ?? user._id),
+      source: "settings",
+      turnedOn,
+      turnedOff,
+    });
 
     return primary.shop._id;
   },

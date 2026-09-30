@@ -11,6 +11,12 @@
  * Sections register with `useRegisterSaveable(...)`. Registration re-reports on
  * every render so the captured `save`/`reset` closures are never stale; the bar
  * only re-renders when a section's dirty flag actually flips.
+ *
+ * Leaving with unsaved changes asks first (bug #404): an unticked service sits
+ * only in this page's state until Save, so an owner who unticked Brake Fluid
+ * Flush and navigated away kept taking bookings for it — the save landed
+ * minutes after a customer booked. Closing/reloading the tab gets the
+ * browser's own prompt; clicking a link to another page gets a confirm.
  */
 
 import {
@@ -23,6 +29,7 @@ import {
 } from "react";
 import type { ReactNode } from "react";
 import { Check, Loader2 } from "lucide-react";
+import { errorMessage } from "@/lib/feedback";
 import { BTN_PRIMARY, BTN_SECONDARY } from "./primitives";
 
 type Saveable = {
@@ -52,10 +59,103 @@ type Manager = {
 
 const Ctx = createContext<Manager | null>(null);
 
+/** Confirm copy when leaving with unsaved sections. */
+export function unsavedChangesPrompt(labels: readonly string[]): string {
+  const names = labels.filter(Boolean);
+  const where =
+    names.length === 0
+      ? ""
+      : names.length === 1
+        ? ` in ${names[0]}`
+        : ` in ${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+  return `You have unsaved changes${where}. Leave without saving?`;
+}
+
+/**
+ * True when a click on `link` would take the owner off this page inside the
+ * app: a plain left click on a same-origin link to a different path/query.
+ * New-tab/download/modified clicks keep this page open, and cross-origin
+ * links already get the browser's beforeunload prompt.
+ */
+export function linkClickLeavesPage(
+  click: {
+    button: number;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    shiftKey: boolean;
+    altKey: boolean;
+    defaultPrevented: boolean;
+  },
+  link: { href: string; target: string; download: boolean },
+  current: { href: string },
+): boolean {
+  if (click.defaultPrevented || click.button !== 0) return false;
+  if (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey) return false;
+  if (link.download) return false;
+  if (link.target && link.target !== "_self") return false;
+  let to: URL;
+  let from: URL;
+  try {
+    from = new URL(current.href);
+    to = new URL(link.href, from);
+  } catch {
+    return false;
+  }
+  if (to.origin !== from.origin) return false;
+  return to.pathname !== from.pathname || to.search !== from.search;
+}
+
 export function SettingsSaveProvider({ children }: { children: ReactNode }) {
   const entries = useRef<Map<string, Saveable>>(new Map());
   const [version, setVersion] = useState(0);
   const bump = useCallback(() => setVersion((v) => v + 1), []);
+
+  // Guard navigation while anything is dirty. Reads the registry at event
+  // time, so it's attached once and never sees stale dirty flags.
+  useEffect(() => {
+    const dirtyLabels = () =>
+      Array.from(entries.current.values())
+        .filter((entry) => entry.dirty)
+        .map((entry) => entry.label);
+
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (dirtyLabels().length === 0) return;
+      event.preventDefault();
+      // Older Chromium only shows the prompt when returnValue is set.
+      event.returnValue = "";
+    };
+
+    // Capture phase on document runs before React's root listener, so
+    // stopping the event here also stops next/link's client-side navigation.
+    const onClick = (event: MouseEvent) => {
+      const labels = dirtyLabels();
+      if (labels.length === 0) return;
+      const target = event.target;
+      const anchor =
+        target instanceof Element ? target.closest<HTMLAnchorElement>("a[href]") : null;
+      if (!anchor) return;
+      const leaves = linkClickLeavesPage(
+        event,
+        {
+          href: anchor.href,
+          target: anchor.target,
+          download: anchor.hasAttribute("download"),
+        },
+        window.location,
+      );
+      if (!leaves) return;
+      if (window.confirm(unsavedChangesPrompt(labels))) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+
+    window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("click", onClick, true);
+    return () => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("click", onClick, true);
+    };
+  }, []);
 
   const report = useCallback(
     (id: string, entry: Saveable) => {
@@ -133,7 +233,7 @@ function SettingsSaveBar() {
       try {
         await entry.save();
       } catch (err) {
-        failures.push(err instanceof Error ? err.message : `Couldn't save ${entry.label}.`);
+        failures.push(errorMessage(err, `Couldn't save ${entry.label}.`));
       }
     }
     setSaving(false);

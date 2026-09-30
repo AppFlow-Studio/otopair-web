@@ -7,7 +7,7 @@ import { jobListTotal } from "@/lib/booking-total";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { notify, runAction } from "@/lib/feedback";
+import { errorMessage, notify, runAction } from "@/lib/feedback";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import { Bell, Calendar, Car, Check, ChevronDown, ChevronLeft, ChevronRight, ClipboardList, Search, User, X } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -290,7 +290,7 @@ export default function BookingsPage() {
       setSuccessMessage("Reschedule proposed — awaiting customer approval");
     } catch (err: unknown) {
       setRescheduleError(
-        err instanceof Error ? err.message : "Could not propose reschedule.",
+        errorMessage(err, "Could not propose reschedule."),
       );
     } finally {
       setIsRescheduling(false);
@@ -346,7 +346,8 @@ export default function BookingsPage() {
         const s = selectedJob.status;
         const isPending = s === "pending" || s === "pending_shop_acceptance";
         const isActive = s === "confirmed" || s === "in_progress";
-        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        // !e.repeat: a held 'a' must not open the accept confirm and keep firing (bug #403).
+        if (e.key === "a" && isPending) { e.preventDefault(); if (!e.repeat) jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
         if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }

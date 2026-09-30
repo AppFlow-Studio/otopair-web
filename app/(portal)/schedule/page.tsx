@@ -1,6 +1,6 @@
 "use client";
 
-import { notify } from "@/lib/feedback";
+import { errorCode, errorMessage, notify, readBookingError } from "@/lib/feedback";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
@@ -41,6 +41,7 @@ import {
   statusColors,
   dateToString,
   getPendingApprovalLabel,
+  slotHoldLabel,
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import {
@@ -527,7 +528,8 @@ export default function SchedulePage() {
         const isPending = s === "pending" || s === "pending_shop_acceptance";
         const isActive =
           s === "confirmed" || s === "vehicle_at_shop" || s === "in_progress";
-        if (e.key === "a" && isPending) { e.preventDefault(); jobDetailRef.current?.accept(); return; }
+        // !e.repeat: a held 'a' must not open the accept confirm and keep firing (bug #403).
+        if (e.key === "a" && isPending) { e.preventDefault(); if (!e.repeat) jobDetailRef.current?.accept(); return; }
         if (e.key === "d" && isPending) { e.preventDefault(); jobDetailRef.current?.showDecline(); return; }
         if (e.key === "r" && isActive) { e.preventDefault(); jobDetailRef.current?.showMarkCompleted(); return; }
         if (e.key === "c" && isActive) { e.preventDefault(); jobDetailRef.current?.showCancelJob(); return; }
@@ -627,7 +629,7 @@ export default function SchedulePage() {
       setToast({ msg: `Blocked full day for ${mechanicName}`, key: Date.now() });
       setBlockDayConfirm(null);
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Couldn't block the day. Please try again.", key: Date.now() });
+      setToast({ msg: errorMessage(err, "Couldn't block the day. Please try again."), key: Date.now() });
     }
   }, [blockMechanicDay]);
 
@@ -637,7 +639,7 @@ export default function SchedulePage() {
       await unblockSlot({ slotId: slotId as Id<"time_slots"> });
       setToast({ msg: "Slot unblocked", key: Date.now() });
     } catch (err: unknown) {
-      setToast({ msg: err instanceof Error ? err.message : "Couldn't unblock this time. Please try again.", key: Date.now() });
+      setToast({ msg: errorMessage(err, "Couldn't unblock this time. Please try again."), key: Date.now() });
     }
   }, [unblockSlot]);
 
@@ -743,7 +745,7 @@ export default function SchedulePage() {
       setToast({ msg: "Reschedule proposed — awaiting customer approval", key: Date.now() });
     } catch (err: unknown) {
       setRescheduleError(
-        err instanceof Error ? err.message : "Could not propose reschedule.",
+        errorMessage(err, "Could not propose reschedule."),
       );
     } finally {
       setIsRescheduling(false);
@@ -845,7 +847,7 @@ export default function SchedulePage() {
       }
     } catch (err: unknown) {
       setManualRescheduleError(
-        err instanceof Error ? err.message : "Could not reschedule booking.",
+        errorMessage(err, "Could not reschedule booking."),
       );
     } finally {
       setIsSubmittingManualReschedule(false);
@@ -861,7 +863,7 @@ export default function SchedulePage() {
       setToast({ msg: "Late-start delay applied", key: Date.now() });
     } catch (err: unknown) {
       setLateStartReviewError(
-        err instanceof Error ? err.message : "Could not apply the late-start delay.",
+        errorMessage(err, "Could not apply the late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -877,7 +879,7 @@ export default function SchedulePage() {
       setToast({ msg: "Late-start delay snoozed until the next checkpoint", key: Date.now() });
     } catch (err: unknown) {
       setLateStartReviewError(
-        err instanceof Error ? err.message : "Could not snooze the late-start delay.",
+        errorMessage(err, "Could not snooze the late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -933,21 +935,21 @@ export default function SchedulePage() {
       setLateStartOutsideHoursConfirm(null);
       setToast({ msg: "Manual late-start delay applied", key: Date.now() });
     } catch (err: unknown) {
-      const message =
-        err instanceof Error ? err.message : "Could not apply the manual late-start delay.";
+      // The server marks which hours conflicts the shop may override ("starts
+      // outside" / "ends after close"); a closed day is not one of them. Reads
+      // the typed code instead of matching sentences, which the Convex error
+      // wrapper and prod redaction both break.
       if (
         !allowOutsideShopHours &&
-        (
-          message.includes("This booking would end after the shop closes.") ||
-          message.includes("The requested start time is outside the shop's operating hours.")
-        )
+        errorCode(err) === "OUTSIDE_SHOP_HOURS" &&
+        readBookingError(err)?.overridable === true
       ) {
         setLateStartOutsideHoursConfirm({ reviewId, targets });
         setLateStartReviewError("");
         return;
       }
       setLateStartReviewError(
-        message,
+        errorMessage(err, "Could not apply the manual late-start delay."),
       );
     } finally {
       setIsSubmittingLateStartReview(false);
@@ -971,21 +973,6 @@ export default function SchedulePage() {
     dateTo: dateRange.to,
   });
   bookingsRef.current = bookings;
-
-  useEffect(() => {
-    const nextExpiry = (bookings ?? [])
-      .map((event) => event.expiresAt)
-      .filter((expiresAt): expiresAt is number =>
-        typeof expiresAt === "number" && expiresAt > nowTimestamp,
-      )
-      .sort((a, b) => a - b)[0];
-    if (nextExpiry == null) return;
-    const timeoutId = window.setTimeout(
-      () => setNowTimestamp(Date.now()),
-      Math.max(0, nextExpiry - Date.now()) + 50,
-    );
-    return () => window.clearTimeout(timeoutId);
-  }, [bookings, nowTimestamp]);
 
   // Wider lookahead used only when auto-opening the create-booking drawer to find the
   // next available slot across the next 14 days.
@@ -1037,6 +1024,27 @@ export default function SchedulePage() {
     dateTo: dateRange.to,
     sessionId: bookingHoldSession ?? undefined,
   });
+
+  // Re-render at the soonest expiry on the grid. Reactive queries only re-run
+  // when rows change, not as time passes, so without this an expired tentative
+  // quote — or an abandoned checkout hold (bug #393) — would sit on the grid
+  // until a cron deletes its row, a minute or more after it stopped blocking.
+  useEffect(() => {
+    const nextExpiry = [
+      ...(bookings ?? []).map((event) => event.expiresAt),
+      ...(activeSlotHolds ?? []).map((hold) => hold.expiresAt),
+    ]
+      .filter((expiresAt): expiresAt is number =>
+        typeof expiresAt === "number" && expiresAt > nowTimestamp,
+      )
+      .sort((a, b) => a - b)[0];
+    if (nextExpiry == null) return;
+    const timeoutId = window.setTimeout(
+      () => setNowTimestamp(Date.now()),
+      Math.max(0, nextExpiry - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [bookings, activeSlotHolds, nowTimestamp]);
 
   // Auto-open create-booking drawer with next available slot when ?action=newBooking is set.
   useEffect(() => {
@@ -1352,15 +1360,19 @@ export default function SchedulePage() {
         };
       });
 
-    // Other customers'/staff in-flight checkout holds → non-interactive "On
-    // hold" blocks. Reactive, so they vanish the instant the hold expires or
-    // converts to a booking. The current user never sees the hold for the slot
+    // Other customers'/staff in-flight checkout holds → non-interactive blocks
+    // titled by who holds them ("Customer checking out", "Quote checkout",
+    // "Staff drafting" — bug #393). They vanish when the hold converts to a
+    // booking (reactive) or at its expiresAt (the next-expiry timer above
+    // bumps nowTimestamp), not when the janitor cron later deletes the row.
+    // The current user never sees the hold for the slot
     // THEIR OWN create-booking drawer is on — they see the "DRAFT — NEW BOOKING"
     // ghost there instead. `getActiveSlotHolds` already excludes this session's
     // hold; this slot-match is a belt-and-suspenders guard for the moment right
     // after a hot-reload when the drawer's hold still carries a stale session.
     const holdEvents: CalendarEvent[] = (activeSlotHolds ?? [])
       .filter((h) => mechanicFilter === "all" || h.mechanicId === mechanicFilter)
+      .filter((h) => h.expiresAt > nowTimestamp)
       .filter((h) => {
         if (!createBookingDrawer) return true;
         const d = createBookingDrawer;
@@ -1377,16 +1389,20 @@ export default function SchedulePage() {
         start.setHours(sh, sm, 0, 0);
         const end = new Date(h.date + "T00:00:00");
         end.setHours(eh, em, 0, 0);
+        const label = slotHoldLabel(h.kind);
         return {
           id: `hold-${h._id}`,
-          title: "On hold",
+          title: label,
           start,
           end,
           resourceId: h.mechanicId ?? undefined,
           type: "blocked" as const,
           status: "blocked",
-          blockTitle: "On hold",
+          blockTitle: label,
           isHold: true,
+          holdKind: h.kind,
+          expiresAt: h.expiresAt,
+          holdHardExpiresAt: h.hardExpiresAt ?? null,
         };
       });
 
@@ -2437,7 +2453,7 @@ export default function SchedulePage() {
                       }
                       setBlockTimeDrawer(null);
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Couldn't save the blocked time. Please try again.", key: Date.now() });
+                      setToast({ msg: errorMessage(err, "Couldn't save the blocked time. Please try again."), key: Date.now() });
                     } finally {
                       setBtSaving(false);
                     }
@@ -2939,7 +2955,7 @@ export default function SchedulePage() {
                     try {
                       await deleteBlockTimeType({ typeId: contextMenu.typeId as Id<"block_time_types"> });
                     } catch (err: unknown) {
-                      setToast({ msg: err instanceof Error ? err.message : "Couldn't delete that block type. Please try again.", key: Date.now() });
+                      setToast({ msg: errorMessage(err, "Couldn't delete that block type. Please try again."), key: Date.now() });
                     }
                   }}
                 >

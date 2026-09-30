@@ -9,6 +9,7 @@ import { SectionAnchor } from '../Shell'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { summarizeRenderDirectives, type RenderDirectiveRow } from './renderDirectiveSummary'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 type QuickReply = { id?: string; text: string; value?: string; variant?: string }
 type ChatMsg = { role: 'user' | 'assistant'; text: string; quickReplies?: QuickReply[]; render?: RenderDirectiveRow[] }
@@ -125,7 +126,7 @@ export const TabOtoSim = () => {
         setCardState(s => ({ ...s, [cardId]: { result: rejectionMessage(res), ok: false } }))
       }
     } catch (e) {
-      setCardState(s => ({ ...s, [cardId]: { result: (e as Error).message, ok: false } }))
+      setCardState(s => ({ ...s, [cardId]: { result: errorMessage(e, "Couldn't apply that update."), ok: false } }))
     }
   }
   const pickUser = (u: { id: string; name: string; email: string }) => { setSelected(u); setQ(''); setCar(null); resetConversation() }
@@ -157,7 +158,7 @@ export const TabOtoSim = () => {
       }])
       if (res.convoState) setConvoState(res.convoState)
     } catch (e) {
-      setError((e as Error).message)
+      setError(errorMessage(e, "The simulator didn't respond. Try again."))
     } finally {
       setBusy(false)
     }

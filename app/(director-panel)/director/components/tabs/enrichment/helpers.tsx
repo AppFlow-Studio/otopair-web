@@ -8,6 +8,7 @@ import { Component, useState, type ReactNode, type CSSProperties, type MouseEven
 import type { FunctionReturnType } from 'convex/server'
 import { api } from '@/convex/_generated/api'
 import { Badge, Button, Card, MicroH, Modal, tableStyles } from '../../Primitives'
+import { errorMessage } from '@/lib/feedback'
 
 // ─── formatting (pure) ───────────────────────────────────────────────────────
 
@@ -535,7 +536,7 @@ export function TriggerCeremony({ req, onClose, onConfirm }: {
     if (reason.trim().length < 4) { setErr('A reason is required (at least a few words).'); return }
     setBusy(true); setErr('')
     try { await onConfirm(reason.trim()); setBusy(false); setReason(''); onClose() }
-    catch (e) { setBusy(false); setErr(e instanceof Error ? e.message : 'The action failed. Nothing was changed.') }
+    catch (e) { setBusy(false); setErr(errorMessage(e, 'The action failed. Nothing was changed.')) }
   }
 
   return (

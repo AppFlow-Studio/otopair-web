@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import {
   ClipboardCheck,
   Gauge,
@@ -278,6 +281,7 @@ function ReportView({ report }: { report: PostJobSurveyPayload }) {
 }
 
 function ReportEditor({
+  bookingId,
   jobActuals,
   estimatedLaborMinutes,
   suggestedParts,
@@ -286,6 +290,7 @@ function ReportEditor({
   onSaveDraft,
   onFinalize,
 }: {
+  bookingId?: Id<"bookings"> | null;
   jobActuals: JobActualDetails;
   estimatedLaborMinutes?: number | null;
   suggestedParts: JobActualPart[];
@@ -303,11 +308,27 @@ function ReportEditor({
     null,
   );
 
+  // Prefill labor with WORKED time (pauses and blockers subtracted), not wall
+  // clock — otherwise a paused hour is billed as labor when the owner edits
+  // a completed job's actuals (bug #348). Same two steps as JobActualsDialog:
+  // reset the form right away, then apply the clock-based labor once the
+  // clock query answers, and only if nobody has typed in the field.
+  const clock = useQuery(
+    api.jobClock.getForBooking,
+    bookingId ? { bookingId } : "skip",
+  );
+  const clockReady = !bookingId || clock !== undefined;
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+  const clockReadyRef = useRef(clockReady);
+  clockReadyRef.current = clockReady;
+  const laborTouchedRef = useRef(false);
+
   useEffect(() => {
-    const defaultLaborMinutes = getDefaultLaborMinutes(
-      jobActuals,
-      estimatedLaborMinutes,
-    );
+    laborTouchedRef.current = false;
+    const defaultLaborMinutes = clockReadyRef.current
+      ? getDefaultLaborMinutes(jobActuals, estimatedLaborMinutes, clockRef.current ?? null)
+      : (jobActuals?.actualLaborMinutes ?? null);
     setLaborHoursText(
       defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
     );
@@ -316,6 +337,20 @@ function ReportEditor({
     setTechnicianNotes(jobActuals?.technicianNotes ?? "");
     setParts(buildPartRows(jobActuals?.partsUsed));
   }, [jobActuals, estimatedLaborMinutes]);
+
+  // Not keyed on `clock` itself: a later clock update must not overwrite
+  // hours the owner has typed.
+  useEffect(() => {
+    if (!clockReady || laborTouchedRef.current) return;
+    const defaultLaborMinutes = getDefaultLaborMinutes(
+      jobActuals,
+      estimatedLaborMinutes,
+      clockRef.current ?? null,
+    );
+    setLaborHoursText(
+      defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
+    );
+  }, [jobActuals, estimatedLaborMinutes, clockReady]);
 
   function updatePart(index: number, next: Partial<PartRowState>) {
     setParts((current) =>
@@ -348,6 +383,9 @@ function ReportEditor({
   }
 
   const disabled = isSubmitting || activeAction !== null;
+  // Hold Save/Finalize until the clock answers, so the labor saved is the
+  // worked-time figure, not the blank placeholder.
+  const submitDisabled = disabled || !clockReady;
   const inputClass =
     "w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary";
 
@@ -362,9 +400,10 @@ function ReportEditor({
             type="text"
             inputMode="decimal"
             value={laborHoursText}
-            onChange={(e) =>
-              setLaborHoursText(e.target.value.replace(/[^0-9.]/g, ""))
-            }
+            onChange={(e) => {
+              laborTouchedRef.current = true;
+              setLaborHoursText(e.target.value.replace(/[^0-9.]/g, ""));
+            }}
             className={inputClass}
             placeholder={
               estimatedLaborMinutes != null
@@ -532,7 +571,7 @@ function ReportEditor({
           <button
             type="button"
             onClick={() => void runAction("draft", onSaveDraft)}
-            disabled={disabled}
+            disabled={submitDisabled}
             className={drawerSecondaryButtonClassName}
           >
             {activeAction === "draft" && (
@@ -544,7 +583,7 @@ function ReportEditor({
         <button
           type="button"
           onClick={() => void runAction("finalize", onFinalize)}
-          disabled={disabled}
+          disabled={submitDisabled}
           className={drawerPrimaryButtonClassName}
         >
           {activeAction === "finalize" && (
@@ -558,6 +597,9 @@ function ReportEditor({
 }
 
 export interface PostjobReportSectionProps {
+  /** Lets the actuals editor prefill labor from the job clock (worked time,
+   *  pauses subtracted) instead of wall clock (bug #348). */
+  bookingId?: Id<"bookings"> | null;
   report: PostJobSurveyPayload | null | undefined;
   submittedAt: number | null | undefined;
   jobStatus: string | null | undefined;
@@ -576,6 +618,7 @@ export interface PostjobReportSectionProps {
 }
 
 export function PostjobReportSection({
+  bookingId,
   report,
   submittedAt,
   jobStatus,
@@ -676,6 +719,7 @@ export function PostjobReportSection({
         )
       ) : (
         <ReportEditor
+          bookingId={bookingId}
           jobActuals={jobActuals}
           estimatedLaborMinutes={estimatedLaborMinutes}
           suggestedParts={suggestedParts}

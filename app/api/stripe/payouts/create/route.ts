@@ -3,6 +3,7 @@ import { auth } from "@clerk/nextjs/server";
 import { fetchQuery } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { getStripe } from "@/lib/stripe";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ payoutId: payout.id, amount: payout.amount / 100, arrivalDate: payout.arrival_date });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to create payout.";
+    const message = formatBookingError(error, "Failed to create payout.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -18,6 +18,7 @@ import { UserGarageTab } from './users/UserGarageTab'
 import { UserBookingsTab } from './users/UserBookingsTab'
 import { UserMoneyTab } from './users/UserMoneyTab'
 import { UserFootprintTab } from './users/UserFootprintTab'
+import { errorMessage } from '@/lib/feedback'
 
 const USER_TABS = ['Profile', 'Engagement', 'Garage', 'Bookings', 'Money', 'Footprint'] as const
 type UserTab = (typeof USER_TABS)[number]
@@ -153,7 +154,7 @@ const UserModal = ({ userId, onClose, onOpenUser }: { userId: Id<'users'> | null
       }
       setEditing(false)
     } catch (e) {
-      setToast(e instanceof Error ? e.message : 'Save failed.')
+      setToast(errorMessage(e, 'Save failed.'))
     } finally {
       setSaving(false)
     }

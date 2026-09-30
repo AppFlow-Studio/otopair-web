@@ -12,6 +12,7 @@ import {
   drawerSecondaryButtonClassName,
 } from "@/components/drawer-panel-styles";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { errorMessage } from "@/lib/feedback";
 
 export interface RecommendServiceContext {
   diagnosticBookingId: Id<"bookings">;
@@ -195,7 +196,7 @@ export default function RecommendServiceDrawer({
       onSent();
     } catch (err) {
       onError?.(
-        err instanceof Error ? err.message : "Could not send recommendation.",
+        errorMessage(err, "Could not send recommendation."),
       );
     } finally {
       setSubmitting(false);

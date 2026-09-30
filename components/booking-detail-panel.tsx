@@ -14,7 +14,13 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { BookingMoney } from "@/convex/lib/bookingMoney";
-import { notify } from "@/lib/feedback";
+import {
+  errorCode,
+  errorMessage,
+  isStaleStateError,
+  notify,
+  readBookingError,
+} from "@/lib/feedback";
 import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
 import OverrunExtendCard from "@/components/mechanic/overrun-extend-card";
@@ -80,6 +86,7 @@ import {
 import BookingTimeline from "@/components/booking/booking-timeline";
 import BookingPickupPanel from "@/components/pickup/booking-pickup-panel";
 import ElapsedTimer from "@/components/mechanic/elapsed-timer";
+import { isJobClockPaused } from "@/lib/use-job-clock";
 import { OPEN_ACTIVE_JOB_EVENT } from "@/lib/active-job-events";
 import { BOOKING_STATUS_VISUALS, getJobStep } from "@/lib/booking-status";
 import {
@@ -403,7 +410,7 @@ function AwaitingHoldConfirmation({
                 try {
                   await onWithdraw();
                 } catch (e: any) {
-                  setErr(e?.message ?? "Couldn't withdraw. Try again.");
+                  setErr(errorMessage(e, "Couldn't withdraw. Try again."));
                 } finally {
                   setBusy(false);
                 }
@@ -726,6 +733,7 @@ export interface JobDetailData {
   combinedLaborSavedMinutes?: number | null;
   combinedLaborNotes?: string[] | null;
   scheduleChangeMode?: string | null;
+  cancelledByRole?: "customer" | "shop" | "system" | string | null;
   scheduleChangeSourceBookingId?: Id<"bookings"> | null;
   customerCanRestoreOriginal?: boolean | null;
   jobActuals?: {
@@ -873,6 +881,33 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       }
     }, [actionError]);
     const [showDeclineModal, setShowDeclineModal] = useState(false);
+    // "Customer moved this from <old> to <new> — accept the new time?" (bug
+    // #403). Holds the times the confirm shows, which are also the expected
+    // state sent with the acknowledged accept.
+    const [customerRescheduleConfirm, setCustomerRescheduleConfirm] = useState<{
+      previousDate: string | null;
+      previousTime: string | null;
+      newDate: string;
+      newTime: string;
+    } | null>(null);
+    // When the confirm opened. Keys are ignored for a moment after, so the
+    // held/double-pressed key that opened it can't also acknowledge it
+    // (bug #403: a new time nobody read).
+    const customerRescheduleConfirmOpenedAtRef = useRef(0);
+    const customerRescheduleConfirmOpen = customerRescheduleConfirm !== null;
+    useEffect(() => {
+      if (!customerRescheduleConfirmOpen) return;
+      customerRescheduleConfirmOpenedAtRef.current = Date.now();
+      // Drop focus left on a drawer button (e.g. the Accept that opened this)
+      // so Enter can't activate it behind the confirm.
+      if (typeof document !== "undefined") {
+        (document.activeElement as HTMLElement | null)?.blur?.();
+      }
+    }, [customerRescheduleConfirmOpen]);
+    // One Accept / Decline / Cancel in flight at a time. State updates are
+    // async, so a double click or a held Enter could fire the mutation twice
+    // before `isActioning` re-rendered the buttons disabled.
+    const lifecycleInFlightRef = useRef(false);
     const [activeTab, setActiveTab] = useState<"details" | "timeline">("details");
     const [nowMs, setNowMs] = useState(() => Date.now());
     const [declineReason, setDeclineReason] = useState(DECLINE_REASONS[0]);
@@ -910,6 +945,47 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
     useEffect(() => {
       if (!showCancelConfirm && !showDeclineModal) setEndBookingStep("reason");
     }, [showCancelConfirm, showDeclineModal]);
+    // What the Decline / Cancel dialog showed when it opened. The stale-view
+    // args are sent from this snapshot, not from the live `job` at click time:
+    // getJobDetail is reactive, so a customer move while the dialog sat open
+    // would otherwise re-render the summary and let the decline commit against
+    // a time nobody reviewed (bug #394).
+    const endBookingSnapshotRef = useRef<{
+      status: string;
+      scheduledDate: string;
+      scheduledTime: string;
+    } | null>(null);
+    const endBookingDialogOpen = showCancelConfirm || showDeclineModal;
+    useEffect(() => {
+      if (!endBookingDialogOpen || !job) {
+        endBookingSnapshotRef.current = null;
+        return;
+      }
+      const snap = endBookingSnapshotRef.current;
+      if (!snap) {
+        endBookingSnapshotRef.current = {
+          status: job.status,
+          scheduledDate: job.scheduledDate,
+          scheduledTime: job.scheduledTime,
+        };
+        return;
+      }
+      // The booking moved under the open dialog (customer rescheduled or
+      // cancelled, another staff member accepted). Close it rather than let
+      // the reason/summary silently re-render against the new state. Our own
+      // in-flight decline/cancel changes status too — that's not "changed".
+      if (
+        !lifecycleInFlightRef.current &&
+        (snap.status !== job.status ||
+          snap.scheduledDate !== job.scheduledDate ||
+          snap.scheduledTime !== job.scheduledTime)
+      ) {
+        endBookingSnapshotRef.current = null;
+        setShowDeclineModal(false);
+        setShowCancelConfirm(false);
+        notify.info("This booking changed since you opened it — take another look.");
+      }
+    }, [endBookingDialogOpen, job]);
     const [createNewAfterCancel, setCreateNewAfterCancel] = useState(false);
     const [cancelReason, setCancelReason] = useState(CANCEL_REASONS[0]);
     const [cancelOtherText, setCancelOtherText] = useState("");
@@ -1018,13 +1094,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       api.job_actuals.getPostjobReportForBooking,
       job ? { bookingId: job._id } : "skip"
     );
-    // A clock-stopping blocker pauses the job. The step indicator otherwise
-    // keeps saying "Active job · underway" while the mechanic has it stopped.
-    const jobBlockers = useQuery(
-      api.jobBlockers.listForBooking,
+    // The job clock (bug #348): a clock-stopping blocker OR the mechanic's
+    // persisted Pause. The step indicator otherwise keeps saying "Active job ·
+    // underway" while the job is stopped. Read directly (not useJobClock) so
+    // this panel doesn't re-render every second — only ElapsedTimer ticks.
+    const jobClock = useQuery(
+      api.jobClock.getForBooking,
       job ? { bookingId: job._id } : "skip"
     );
-    const jobPaused = Boolean(jobBlockers?.clockPaused);
+    const jobPaused = isJobClockPaused(jobClock);
     // Out-of-range estimate sitting with the customer. Subscribe to the live
     // approval state so the panel can render the "awaiting hold confirmation"
     // treatment (new hold amount, SLA countdown, withdraw). getBookingApprovalState
@@ -1216,7 +1294,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     /* ---- Handlers ---- */
 
-    async function handleStatusAction(action: "accept") {
+    async function handleStatusAction(
+      action: "accept",
+      ack?: { newDate: string; newTime: string },
+    ) {
       if (!job?._id) return;
       if ((job as any).paymentApprovalState === "pre_job_pending") {
         setActionError(
@@ -1228,52 +1309,141 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setActionError(`Can't accept — ${acceptWindowIssue} Propose a new time instead.`);
         return;
       }
+      // The customer moved this request: show old → new before accepting, so
+      // a click (or 'a') that lands right after the move can't confirm a time
+      // nobody looked at (bug #403).
+      if (!ack && job.scheduleChangeMode === "customer_reschedule") {
+        setCustomerRescheduleConfirm({
+          previousDate: job.previousScheduledDate ?? null,
+          previousTime: job.previousScheduledTime ?? null,
+          newDate: job.scheduledDate,
+          newTime: job.scheduledTime,
+        });
+        return;
+      }
+      if (lifecycleInFlightRef.current) return;
+      lifecycleInFlightRef.current = true;
       setActionError("");
       setIsActioning(true);
       try {
         if (action === "accept") {
-          await acceptJob({ bookingId: job._id });
+          await acceptJob({
+            bookingId: job._id,
+            expectedStatus: job.status,
+            expectedScheduledDate: ack?.newDate ?? job.scheduledDate,
+            expectedScheduledTime: ack?.newTime ?? job.scheduledTime,
+            acknowledgeCustomerReschedule: ack ? true : undefined,
+          });
+          setCustomerRescheduleConfirm(null);
           onSuccess?.("Booking accepted");
         }
       } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not update status.",
-        );
+        const conflict = readBookingError(err);
+        if (conflict?.code === "CUSTOMER_RESCHEDULE_PENDING") {
+          // Our view hadn't caught up with the customer's move yet.
+          const newDate =
+            typeof conflict.newScheduledDate === "string" ? conflict.newScheduledDate : null;
+          const newTime =
+            typeof conflict.newScheduledTime === "string" ? conflict.newScheduledTime : null;
+          if (newDate && newTime) {
+            setCustomerRescheduleConfirm({
+              previousDate:
+                typeof conflict.previousScheduledDate === "string"
+                  ? conflict.previousScheduledDate
+                  : null,
+              previousTime:
+                typeof conflict.previousScheduledTime === "string"
+                  ? conflict.previousScheduledTime
+                  : null,
+              newDate,
+              newTime,
+            });
+          } else {
+            notify.warning(conflict.message);
+          }
+        } else if (isStaleStateError(err)) {
+          // Someone else already moved it on; the reactive query shows the
+          // new truth, so this is information, not a failure.
+          setCustomerRescheduleConfirm(null);
+          notify.info(conflict!.message);
+        } else {
+          setActionError(errorMessage(err, "Could not update status."));
+        }
       } finally {
+        lifecycleInFlightRef.current = false;
         setIsActioning(false);
       }
     }
 
+    function resetDeclineDialog() {
+      setShowDeclineModal(false);
+      setDeclineReason(DECLINE_REASONS[0]);
+      setDeclineOtherText("");
+    }
+
     async function handleDecline() {
       if (!job?._id) return;
+      if (lifecycleInFlightRef.current) return;
+      lifecycleInFlightRef.current = true;
       setActionError("");
+      const seen = endBookingSnapshotRef.current ?? {
+        status: job.status,
+        scheduledDate: job.scheduledDate,
+        scheduledTime: job.scheduledTime,
+      };
       const reason =
         declineReason === "Other"
           ? declineOtherText.trim() || "Other"
           : declineReason;
       setIsActioning(true);
       try {
-        await cancelJob({ bookingId: job._id, reason });
-        setShowDeclineModal(false);
-        setDeclineReason(DECLINE_REASONS[0]);
-        setDeclineOtherText("");
+        // intent + what the dialog was showing: a Decline that lands after
+        // the customer cancelled, another staff member accepted, or the
+        // customer moved the time is rejected instead of committing (bug #394).
+        await cancelJob({
+          bookingId: job._id,
+          reason,
+          intent: "decline",
+          expectedStatus: seen.status,
+          expectedScheduledDate: seen.scheduledDate,
+          expectedScheduledTime: seen.scheduledTime,
+        });
+        resetDeclineDialog();
         onSuccess?.(
           !isWalkIn
             ? "Booking declined — the customer has been notified"
             : "Booking declined",
         );
       } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not decline booking.",
-        );
+        if (isStaleStateError(err)) {
+          // e.g. "The customer already cancelled this booking." — close the
+          // stale dialog; the drawer already shows the new state.
+          resetDeclineDialog();
+          notify.info(readBookingError(err)!.message);
+        } else {
+          setActionError(errorMessage(err, "Could not decline booking."));
+        }
       } finally {
+        lifecycleInFlightRef.current = false;
         setIsActioning(false);
       }
     }
 
+    function resetCancelDialog() {
+      setShowCancelConfirm(false);
+      setCreateNewAfterCancel(false);
+    }
+
     async function handleCancelJob() {
       if (!job?._id) return;
+      if (lifecycleInFlightRef.current) return;
+      lifecycleInFlightRef.current = true;
       setActionError("");
+      const seen = endBookingSnapshotRef.current ?? {
+        status: job.status,
+        scheduledDate: job.scheduledDate,
+        scheduledTime: job.scheduledTime,
+      };
       const reason =
         cancelReason === "Other"
           ? cancelOtherText.trim() || "Other"
@@ -1290,6 +1460,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           await cancelJob({
             bookingId: job._id,
             reason,
+            intent: "cancel",
+            expectedStatus: seen.status,
+            expectedScheduledDate: seen.scheduledDate,
+            expectedScheduledTime: seen.scheduledTime,
           });
         }
         setShowCancelConfirm(false);
@@ -1309,14 +1483,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           });
         }
       } catch (err: unknown) {
-        setActionError(
-          err instanceof Error
-            ? err.message
-            : isNoShow
-              ? "Could not mark no-show."
-              : "Could not cancel booking.",
-        );
+        if (isStaleStateError(err)) {
+          // The booking ended or started under the dialog (customer cancelled,
+          // job began) — close it and say what happened.
+          resetCancelDialog();
+          notify.info(readBookingError(err)!.message);
+        } else {
+          setActionError(
+            errorMessage(err, isNoShow ? "Could not mark no-show." : "Could not cancel booking."),
+          );
+        }
       } finally {
+        lifecycleInFlightRef.current = false;
         setIsActioning(false);
       }
     }
@@ -1367,7 +1545,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Reschedule cancelled — original time restored");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not cancel reschedule.",
+          errorMessage(err, "Could not cancel reschedule."),
         );
       } finally {
         setIsActioning(false);
@@ -1467,9 +1645,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.(selectedMechanicId ? "Mechanic locked" : "Any mechanic selected");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error
-            ? err.message
-            : "Could not assign mechanic.",
+          errorMessage(err, "Could not assign mechanic."),
         );
       } finally {
         setIsActioning(false);
@@ -1526,14 +1702,18 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingId: job._id,
           newStatus: "in_progress",
           reason: "job_started",
+          expectedStatus: job.status,
         });
         onSuccess?.("Job started");
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "";
-        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+        if (errorCode(err) === "MECHANIC_HAS_ACTIVE_JOB") {
+          const conflictId = readBookingError(err)?.conflictBookingId;
+          if (typeof conflictId === "string") {
+            setRaceConflictBookingId(conflictId as Id<"bookings">);
+          }
           setShowEndCurrentJobDialog(true);
         } else {
-          setActionError(message || "Could not start the job.");
+          setActionError(errorMessage(err, "Could not start the job."));
         }
       } finally {
         setIsActioning(false);
@@ -1571,7 +1751,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Vehicle marked here");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not mark vehicle here.",
+          errorMessage(err, "Could not mark vehicle here."),
         );
       } finally {
         setIsActioning(false);
@@ -1587,7 +1767,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Booking marked no-show");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not mark no-show.",
+          errorMessage(err, "Could not mark no-show."),
         );
       } finally {
         setIsActioning(false);
@@ -1647,26 +1827,30 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           onSuccess?.("Booking started");
         }
       } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : "";
-        if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+        if (errorCode(err) === "MECHANIC_HAS_ACTIVE_JOB") {
           // Race: another booking became in_progress for this mechanic
           // between when we opened the prejob and when we hit submit. Route
           // back through the confirm dialog so the user can complete the
-          // active job first. Parse the conflicting id so the dialog can
-          // render the right summary without waiting on reactive refresh.
-          const parsedId = message.split(":", 2)[1] as Id<"bookings"> | undefined;
-          if (parsedId) setRaceConflictBookingId(parsedId);
+          // active job first. The typed error carries the conflicting id so
+          // the dialog can render the right summary without waiting on
+          // reactive refresh.
+          const conflictId = readBookingError(err)?.conflictBookingId;
+          if (typeof conflictId === "string") {
+            setRaceConflictBookingId(conflictId as Id<"bookings">);
+          }
           setShowPrejobDialog(false);
           setShowEndCurrentJobDialog(true);
           setActionError("");
         } else {
           setActionError(
-            message ||
-              (action === "close"
+            errorMessage(
+              err,
+              action === "close"
                 ? "Could not save the vehicle check."
                 : inspectionPhase === "mpi"
                   ? "Could not submit the on-lift inspection."
-                  : "Could not start booking."),
+                  : "Could not start booking.",
+            ),
           );
           throw err;
         }
@@ -1725,9 +1909,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         setShowPostjobDialog(false);
         onSuccess?.("Booking completed");
       } catch (err: unknown) {
-        setActionError(
-          err instanceof Error ? err.message : "Could not complete booking.",
-        );
+        if (isStaleStateError(err)) {
+          // Lost a race (customer cancelled, job moved): the drawer already
+          // shows the new state — close the form and say what happened. No
+          // rethrow, so the survey dialog doesn't show it as a failure too.
+          setShowPostjobDialog(false);
+          notify.info(readBookingError(err)!.message);
+          return;
+        }
+        setActionError(errorMessage(err, "Could not complete booking."));
         throw err;
       } finally {
         setIsSubmittingPostjob(false);
@@ -1747,7 +1937,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Actuals draft saved");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not save actuals draft.",
+          errorMessage(err, "Could not save actuals draft."),
         );
         throw err;
       } finally {
@@ -1768,7 +1958,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Actuals finalized");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not finalize actuals.",
+          errorMessage(err, "Could not finalize actuals."),
         );
         throw err;
       } finally {
@@ -1786,7 +1976,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         onSuccess?.("Actuals reopened for editing");
       } catch (err: unknown) {
         setActionError(
-          err instanceof Error ? err.message : "Could not reopen actuals.",
+          errorMessage(err, "Could not reopen actuals."),
         );
       } finally {
         setIsActioning(false);
@@ -1829,6 +2019,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       },
       hasOpenModal: () =>
         showDeclineModal ||
+        customerRescheduleConfirm !== null ||
         showPrejobDialog ||
         showPostjobDialog ||
         showCancelConfirm ||
@@ -1836,6 +2027,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         showEarlyArrivalDialog ||
         showEndCurrentJobDialog,
       handleEscape: (): boolean => {
+        if (customerRescheduleConfirm) {
+          setCustomerRescheduleConfirm(null);
+          return true;
+        }
         if (showDeclineModal) {
           setShowDeclineModal(false);
           return true;
@@ -1871,6 +2066,40 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         return false;
       },
       handleKeyDown: (e: KeyboardEvent): boolean => {
+        if (customerRescheduleConfirm) {
+          // Only a fresh Enter accepts — never 'a' (the key that opened this),
+          // never key auto-repeat, and not in the first half second after it
+          // opened, so the old → new line gets read (bug #403).
+          if (e.repeat) return true;
+          if (e.key === "Enter") {
+            if (Date.now() - customerRescheduleConfirmOpenedAtRef.current < 500) {
+              return true;
+            }
+            // Focus on a dialog button (e.g. "Keep reviewing"): Enter means
+            // that button, as it would natively — the page swallows the
+            // default, so activate it here instead of accepting.
+            const active =
+              typeof document !== "undefined"
+                ? (document.activeElement as HTMLElement | null)
+                : null;
+            if (active && active !== document.body && active.tagName === "BUTTON") {
+              active.click();
+              return true;
+            }
+            if (!lifecycleInFlightRef.current) {
+              handleStatusAction("accept", {
+                newDate: customerRescheduleConfirm.newDate,
+                newTime: customerRescheduleConfirm.newTime,
+              });
+            }
+            return true;
+          }
+          if (e.key === "k") {
+            setCustomerRescheduleConfirm(null);
+            return true;
+          }
+          return true;
+        }
         if (showDeclineModal) {
           if (e.key === "ArrowDown") {
             setDeclineReason((prev) => {
@@ -1891,7 +2120,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           if (e.key === "d" || e.key === "Enter") {
             // Enter/d only advances one step — a single keypress never declines.
             if (endBookingStep === "reason") setEndBookingStep("confirm");
-            else handleDecline();
+            else if (!lifecycleInFlightRef.current) handleDecline();
             return true;
           }
           if (e.key === "Backspace" && endBookingStep === "confirm") {
@@ -1930,7 +2159,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           if (e.key === "c" || e.key === "Enter") {
             // Enter/c only advances one step — a single keypress never cancels.
             if (endBookingStep === "reason") setEndBookingStep("confirm");
-            else handleCancelJob();
+            else if (!lifecycleInFlightRef.current) handleCancelJob();
             return true;
           }
           if (e.key === "Backspace" && endBookingStep === "confirm") {
@@ -2088,6 +2317,15 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           fixed price in the shop&apos;s service catalog.
                         </div>
                       ) : null}
+                      {canAccept && job.scheduleChangeMode === "customer_reschedule" ? (
+                        <div className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-xs leading-relaxed text-sky-900">
+                          <span className="font-semibold">Customer requested a new time:</span>{" "}
+                          {job.previousScheduledDate && job.previousScheduledTime
+                            ? `${formatBookingDate(job.previousScheduledDate, job.previousScheduledTime)} → `
+                            : ""}
+                          {formatBookingDate(job.scheduledDate, job.scheduledTime)}
+                        </div>
+                      ) : null}
                       {canAccept && acceptWindowIssue ? (
                         <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-xs leading-relaxed text-rose-900">
                           <span className="font-semibold">Outside available hours.</span>{" "}
@@ -2194,11 +2432,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                               />
                               <span>Open active job</span>
                               <ElapsedTimer
-                                startedAtMs={job.jobActuals?.startedAt}
-                                paused={jobPaused}
-                                blockedMs={
-                                  (jobBlockers?.blockedMinutes ?? 0) * 60_000
-                                }
+                                clock={jobClock}
                                 className={`font-mono text-xs font-semibold tabular-nums ${
                                   jobPaused
                                     ? "text-amber-600"
@@ -2875,6 +3109,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
                 {job.status === "completed" && (
                   <PostjobReportSection
+                    bookingId={job._id}
                     report={postjobReport?.postjobReport ?? null}
                     submittedAt={postjobReport?.submittedAt ?? null}
                     jobStatus={job.status}
@@ -3286,6 +3521,47 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         ) : null}
 
         <ConfirmationDialog
+          open={customerRescheduleConfirm !== null}
+          title="Accept the customer's new time?"
+          description={
+            customerRescheduleConfirm
+              ? customerRescheduleConfirm.previousDate && customerRescheduleConfirm.previousTime
+                ? `Customer moved this from ${formatBookingDate(
+                    customerRescheduleConfirm.previousDate,
+                    customerRescheduleConfirm.previousTime,
+                  )} to ${formatBookingDate(
+                    customerRescheduleConfirm.newDate,
+                    customerRescheduleConfirm.newTime,
+                  )} — accept the new time?`
+                : `Customer moved this to ${formatBookingDate(
+                    customerRescheduleConfirm.newDate,
+                    customerRescheduleConfirm.newTime,
+                  )} — accept the new time?`
+              : undefined
+          }
+          onClose={() => setCustomerRescheduleConfirm(null)}
+          enableShortcuts={false}
+          secondaryAction={{
+            label: <ShortcutLabel text="Keep reviewing" shortcutKey="k" />,
+            onAction: () => setCustomerRescheduleConfirm(null),
+            disabled: isActioning,
+          }}
+          primaryAction={{
+            // Enter, not 'a': the key that opened this must not also accept it.
+            label: isActioning ? "Accepting..." : "Accept new time ↵",
+            onAction: () => {
+              if (!customerRescheduleConfirm) return;
+              handleStatusAction("accept", {
+                newDate: customerRescheduleConfirm.newDate,
+                newTime: customerRescheduleConfirm.newTime,
+              });
+            },
+            disabled: isActioning,
+            leading: isActioning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : undefined,
+          }}
+        />
+
+        <ConfirmationDialog
           open={showDeclineModal}
           title={endBookingStep === "confirm" ? "Are you sure you want to decline?" : "Decline this booking?"}
           description={
@@ -3566,7 +3842,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                 onSuccess?.(`Assigned to ${name}`);
               } catch (err: unknown) {
                 setActionError(
-                  err instanceof Error ? err.message : "Could not assign mechanic.",
+                  errorMessage(err, "Could not assign mechanic."),
                 );
               } finally {
                 setIsActioning(false);

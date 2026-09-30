@@ -15,6 +15,7 @@ import { TiresSection } from '../TiresSection'
 import { AdminActionPanel, ActionRow, Toast } from '../AdminActionPanel'
 import { DirectorSessionCtx } from '../DirectorSessionCtx'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -828,9 +829,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
       const res = await reEnrichConfig({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Full re-enrich scheduled — check Enrichment runs in a few minutes.'
-        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`) // raw-error-ok: server result copy, not a thrown error
     } catch (e) {
-      setToast(`Re-enrich failed: ${(e as Error).message}`)
+      setToast(`Re-enrich failed: ${errorMessage(e, 'please try again.')}`)
     } finally { setBusyFull(false) }
   }
 
@@ -842,9 +843,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
       const res = await backfillConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Parts backfill scheduled — check Enrichment runs in a few minutes.'
-        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`) // raw-error-ok: server result copy, not a thrown error
     } catch (e) {
-      setToast(`Parts backfill failed: ${(e as Error).message}`)
+      setToast(`Parts backfill failed: ${errorMessage(e, 'please try again.')}`)
     } finally { setBusyParts(false) }
   }
 
@@ -855,9 +856,9 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
       const res = await repriceConfigParts({ id: configId, token: sessionToken }) as { status?: string; message?: string }
       setToast(res?.status === 'scheduled'
         ? 'Reprice started — the priced count lands in the audit log in a moment.'
-        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`)
+        : `Could not start: ${res?.message ?? res?.status ?? 'unknown'}.`) // raw-error-ok: server result copy, not a thrown error
     } catch (e) {
-      setToast(`Reprice failed: ${(e as Error).message}`)
+      setToast(`Reprice failed: ${errorMessage(e, 'please try again.')}`)
     } finally { setBusyPrices(false) }
   }
 
@@ -871,7 +872,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
       const res = await backfillRotorMinimums({ id: configId, token: sessionToken }) as
         { status?: string; message?: string; written?: number; hadCache?: boolean; outcomes?: string[] }
       if (res?.status !== 'done') {
-        setToast(`Could not run: ${res?.message ?? res?.status ?? 'unknown'}.`)
+        setToast(`Could not run: ${res?.message ?? res?.status ?? 'unknown'}.`) // raw-error-ok: server result copy, not a thrown error
       } else if ((res.written ?? 0) > 0) {
         setToast(`Rotor minimum backfilled — ${res.outcomes?.join(', ')}.`)
       } else {
@@ -880,7 +881,7 @@ const ConfigModal = ({ configId, onClose }: { configId: Id<'vehicle_configs'> | 
           : 'No cached parts page for this config — run a parts backfill first.')
       }
     } catch (e) {
-      setToast(`Rotor minimum backfill failed: ${(e as Error).message}`)
+      setToast(`Rotor minimum backfill failed: ${errorMessage(e, 'please try again.')}`)
     } finally { setBusyRotorMin(false) }
   }
 

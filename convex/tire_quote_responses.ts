@@ -30,6 +30,7 @@ import {
   requireOwnedQuoteBooking,
   throwQuoteUnavailable,
 } from "./lib/quoteHoldOwnership";
+import { assertShopMayQuoteService } from "./lib/shopServiceOffering";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a quote
@@ -63,6 +64,14 @@ export const create = mutation({
     session_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // (bug #404) This had no caller check: anyone could post a quote as any
+    // shop and hold its mechanic for ten minutes. cancel/requote already
+    // require the shop; so does create now.
+    await requireQuoteShopAccess(ctx, args.shop_id);
+    // A shop that switched Tire Replacement OFF in Settings can't quote it
+    // (the customer's accept would be refused). No row at all is fine.
+    await assertShopMayQuoteService(ctx, args.shop_id, "tire");
+
     assertPriceWithinCap(args.per_tire_price, "Per-tire price");
     assertPriceWithinCap(args.labor_cost, "Labor cost");
 

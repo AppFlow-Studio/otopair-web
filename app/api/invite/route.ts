@@ -4,6 +4,7 @@ import { fetchMutation, fetchQuery } from "convex/nextjs";
 import { makeFunctionReference } from "convex/server";
 import { Id } from "@/convex/_generated/dataModel";
 import { sendInviteEmail } from "@/email/send";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 const getShopByIdQuery = makeFunctionReference<"query">("shops:getById");
 const getMechanicByIdQuery = makeFunctionReference<"query">("mechanics:getById");
@@ -188,7 +189,7 @@ export async function POST(req: NextRequest) {
       const err = await clerkResponse.json();
       console.log("Clerk invitation error:", JSON.stringify(err));
       const clerkError = err.errors?.[0];
-      const errorMessage: string = clerkError?.message ?? "";
+      const errorMessage: string = clerkError?.message ?? ""; // raw-error-ok: matched only, never shown
       const errorCode: string = clerkError?.code ?? "";
       const emailTaken = errorMessage.toLowerCase().includes("email address is taken");
       const alreadyInvited =
@@ -279,9 +280,7 @@ export async function POST(req: NextRequest) {
         /timed out/i.test(err.message));
     const message = isTimeout
       ? "The invitation service is taking too long to respond. Please try again in a moment."
-      : err instanceof Error
-        ? err.message
-        : "Internal server error";
+      : formatBookingError(err, "Internal server error");
     return NextResponse.json({ error: message }, { status: isTimeout ? 504 : 500 });
   }
 }

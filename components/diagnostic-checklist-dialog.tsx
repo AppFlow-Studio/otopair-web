@@ -22,6 +22,7 @@ import type {
   DiagnosticChecklistItem,
   DiagnosticSystem,
 } from "@/lib/diagnostic-checklist-templates";
+import { errorMessage } from "@/lib/feedback";
 
 /* ------------------------------------------------------------------ */
 /*  System theming                                                      */
@@ -298,7 +299,7 @@ export default function DiagnosticChecklistDialog({
         status: next,
       });
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not update item.");
+      onError?.(errorMessage(err, "Could not update item."));
     } finally {
       setBusyIndex(null);
     }
@@ -311,7 +312,7 @@ export default function DiagnosticChecklistDialog({
       await updateFindings({ bookingId, note: findingsDraft });
       setFindingsSavedAt(Date.now());
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not save findings.");
+      onError?.(errorMessage(err, "Could not save findings."));
     }
   }
 
@@ -320,7 +321,7 @@ export default function DiagnosticChecklistDialog({
     try {
       await resumeFollowUp({ bookingId });
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not resume job.");
+      onError?.(errorMessage(err, "Could not resume job."));
     }
   }
 
@@ -343,7 +344,7 @@ export default function DiagnosticChecklistDialog({
       onContinueToPostJob?.();
     } catch (err) {
       onError?.(
-        err instanceof Error ? err.message : "Could not save findings.",
+        errorMessage(err, "Could not save findings."),
       );
     } finally {
       setIsWrapping(false);
@@ -377,7 +378,7 @@ export default function DiagnosticChecklistDialog({
       onCompleted("Recommendation sent to customer");
     } catch (err) {
       onError?.(
-        err instanceof Error ? err.message : "Could not send recommendation.",
+        errorMessage(err, "Could not send recommendation."),
       );
     } finally {
       setIsSubmitting(false);
@@ -396,7 +397,7 @@ export default function DiagnosticChecklistDialog({
       setActive(null);
       onCompleted("Job parked — awaiting info");
     } catch (err) {
-      onError?.(err instanceof Error ? err.message : "Could not park job.");
+      onError?.(errorMessage(err, "Could not park job."));
     } finally {
       setIsSubmitting(false);
     }

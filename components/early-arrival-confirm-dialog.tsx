@@ -8,6 +8,7 @@ import { Loader2 } from "lucide-react";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { addMinutesToHHMM } from "@/lib/schedule-overlap";
 import type { ScheduleBooking } from "@/lib/schedule-overlap";
+import { errorMessage } from "@/lib/feedback";
 
 type EarlyArrivalConfirmDialogProps = {
   open: boolean;
@@ -303,7 +304,7 @@ export default function EarlyArrivalConfirmDialog({
       setShowBackfillChoice(false);
       onClose();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not push the booking earlier.");
+      setError(errorMessage(err, "Could not push the booking earlier."));
     } finally {
       setActioning(false);
     }

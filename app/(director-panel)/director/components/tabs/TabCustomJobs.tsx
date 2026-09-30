@@ -33,6 +33,7 @@ import {
 } from '../Primitives'
 import { SectionAnchor } from '../Shell'
 import { StatCard, fmtNumber } from '../Charts'
+import { errorMessage } from '@/lib/feedback'
 
 const fmtMoney = (cents: number | null) =>
   cents == null ? '—' : `$${(cents / 100).toFixed(0)}`
@@ -179,7 +180,7 @@ export const TabCustomJobs = () => {
       })
       setPromoteDone({ slug: res.slug })
     } catch (err: unknown) {
-      setPromoteError(err instanceof Error ? err.message : 'Could not promote that.')
+      setPromoteError(errorMessage(err, 'Could not promote that.'))
     } finally {
       setPromoteBusy(false)
     }
@@ -211,7 +212,7 @@ export const TabCustomJobs = () => {
       })
       setLinking(null)
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Could not link that alias.')
+      setError(errorMessage(err, 'Could not link that alias.'))
     } finally {
       setBusy(false)
     }

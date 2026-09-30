@@ -11,6 +11,7 @@
  * and reload so AdminPanel lands on the login screen.
  */
 import { useEffect } from 'react'
+import { errorMessage } from '@/lib/feedback'
 
 const SESSION_KEY = 'otopair_director_token'
 
@@ -22,7 +23,7 @@ export default function DirectorError({
   reset: () => void
 }) {
   const sessionExpired = /invalid or expired director session/i.test(
-    error?.message ?? '',
+    `${errorMessage(error, '')} ${error?.message ?? ''}`, // raw-error-ok: matched only, never shown
   )
 
   useEffect(() => {
@@ -46,7 +47,7 @@ export default function DirectorError({
         Something went wrong in the director panel
       </div>
       <div style={{ fontSize: 13, color: 'var(--slate-500)', marginBottom: 16 }}>
-        {error?.message ?? 'Unknown error'}
+        {errorMessage(error, 'Unknown error')}
       </div>
       <button
         onClick={reset}

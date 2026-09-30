@@ -38,6 +38,12 @@ import {
   selectAgreedApproval,
 } from "./lib/bookingMoney";
 import { loadBookingMoney } from "./bookingMoney";
+import {
+  PREBOOKING_CANCEL_RETRY_WINDOW_MS,
+  PREBOOKING_REAP_AFTER_MS,
+  getPrebookingAuthorization,
+  prebookingReapDecision,
+} from "./lib/prebookingAuthorization";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -817,6 +823,24 @@ export const preauthorizePaymentForBooking = action({
       { idempotencyKey },
     );
 
+    // Orphan-authorization reaper (bug #393): record the PI and schedule its
+    // cancellation in case the app never gets as far as the booking commit.
+    // Best effort — a failure here must not strand a PI the client can no
+    // longer cancel (it only learns the id from this return value), so log
+    // and carry on; the booking side treats a missing row as "proceed".
+    try {
+      await ctx.runMutation(internal.payments_stripe._recordPrebookingAuthorization, {
+        paymentIntentId: pi.id,
+        userId: user._id,
+        shopId: shop._id,
+        attemptId: args.confirmationAttemptId,
+      });
+    } catch (err: any) {
+      console.error(
+        `[preauthorizePaymentForBooking] could not record prebooking authorization pi=${pi.id}: ${err?.message ?? err}`,
+      );
+    }
+
     return {
       paymentIntentId: pi.id,
       clientSecret: pi.client_secret!,
@@ -825,6 +849,236 @@ export const preauthorizePaymentForBooking = action({
       idempotencyKey,
       holdAmountCents: BOOKING_DEPOSIT_CENTS,
     };
+  },
+});
+
+// ─────────────────────────────────────────────────────────────
+// Orphan prebooking authorizations (bug #393)
+//
+// The $20 checkout hold exists before any booking row. If the app dies
+// before the booking commit, nothing else would ever release it. Protocol
+// (see convex/lib/prebookingAuthorization.ts): the booking commit links the
+// row in the same mutation that writes the payments row; the reaper claims
+// it in one mutation and only then calls Stripe. Stripe code stays in
+// actions — mutations can't reach the network.
+// ─────────────────────────────────────────────────────────────
+
+/** Record a just-created prebooking PI and schedule its reaper. Idempotent
+ *  by PI id: a retried preauth with the same attempt id gets the same PI back
+ *  from Stripe's idempotency key and must not schedule a second reaper. */
+export const _recordPrebookingAuthorization = internalMutation({
+  args: {
+    paymentIntentId: v.string(),
+    userId: v.id("users"),
+    shopId: v.optional(v.id("shops")),
+    attemptId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await getPrebookingAuthorization(ctx, args.paymentIntentId);
+    if (existing) return existing._id;
+    const now = Date.now();
+    const reapAfter = now + PREBOOKING_REAP_AFTER_MS;
+    const id = await ctx.db.insert("prebooking_authorizations", {
+      payment_intent_id: args.paymentIntentId,
+      user_id: args.userId,
+      shop_id: args.shopId,
+      attempt_id: args.attemptId,
+      state: "authorizing",
+      reap_after_ms: reapAfter,
+      created_at: now,
+      updated_at: now,
+    });
+    await ctx.scheduler.runAt(
+      reapAfter,
+      internal.payments_stripe._reapPrebookingAuthorization,
+      { paymentIntentId: args.paymentIntentId },
+    );
+    return id;
+  },
+});
+
+/** Reaper step 1, one transaction: decide from the row AND the payments table
+ *  whether this PI is still orphaned. True = the caller now owns the cancel
+ *  (state `reaping`, which the booking side refuses with CHECKOUT_EXPIRED). */
+export const _claimPrebookingForReap = internalMutation({
+  args: { paymentIntentId: v.string() },
+  handler: async (ctx, args): Promise<boolean> => {
+    const row = await getPrebookingAuthorization(ctx, args.paymentIntentId);
+    if (!row) return false;
+    const payment = await ctx.db
+      .query("payments")
+      .withIndex("by_stripe_payment_intent_id", (q) =>
+        q.eq("stripe_payment_intent_id", args.paymentIntentId),
+      )
+      .first();
+    const now = Date.now();
+    const decision = prebookingReapDecision(row, {
+      hasPaymentRow: payment != null,
+      now,
+    });
+    if (decision === "link") {
+      await ctx.db.patch(row._id, {
+        state: "linked",
+        linked_booking_id: payment!.booking_id,
+        updated_at: now,
+      });
+      return false;
+    }
+    if (decision !== "claim") return false;
+    await ctx.db.patch(row._id, { state: "reaping", updated_at: now });
+    return true;
+  },
+});
+
+/** Reaper step 3: record how the Stripe cancel went. Only moves a row this
+ *  reaper claimed. */
+export const _finishPrebookingReap = internalMutation({
+  args: {
+    paymentIntentId: v.string(),
+    outcome: v.union(v.literal("cancelled"), v.literal("cancel_failed")),
+  },
+  handler: async (ctx, args) => {
+    const row = await getPrebookingAuthorization(ctx, args.paymentIntentId);
+    if (!row || row.state !== "reaping") return null;
+    await ctx.db.patch(row._id, { state: args.outcome, updated_at: Date.now() });
+    return args.outcome;
+  },
+});
+
+/** For confirmPreauthorizedBatch: has the reaper taken this PI? */
+export const _getPrebookingAuthorizationState = internalQuery({
+  args: { paymentIntentId: v.string() },
+  handler: async (ctx, args) => {
+    const row = await getPrebookingAuthorization(ctx, args.paymentIntentId);
+    return row ? (row.state as string) : null;
+  },
+});
+
+/**
+ * Cancel one orphaned prebooking authorization. Scheduled at reap_after by
+ * `_recordPrebookingAuthorization`, and re-scheduled by the safety sweep.
+ * Never throws: every outcome is recorded on the row instead.
+ */
+export const _reapPrebookingAuthorization = internalAction({
+  args: { paymentIntentId: v.string() },
+  handler: async (
+    ctx,
+    args,
+  ): Promise<{ status: string; reason?: string }> => {
+    let claimed = false;
+    try {
+      claimed = await ctx.runMutation(internal.payments_stripe._claimPrebookingForReap, {
+        paymentIntentId: args.paymentIntentId,
+      });
+    } catch (err: any) {
+      console.error(
+        `[reapPrebookingAuthorization] claim failed pi=${args.paymentIntentId}: ${err?.message ?? err}`,
+      );
+      return { status: "claim_failed", reason: err?.message };
+    }
+    if (!claimed) return { status: "skipped" };
+
+    let outcome: "cancelled" | "cancel_failed" = "cancel_failed";
+    let reason: string | undefined;
+    const stripe = getStripe();
+    try {
+      const pi = await stripe.paymentIntents.retrieve(args.paymentIntentId);
+      if (pi.metadata?.prebooking !== "true") {
+        // Only ever cancel the checkout deposit this row was written for.
+        reason = "not a prebooking authorization";
+      } else if (pi.status === "canceled") {
+        outcome = "cancelled";
+      } else if (pi.status === "succeeded" || pi.status === "processing") {
+        // Money moved with no booking to show for it — needs a person.
+        reason = `payment intent is ${pi.status}`;
+      } else {
+        await stripe.paymentIntents.cancel(args.paymentIntentId);
+        outcome = "cancelled";
+      }
+    } catch (err: any) {
+      reason = err?.message ?? String(err);
+      // A concurrent cancel (the app's own cleanup, or confirmPreauthorizedBatch
+      // refusing the expired checkout) makes Stripe reject ours — that's
+      // still a cancelled hold.
+      try {
+        const pi = await stripe.paymentIntents.retrieve(args.paymentIntentId);
+        if (pi.status === "canceled") {
+          outcome = "cancelled";
+          reason = undefined;
+        }
+      } catch {
+        // Keep cancel_failed; the sweep retries it.
+      }
+    }
+    if (outcome === "cancel_failed") {
+      console.error(
+        `[reapPrebookingAuthorization] could not cancel pi=${args.paymentIntentId}: ${reason}`,
+      );
+    }
+
+    try {
+      await ctx.runMutation(internal.payments_stripe._finishPrebookingReap, {
+        paymentIntentId: args.paymentIntentId,
+        outcome,
+      });
+    } catch (err: any) {
+      // The row stays `reaping`; the sweep picks it up once the claim is stale.
+      console.error(
+        `[reapPrebookingAuthorization] could not record ${outcome} pi=${args.paymentIntentId}: ${err?.message ?? err}`,
+      );
+    }
+    return { status: outcome, reason };
+  },
+});
+
+/**
+ * Cron safety net (every 10 min): re-schedule the reaper for rows the
+ * scheduler missed (`authorizing` past reap_after), claims whose reaper died
+ * (`reaping` gone stale) and failed cancels still inside the retry window.
+ * The reaper's own claim re-checks each row, so a duplicate schedule is a
+ * harmless no-op. Bounded per run.
+ */
+export const sweepPrebookingAuthorizations = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const BATCH = 50;
+    const due = await ctx.db
+      .query("prebooking_authorizations")
+      .withIndex("by_state_and_reap_after", (q) =>
+        q.eq("state", "authorizing").lte("reap_after_ms", now),
+      )
+      .take(BATCH);
+    const stuck = await ctx.db
+      .query("prebooking_authorizations")
+      .withIndex("by_state_and_reap_after", (q) =>
+        q.eq("state", "reaping").lte("reap_after_ms", now),
+      )
+      .take(BATCH);
+    const failed = await ctx.db
+      .query("prebooking_authorizations")
+      .withIndex("by_state_and_reap_after", (q) =>
+        q
+          .eq("state", "cancel_failed")
+          .gte("reap_after_ms", now - PREBOOKING_CANCEL_RETRY_WINDOW_MS),
+      )
+      .take(BATCH);
+
+    let scheduled = 0;
+    for (const row of [...due, ...stuck, ...failed]) {
+      // Pre-filter with the same rule the claim applies, so a live claim or a
+      // not-yet-due retry doesn't cost an action run every sweep.
+      if (prebookingReapDecision(row, { hasPaymentRow: false, now }) !== "claim") {
+        continue;
+      }
+      await ctx.scheduler.runAfter(
+        0,
+        internal.payments_stripe._reapPrebookingAuthorization,
+        { paymentIntentId: row.payment_intent_id },
+      );
+      scheduled += 1;
+    }
+    return { scheduled };
   },
 });
 
@@ -1588,6 +1842,12 @@ export const approveAndAuthorizeHold = action({
         v.literal("google_pay"),
       ),
     ),
+    /** The estimate the customer is approving, as the screen rendered it
+     *  (getOpenApprovalForBooking `_id` / `mechanic_set_price_cents`). A
+     *  different open estimate → PRICE_CHANGED, before any hold is placed
+     *  (#390). Optional: older builds approve the newest open estimate. */
+    expected_approval_id: v.optional(v.string()),
+    expected_total_cents: v.optional(v.number()),
   },
   handler: async (
     ctx,
@@ -1624,12 +1884,17 @@ export const approveAndAuthorizeHold = action({
 
     // Record the approval and park the booking in `reauth_required`. Throws for
     // post-job (stays on the capture path) or when no estimate is open.
-    await ctx.runMutation(internal.booking_approvals._recordApprovalApproved, {
-      bookingId: args.bookingId,
-      userId: user._id,
-    });
+    const approved: { ceilingCents?: number } | null = await ctx.runMutation(
+      internal.booking_approvals._recordApprovalApproved,
+      {
+        bookingId: args.bookingId,
+        userId: user._id,
+        expectedApprovalId: args.expected_approval_id,
+        expectedTotalCents: args.expected_total_cents,
+      },
+    );
 
-    // Re-read to pick up the freshly-set approved ceiling.
+    // Re-read for the payments row / totals below.
     const afterResult: any = await ctx.runQuery(
       internal.payments_stripe._getBookingForPayment,
       { bookingId: args.bookingId },
@@ -1647,10 +1912,24 @@ export const approveAndAuthorizeHold = action({
     // (This is the path 953166c's lazy-customer change opened up.)
     const isFirstHold = payment == null;
 
-    const targetCents = Math.max(
-      afterBooking.mechanic_set_price_cents ?? 0,
-      afterBooking.running_approved_ceiling_cents ?? 0,
-    );
+    // Hold exactly what the guarded mutation above just approved — the
+    // estimate the customer saw (#390). The mutation commits before this
+    // re-read, and the moment it does no estimate is open, so the shop can
+    // submit a NEW, higher estimate in between; that write raises
+    // booking.mechanic_set_price_cents, and max() over the re-read would put
+    // the unapproved amount on the customer's card. With no race the two are
+    // the same number (the approval sets running_approved_ceiling_cents to the
+    // approved row's price, which the submission also wrote to
+    // mechanic_set_price_cents). The max() stays only as the fallback for a
+    // legacy row with no price.
+    const approvedCeilingCents = approved?.ceilingCents;
+    const targetCents =
+      typeof approvedCeilingCents === "number" && approvedCeilingCents > 0
+        ? approvedCeilingCents
+        : Math.max(
+            afterBooking.mechanic_set_price_cents ?? 0,
+            afterBooking.running_approved_ceiling_cents ?? 0,
+          );
     if (!(targetCents > 0)) {
       throw new Error("Booking has no approved hold amount to authorize.");
     }

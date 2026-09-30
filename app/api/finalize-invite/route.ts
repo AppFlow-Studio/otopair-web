@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 export async function POST(req: NextRequest) {
   try {
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true });
   } catch (err) {
-    const message = err instanceof Error ? err.message : "Internal server error";
+    const message = formatBookingError(err, "Internal server error");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

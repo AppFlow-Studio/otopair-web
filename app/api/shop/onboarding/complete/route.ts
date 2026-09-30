@@ -7,6 +7,7 @@ import {
   getStripeConnectRequirements,
   getStripeConnectStatus,
 } from "@/lib/stripe";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 async function updateClerkMetadata(args: { clerkUserId: string; shopId: string }) {
   const clerkSecretKey = process.env.CLERK_SECRET_KEY;
@@ -98,8 +99,7 @@ export async function POST() {
 
     return NextResponse.json({ ok: true, redirectTo: "/dashboard" });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to complete onboarding.";
+    const message = formatBookingError(error, "Failed to complete onboarding.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

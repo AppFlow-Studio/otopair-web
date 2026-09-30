@@ -1,4 +1,5 @@
 import { hoursToMinutes, parseHoursInput } from "./labor-units";
+import { workedMsAt, type JobClock } from "@/convex/lib/jobClock";
 
 export type JobActualPart = {
   part_name: string;
@@ -64,12 +65,24 @@ export function buildPartRows(parts?: JobActualPart[]): PartRowState[] {
   }));
 }
 
+/**
+ * What the labor field starts at: the recorded actual if there is one, else
+ * the time on the clock, else the estimate. With the job clock (`clock`) the
+ * clock figure is WORKED time — blockers, recorded flag-issue time and the
+ * mechanic's Pause subtracted — not wall clock since start, which prefilled
+ * paused time as labor (bug #348). Without it, the old wall-clock figure.
+ */
 export function getDefaultLaborMinutes(
   jobActuals: JobActualDetails,
   estimatedLaborMinutes?: number | null,
+  clock?: JobClock | null,
 ) {
   if (jobActuals?.actualLaborMinutes != null) {
     return jobActuals.actualLaborMinutes;
+  }
+
+  if (clock?.startedAtMs != null) {
+    return Math.max(0, Math.round(workedMsAt(clock, Date.now()) / 60000));
   }
 
   if (jobActuals?.startedAt != null) {

@@ -16,6 +16,7 @@
  * can specify exactly what slot the test booking lands in.
  */
 
+import { errorMessage } from "@/lib/feedback";
 import { useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import type { Id } from "@/convex/_generated/dataModel";
@@ -140,7 +141,7 @@ export default function DevTestTools({ shopId }: { shopId: Id<"shops"> }) {
       patch(key, { busy: false, message: `${label} ✓` });
       return result;
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = errorMessage(error, "Couldn't run this step. Try again.");
       patch(key, { busy: false, message: `${label} failed: ${msg}` });
       return null;
     }
@@ -273,7 +274,7 @@ export default function DevTestTools({ shopId }: { shopId: Id<"shops"> }) {
         jobOverrun:        makeEmptyState(todayISO(), nowPlusHHMM(0), ""),
       });
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : String(error);
+      const msg = errorMessage(error, "Couldn't clear the test data. Try again.");
       setClearMessage(`Clear failed: ${msg}`);
     } finally {
       setClearBusy(false);

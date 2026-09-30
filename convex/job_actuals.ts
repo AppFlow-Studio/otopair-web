@@ -28,6 +28,7 @@ import { rotorMinForVin } from "./lib/rotorMin";
 import { serviceMatchKey } from "./lib/serviceMatch";
 import { quoteResponsePartLines } from "./lib/bookingMoney";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
+import { mechanicHasActiveJobError } from "./lib/bookingGuards";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
 import { applyInspectionLightPicker } from "./lib/warningLightsMerge";
@@ -1182,7 +1183,14 @@ export const startJob = mutation({
           String(b._id) !== String(args.bookingId),
       );
       if (conflict) {
-        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+        // Typed so the portal's "finish the current job first" dialog can read
+        // conflictBookingId — the old `MECHANIC_HAS_ACTIVE_JOB:<id>` prefix
+        // never survived the Convex client's error wrapper.
+        throw await mechanicHasActiveJobError(ctx, {
+          bookingId: args.bookingId,
+          mechanicId: args.mechanicId,
+          conflictBookingId: conflict._id,
+        });
       }
     }
 

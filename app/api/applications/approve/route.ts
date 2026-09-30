@@ -3,6 +3,7 @@ import { randomBytes, createHash } from "crypto";
 import { fetchMutation } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
 import { sendShopOwnerInviteEmail } from "@/email/send";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -35,12 +36,12 @@ export async function POST(req: NextRequest) {
         expiresAt,
       });
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const raw = err instanceof Error ? err.message : String(err); // raw-error-ok: matched only, never shown
       // requireDirector throws unauthorized/forbidden → 403.
-      if (/unauthorized|forbidden/i.test(message)) {
+      if (/unauthorized|forbidden/i.test(raw)) {
         return NextResponse.json({ error: "Not authorized." }, { status: 403 });
       }
-      return NextResponse.json({ error: message }, { status: 400 });
+      return NextResponse.json({ error: formatBookingError(err, "Failed to approve.") }, { status: 400 });
     }
 
     const baseUrl = process.env.NEXT_PUBLIC_APP_URL ?? req.nextUrl.origin;

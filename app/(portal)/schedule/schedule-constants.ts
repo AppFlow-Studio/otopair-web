@@ -34,6 +34,13 @@ export interface CalendarEvent {
    *  (convex/slot_holds). Rendered as a non-interactive "On hold" block so
    *  staff can see the slot is taken while someone finishes booking it. */
   isHold?: boolean;
+  /** Who holds it (bug #393), from `schedule.getActiveSlotHolds`. Drives the
+   *  block's title/tooltip so a customer's abandoned checkout doesn't read as
+   *  an anonymous "On hold". Uses `expiresAt` below for the countdown. */
+  holdKind?: SlotHoldKind;
+  /** Hold only: the Director-TTL cap. Later than `expiresAt` when the
+   *  customer app is on a liveness lease and keeps heart-beating it. */
+  holdHardExpiresAt?: number | null;
   /** Free-text note the customer left for the mechanic on the Review &
    *  Pay screen. Surfaced on booking cards / drawers so the mechanic can
    *  read it before starting the job. */
@@ -93,4 +100,53 @@ export function getPendingApprovalLabel(
   return scheduleChangeMode === "forced_delay"
     ? "Late-start delay pending"
     : "Awaiting approval";
+}
+
+/* ------------------------------------------------------------------ */
+/*  Slot holds (bug #393)                                               */
+/* ------------------------------------------------------------------ */
+
+/** Mirrors `SlotHoldKind` in convex/slotHolds.ts. */
+export type SlotHoldKind = "customer_checkout" | "quote_checkout" | "staff";
+
+const SLOT_HOLD_LABELS: Record<SlotHoldKind, string> = {
+  customer_checkout: "Customer checking out",
+  quote_checkout: "Quote checkout",
+  staff: "Staff drafting",
+};
+
+/** Short label drawn inside the hold block. Unknown/missing kinds (an older
+ *  server) keep the old anonymous copy. */
+export function slotHoldLabel(kind: SlotHoldKind | null | undefined): string {
+  return (kind && SLOT_HOLD_LABELS[kind]) || "On hold";
+}
+
+function formatHoldRemaining(ms: number): string {
+  if (ms < 60_000) return "under a minute";
+  const minutes = Math.ceil(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `${hours}h ${rest}m` : `${hours}h`;
+}
+
+/** Hover text for a hold block, e.g. "Customer checking out · expires in
+ *  12m". A leased hold (the app heart-beats it) lapses within a minute or two
+ *  of the app closing, so it is described by its cap instead of the next
+ *  heartbeat deadline. `now` is passed in so render stays pure. */
+export function slotHoldTooltip(
+  event: Pick<CalendarEvent, "holdKind" | "expiresAt" | "holdHardExpiresAt">,
+  now: number,
+): string {
+  const label = slotHoldLabel(event.holdKind);
+  const expiresAt = event.expiresAt;
+  if (typeof expiresAt !== "number") return label;
+  const hard = event.holdHardExpiresAt;
+  if (typeof hard === "number" && hard > expiresAt + 1_000) {
+    return `${label} · held while their app is open (up to ${formatHoldRemaining(
+      Math.max(0, hard - now),
+    )})`;
+  }
+  if (expiresAt <= now) return `${label} · expiring`;
+  return `${label} · expires in ${formatHoldRemaining(expiresAt - now)}`;
 }

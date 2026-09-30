@@ -29,7 +29,7 @@ export const findPhoneNumberByNormalizedValue = (
 
 export const isIdentifierAlreadyTakenError = (err: unknown) => {
   const code = (err as any)?.errors?.[0]?.code ?? (err as any)?.code;
-  const message = err instanceof Error ? err.message : String((err as any)?.message ?? "");
+  const message = err instanceof Error ? err.message : String((err as any)?.message ?? ""); // raw-error-ok: matched only, never shown
   const lowerMessage = message.toLowerCase();
   return (
     code === "form_identifier_exists" ||

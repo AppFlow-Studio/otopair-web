@@ -23,6 +23,7 @@ import type { FunctionReturnType } from 'convex/server'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CopyableMono, ConfirmPopup, TableWrap, th, td, thRight, tdRight, fmtWhen, fmtWhenExact, PageNav, RunChip, DateRangeFilter, dateInRange } from './helpers'
+import { errorMessage } from '@/lib/feedback'
 
 type WrongPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanWrongParts>['flags'][number]
 type ReasonFilter = 'all' | 'cross_make' | 'refuted' | 'role_identity'
@@ -215,7 +216,7 @@ export function WrongPartDrawer({ token, flag, onClose, goDeepDive }: {
         : action === 'dismiss' ? 'Dismissed — cleared from this list, quote trust unchanged.'
           : 'Corrected — the wrong part was replaced.')
     } catch (e) {
-      setBusy(null); setPending(null); setErr(e instanceof Error ? e.message : 'Failed to save.')
+      setBusy(null); setPending(null); setErr(errorMessage(e, 'Failed to save.'))
     }
   }
   const confirmMeta: Record<'approve' | 'dismiss' | 'adjust', { title: string; message: React.ReactNode; confirmLabel: string; destructive?: boolean }> = {

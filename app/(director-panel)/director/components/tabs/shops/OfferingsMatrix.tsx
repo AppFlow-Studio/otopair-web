@@ -10,6 +10,7 @@ import { LoadingBlock } from './shopsUi'
 import { can } from '@/lib/portal/capabilities'
 import type { OfferingsResult } from '@/convex/shopsOfferings'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 // Services × shops offerings matrix with director toggle (shops.write).
 
@@ -51,7 +52,7 @@ export const OfferingsMatrix = () => {
       })
       setPending(null); setReason('')
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : 'Toggle failed.')
+      setErr(errorMessage(e, 'Toggle failed.'))
     } finally {
       setSaving(false)
     }

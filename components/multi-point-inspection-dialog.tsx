@@ -154,6 +154,8 @@ import type {
   VehiclePassportData,
 } from "@/lib/vehicle-passport";
 import { serviceMatchKey } from "@/convex/lib/serviceMatch";
+// Aliased: several field components below take an `errorMessage` prop.
+import { errorMessage as formatErrorMessage } from "@/lib/feedback";
 import {
   AFFECTED_SYSTEMS,
   servicesForSystems,
@@ -359,13 +361,13 @@ const INSPECTION_STATUS_OPTIONS: { value: InspectionStatus; label: string }[] =
     { value: "not_visible", label: "Not visible" },
   ];
 
+// The shared formatter reads a typed ConvexError's own sentence first
+// (PAYMENT_METHOD_REQUIRED, AWAITING_CUSTOMER_APPROVAL, the terminal/FSM
+// guard…) and strips the Convex wrapper from legacy plain Errors — the old
+// "Uncaught Error:" regex let "Uncaught ConvexError: {json}" through raw
+// (bug #394). Callers still route the result to a field by its wording.
 function userFacingInspectionError(error: unknown, fallback: string): string {
-  if (!(error instanceof Error)) return fallback;
-  const uncaught = error.message.match(/Uncaught Error:\s*([^\n]+)/);
-  return (uncaught?.[1] ?? error.message).replace(
-    /^\[CONVEX[^\]]*\]\s*(?:Server Error\s*)?/,
-    "",
-  );
+  return formatErrorMessage(error, fallback);
 }
 
 function serverValidationTarget(
@@ -5096,7 +5098,7 @@ function PartsVerifyRow({
       );
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not save this part.",
+        userFacingInspectionError(err, "Could not save this part."),
       );
     } finally {
       setBusy(false);
@@ -5110,7 +5112,7 @@ function PartsVerifyRow({
       await onNotApplicable();
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Could not update this service.",
+        userFacingInspectionError(err, "Could not update this service."),
       );
     } finally {
       setBusy(false);

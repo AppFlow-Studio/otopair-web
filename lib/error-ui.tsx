@@ -6,6 +6,7 @@
 import React, { Component, type ReactNode } from "react";
 import { useRouter } from "expo-router";
 import { ErrorOccurredModal } from "@/components/shared-ui";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 export type ErrState = { error?: unknown; visible: boolean };
 
@@ -35,12 +36,7 @@ export function ErrorModalHost() {
     };
   }, []);
 
-  const message =
-    state.error instanceof Error
-      ? state.error.message
-      : state.error != null
-        ? String(state.error)
-        : "Something went wrong. Please try again.";
+  const message = formatBookingError(state.error, "Something went wrong. Please try again.");
 
   const handleClose = () => errorBus.set({ visible: false, error: undefined });
   const handleGoHome = () => {

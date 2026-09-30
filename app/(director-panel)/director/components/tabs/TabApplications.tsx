@@ -13,6 +13,7 @@ import { SectionAnchor } from '../Shell'
 import { can } from '@/lib/portal/capabilities'
 import { Badge, Button, Card, Modal, tableStyles } from '../Primitives'
 import { StatCard, fmtNumber } from '../Charts'
+import { errorMessage } from '@/lib/feedback'
 
 type Application = {
   _id: string
@@ -73,7 +74,7 @@ const RejectModal = ({
       onDone(`Rejected ${row.shop_legal_name}.`)
       close()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to reject.')
+      setError(errorMessage(e, 'Failed to reject.'))
       setBusy(false)
     }
   }

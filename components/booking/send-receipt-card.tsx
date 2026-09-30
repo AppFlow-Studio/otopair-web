@@ -17,6 +17,7 @@ import { useAction, useQuery } from "convex/react";
 import { CheckCircle2, FileText, Loader2, Mail, Send } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import { errorMessage } from "@/lib/feedback";
 
 type Props = {
   bookingId: Id<"bookings"> | null | undefined;
@@ -93,9 +94,7 @@ export default function SendReceiptCard({ bookingId }: Props) {
       setSuccess(`Sent to ${result.sentTo}`);
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Could not send the receipt. Try again.",
+        errorMessage(err, "Could not send the receipt. Try again."),
       );
     } finally {
       setIsSending(false);

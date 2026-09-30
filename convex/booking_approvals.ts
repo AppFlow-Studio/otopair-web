@@ -63,6 +63,7 @@ import {
 import { resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { approvalsNewestFirst } from "./lib/bookingMoney";
 import { loadBookingMoney } from "./bookingMoney";
+import { approvalDecisionConflict } from "./lib/checkoutPrice";
 
 const SLA_MS = 24 * 60 * 60 * 1000;
 
@@ -1007,6 +1008,14 @@ export const applyApprovalDecision = mutation({
   args: {
     bookingId: v.id("bookings"),
     decision: v.union(v.literal("approved"), v.literal("declined")),
+    // What the approve screen rendered (getOpenApprovalForBooking `_id` /
+    // `mechanic_set_price_cents`). When the newest open estimate is a
+    // different row or amount, the decision is rejected with PRICE_CHANGED
+    // instead of approving a price the customer never saw — a
+    // withdraw-and-resubmit between view and tap (#390). Optional: older
+    // builds send neither and decide the newest open estimate, as before.
+    expected_approval_id: v.optional(v.string()),
+    expected_total_cents: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUserOrNull(ctx);
@@ -1030,6 +1039,17 @@ export const applyApprovalDecision = mutation({
       .collect();
     const open = candidates.find((r: any) => r.decision == null);
 
+    // Commit-time check, before any write: booking closed, nothing open to
+    // decide, or the open estimate isn't the one on the customer's screen →
+    // typed error with customer copy (convex/lib/checkoutPrice.ts).
+    const conflict = approvalDecisionConflict({
+      booking,
+      open: open ?? null,
+      decision: args.decision,
+      expectedApprovalId: args.expected_approval_id,
+      expectedTotalCents: args.expected_total_cents,
+    });
+    if (conflict) throw conflict;
     if (!open) {
       throw new Error("No estimate is waiting for your decision.");
     }
@@ -1278,7 +1298,14 @@ export const continueAtOriginalScope = mutation({
  * Post-job is a final capture, not a hold, so it stays on `applyApprovalDecision`.
  */
 export const _recordApprovalApproved = internalMutation({
-  args: { bookingId: v.id("bookings"), userId: v.id("users") },
+  args: {
+    bookingId: v.id("bookings"),
+    userId: v.id("users"),
+    // Same "approve what you saw" contract as applyApprovalDecision (#390),
+    // passed through from approveAndAuthorizeHold. Optional for old builds.
+    expectedApprovalId: v.optional(v.string()),
+    expectedTotalCents: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const booking: any = await ctx.db.get(args.bookingId);
     if (!booking) throw new Error("Booking not found.");
@@ -1294,6 +1321,14 @@ export const _recordApprovalApproved = internalMutation({
       .order("desc")
       .collect();
     const open = candidates.find((r: any) => r.decision == null);
+    const conflict = approvalDecisionConflict({
+      booking,
+      open: open ?? null,
+      decision: "approved",
+      expectedApprovalId: args.expectedApprovalId,
+      expectedTotalCents: args.expectedTotalCents,
+    });
+    if (conflict) throw conflict;
     if (!open) throw new Error("No estimate is waiting for your decision.");
 
     const cycle = open.cycle as "pre_job" | "mid_job" | "post_job";

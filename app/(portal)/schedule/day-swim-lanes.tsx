@@ -6,6 +6,8 @@ import {
   statusColors,
   dateToString,
   getPendingApprovalLabel,
+  slotHoldLabel,
+  slotHoldTooltip,
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
@@ -994,7 +996,10 @@ export default function DaySwimLanes({
                       key={bl.id}
                       className={`absolute left-0 right-0 z-[5] group overflow-hidden ${
                         bl.isHold
-                          ? "pointer-events-none bg-amber-100/80 ring-1 ring-inset ring-amber-300"
+                          ? // Hoverable (for the who/expiry tooltip) but not
+                            // interactive: clicks bubble to the lane exactly
+                            // as they did through pointer-events-none.
+                            "bg-amber-100/80 ring-1 ring-inset ring-amber-300"
                           : bl.isDraft
                             ? "blocked-slot-pattern pointer-events-none opacity-70 ring-2 ring-dashed ring-red-400 outline outline-2 outline-dashed outline-red-400 -outline-offset-2 animate-pulse"
                             : "blocked-slot-pattern cursor-pointer"
@@ -1005,8 +1010,17 @@ export default function DaySwimLanes({
                       }}
                       title={
                         bl.isHold
-                          ? "Held by a customer finishing checkout"
+                          ? slotHoldLabel(bl.holdKind)
                           : (bl.note ?? undefined)
+                      }
+                      onMouseEnter={
+                        bl.isHold
+                          ? (e) => {
+                              // Countdown computed at hover time, so it is
+                              // current without a ticking re-render (#393).
+                              e.currentTarget.title = slotHoldTooltip(bl, Date.now());
+                            }
+                          : undefined
                       }
                       onClick={() => {
                         // Holds and draft previews aren't editable blocks.

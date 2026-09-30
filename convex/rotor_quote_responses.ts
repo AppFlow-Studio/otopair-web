@@ -30,6 +30,7 @@ import {
   requireOwnedQuoteBooking,
   throwQuoteUnavailable,
 } from "./lib/quoteHoldOwnership";
+import { assertShopMayQuoteService } from "./lib/shopServiceOffering";
 
 // ============================================================================
 // CREATE — called by the website when a shop owner submits a rotor quote
@@ -65,6 +66,11 @@ export const create = mutation({
     pad_quantity: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    // (bug #404) Same as tire_quote_responses.create: only the shop's own
+    // staff may quote for it, and not for a service it switched OFF.
+    await requireQuoteShopAccess(ctx, args.shop_id);
+    await assertShopMayQuoteService(ctx, args.shop_id, "rotor");
+
     assertPriceWithinCap(args.per_rotor_price, "Per-rotor price");
     assertPriceWithinCap(args.pad_price, "Per-pad price");
     assertPriceWithinCap(args.labor_cost, "Labor cost");

@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 export type CeremonyProps = {
   open: boolean;
@@ -57,7 +58,7 @@ export function Ceremony({
       close(false);
     } catch (e) {
       setBusy(false);
-      setError(e instanceof Error ? e.message : "The action failed. Nothing was changed.");
+      setError(errorMessage(e, "The action failed. Nothing was changed."));
     }
   };
 

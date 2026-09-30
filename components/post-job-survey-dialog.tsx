@@ -93,6 +93,7 @@ import {
 import type { Id } from "@/convex/_generated/dataModel";
 import ServiceSuggestions from "@/components/booking/service-suggestions";
 import { cn } from "@/lib/utils";
+import { errorMessage, isStaleStateError, notify, readBookingError } from "@/lib/feedback";
 import { CopyableOemNumber } from "@/components/ui/copyable-oem-number";
 import { formatFixedCentCurrency } from "@/lib/fixed-cent-currency";
 import { MAX_PRICE_CENTS, MAX_PRICE_DOLLARS } from "@/lib/price-cap";
@@ -3057,7 +3058,7 @@ function PostJobSurveyDialogBody({
         return;
       } catch (err: any) {
         setAwaitingHoldConfirmation(false);
-        setError(err?.message ?? "Could not submit estimate. Try again.");
+        setError(errorMessage(err, "Could not submit estimate. Try again."));
         return;
       }
     }
@@ -3151,7 +3152,7 @@ function PostJobSurveyDialogBody({
       );
     } catch (err: unknown) {
       setError(
-        err instanceof Error ? err.message : "Could not submit report. Try again.",
+        errorMessage(err, "Could not submit report. Try again."),
       );
     }
   }
@@ -3199,9 +3200,7 @@ function PostJobSurveyDialogBody({
           )
         );
         setError(
-          uploadError instanceof Error
-            ? uploadError.message
-            : "Photo upload failed"
+          errorMessage(uploadError, "Photo upload failed")
         );
       }
     }
@@ -3251,9 +3250,7 @@ function PostJobSurveyDialogBody({
           ),
         );
         setError(
-          uploadError instanceof Error
-            ? uploadError.message
-            : "Photo upload failed",
+          errorMessage(uploadError, "Photo upload failed"),
         );
       }
     }
@@ -7734,7 +7731,7 @@ function FoundWorkStep({
       if (editingId === String(line._id)) resetForm();
     } catch (err: unknown) {
       onToast?.(
-        err instanceof Error ? err.message : "Could not remove that work.",
+        errorMessage(err, "Could not remove that work."),
       );
     } finally {
       setBusy(false);
@@ -7783,7 +7780,7 @@ function FoundWorkStep({
       resetForm();
     } catch (err: unknown) {
       onToast?.(
-        err instanceof Error ? err.message : "Could not save that work.",
+        errorMessage(err, "Could not save that work."),
       );
     } finally {
       setBusy(false);
@@ -8382,6 +8379,23 @@ function SummaryStep({
   );
 }
 
+// "Today, 2:00 PM" / "Oct 3, 9:30 AM" — the same wording the booking drawer's
+// "Customer moved this from … to …" confirm uses, so both surfaces read alike.
+function formatRescheduleLabel(scheduledDate: string, scheduledTime: string): string {
+  const [hours, minutes] = (scheduledTime || "").split(":").map(Number);
+  const t = new Date();
+  t.setHours(hours || 0, minutes || 0, 0, 0);
+  const timeLabel = scheduledTime
+    ? t.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+    : "";
+  if (scheduledDate === new Date().toISOString().slice(0, 10)) return `Today, ${timeLabel}`;
+  const dateLabel = new Date(scheduledDate + "T00:00:00").toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  return `${dateLabel}, ${timeLabel}`;
+}
+
 /**
  * Post-submit status panel for the Pre-Job Approval flow. Five states, all
  * driven reactively by the useApprovalWorkflow hook. Mechanic-facing copy
@@ -8409,6 +8423,15 @@ function ApprovalStatusPanel({
     null | "start" | "release" | "withdraw" | "continue"
   >(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  // Set when "Confirm booking →" hit CUSTOMER_RESCHEDULE_PENDING: the customer
+  // moved this request, so the shop reviews old → new here and acknowledges,
+  // instead of dead-ending on an error with no way forward (bug #403).
+  const [rescheduleConfirm, setRescheduleConfirm] = useState<{
+    previousDate: string | null;
+    previousTime: string | null;
+    newDate: string;
+    newTime: string;
+  } | null>(null);
   // No auto-dismiss: every state requires an explicit mechanic action
   // (Confirm, Withdraw, Revise, Release, Continue). Auto-closing the dialog
   // would strand the booking at live_stage=inspection_complete with no obvious
@@ -8434,8 +8457,35 @@ function ApprovalStatusPanel({
         // customer notice) instead of stranding them on an empty panel.
         onReviseRequested();
       }
-    } catch (err: any) {
-      setActionError(err?.message ?? "Action failed. Try again.");
+    } catch (err: unknown) {
+      const conflict = readBookingError(err);
+      if (kind === "start" && conflict?.code === "CUSTOMER_RESCHEDULE_PENDING") {
+        const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+        const newDate = str(conflict.newScheduledDate);
+        const newTime = str(conflict.newScheduledTime);
+        if (newDate && newTime) {
+          setRescheduleConfirm({
+            previousDate: str(conflict.previousScheduledDate),
+            previousTime: str(conflict.previousScheduledTime),
+            newDate,
+            newTime,
+          });
+        } else {
+          setActionError(
+            `${conflict.message} Accept it from the booking to review the new time.`,
+          );
+        }
+      } else if (kind === "start" && isStaleStateError(err)) {
+        // Someone already moved it on (accepted in another tab, customer
+        // cancelled); the booking shows the new truth — information only.
+        setRescheduleConfirm(null);
+        notify.info(conflict!.message);
+      } else {
+        // Read through the shared formatter: a Release/Confirm that lost a race
+        // (customer cancelled, customer moved the time) now carries a typed,
+        // readable sentence instead of the raw Convex wrapper (bug #394).
+        setActionError(errorMessage(err, "Action failed. Try again."));
+      }
     } finally {
       setBusyAction(null);
     }
@@ -8877,6 +8927,64 @@ function ApprovalStatusPanel({
             >
               Close
             </button>
+          </div>
+        ) : null}
+
+        {rescheduleConfirm ? (
+          <div className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-amber-50 px-5 py-5">
+            <p className="text-[14px] font-semibold text-amber-900">
+              Accept the customer&apos;s new time?
+            </p>
+            <p className="mt-1 text-[13px] text-amber-900/80">
+              {rescheduleConfirm.previousDate && rescheduleConfirm.previousTime
+                ? `The customer moved this from ${formatRescheduleLabel(
+                    rescheduleConfirm.previousDate,
+                    rescheduleConfirm.previousTime,
+                  )} to ${formatRescheduleLabel(
+                    rescheduleConfirm.newDate,
+                    rescheduleConfirm.newTime,
+                  )} — accept the new time?`
+                : `The customer moved this to ${formatRescheduleLabel(
+                    rescheduleConfirm.newDate,
+                    rescheduleConfirm.newTime,
+                  )} — accept the new time?`}
+            </p>
+            <div className="mt-4 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setRescheduleConfirm(null)}
+                disabled={busyAction === "start"}
+                className={cn(
+                  drawerSecondaryButtonClassName,
+                  "h-9 rounded-lg px-4 text-[12px]",
+                )}
+              >
+                Keep reviewing
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  // Send back exactly the time shown above: a second move by
+                  // the customer while this sat open is rejected, not accepted.
+                  const shown = {
+                    newDate: rescheduleConfirm.newDate,
+                    newTime: rescheduleConfirm.newTime,
+                  };
+                  setRescheduleConfirm(null);
+                  void runAction("start", () => workflow.onStartWork(shown));
+                }}
+                disabled={busyAction === "start"}
+                className={cn(
+                  drawerPrimaryButtonClassName,
+                  "h-9 rounded-lg px-4 text-[12px]",
+                )}
+              >
+                {busyAction === "start" ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : null}
+                Accept new time
+              </button>
+            </div>
           </div>
         ) : null}
 

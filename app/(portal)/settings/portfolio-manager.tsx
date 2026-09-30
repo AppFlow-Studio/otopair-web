@@ -1,5 +1,6 @@
 "use client";
 
+import { errorMessage } from "@/lib/feedback";
 import { useRef, useState } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { ChevronLeft, ChevronRight, ImagePlus, Loader2, X } from "lucide-react";
@@ -72,7 +73,7 @@ export default function PortfolioManager({
         await addImage({ shopId, storageId });
       } catch (error: unknown) {
         failures.push(
-          `${file.name}: ${error instanceof Error ? error.message : "could not upload"}`,
+          `${file.name}: ${errorMessage(error, "could not upload")}`,
         );
       }
       done += 1;
@@ -92,7 +93,7 @@ export default function PortfolioManager({
     try {
       await removeImage({ shopId, portfolioId });
     } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : "Could not remove the photo.");
+      setMessage(errorMessage(error, "Could not remove the photo."));
     } finally {
       setBusyId(null);
     }
@@ -109,7 +110,7 @@ export default function PortfolioManager({
     try {
       await reorder({ shopId, orderedIds: ids });
     } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : "Could not reorder photos.");
+      setMessage(errorMessage(error, "Could not reorder photos."));
     } finally {
       setBusyId(null);
     }
@@ -127,7 +128,7 @@ export default function PortfolioManager({
         return next;
       });
     } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : "Could not save the caption.");
+      setMessage(errorMessage(error, "Could not save the caption."));
     } finally {
       setBusyId(null);
     }

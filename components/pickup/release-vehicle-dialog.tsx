@@ -22,6 +22,7 @@ import { Loader2 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 function formatFee(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;
@@ -83,7 +84,7 @@ export function ReleaseVehicleDialog({
       reset();
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't release — try again.");
+      setError(errorMessage(e, "Couldn't release — try again."));
       setSubmitting(false);
     }
   }
@@ -218,7 +219,7 @@ export function DeclinePickupDialog({
       setSubmitting(false);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send — try again.");
+      setError(errorMessage(e, "Couldn't send — try again."));
       setSubmitting(false);
     }
   }

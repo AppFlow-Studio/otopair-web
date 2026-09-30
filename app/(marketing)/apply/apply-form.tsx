@@ -7,6 +7,7 @@ import { CheckCircle2, ChevronLeft, Loader2 } from "lucide-react";
 import { PillButton, PillLink } from "@/components/flagship/pill-button";
 import { serif } from "@/components/flagship/landing/reveal";
 import { useAddressAutocomplete } from "./use-address-autocomplete";
+import { errorMessage } from "@/lib/feedback";
 
 const STEPS = [
   { key: "shop", title: "Your shop", helper: "The basics about your business." },
@@ -56,7 +57,7 @@ export default function ApplyForm() {
     try {
       validateStep(step);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Please check your entries.");
+      setError(errorMessage(err, "Please check your entries."));
       return;
     }
     setError(null);

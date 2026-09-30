@@ -1,5 +1,6 @@
 "use client";
 
+import { errorMessage } from "@/lib/feedback";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -313,7 +314,7 @@ export default function WalkInNewPage() {
         if (!token) tokenErr = "already_claimed";
       } catch (e) {
         token = null;
-        tokenErr = e instanceof Error ? e.message : "mint-failed";
+        tokenErr = errorMessage(e, "mint-failed");
       }
 
       // If a 17-char VIN was entered, decode via NHTSA and attach the
@@ -349,7 +350,7 @@ export default function WalkInNewPage() {
           }
         } catch (e) {
           vehicleAttachFailedReason =
-            e instanceof Error ? e.message : "vehicle-attach failed";
+            errorMessage(e, "vehicle-attach failed");
         }
       }
       // Silence unused-var lint until we surface this on the banner too.
@@ -366,9 +367,7 @@ export default function WalkInNewPage() {
       router.push(`/bookings?${params.toString()}`);
     } catch (err: unknown) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "Couldn't create the appointment. Please try again.",
+        errorMessage(err, "Couldn't create the appointment. Please try again."),
       );
       setSaving(false);
     }

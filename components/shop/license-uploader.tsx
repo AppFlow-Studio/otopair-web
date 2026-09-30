@@ -22,6 +22,7 @@ import {
   isKnownDocumentType,
   type DocumentType,
 } from "@/lib/license-catalog";
+import { errorMessage } from "@/lib/feedback";
 
 const DMV_LICENSE_TYPE = "dmv_inspection_station";
 const ACCEPT = "application/pdf,image/png,image/jpeg,image/webp";
@@ -159,7 +160,7 @@ function DocumentCard({
       setExpiry("");
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to upload the document.",
+        errorMessage(err, "Failed to upload the document."),
       );
     } finally {
       setUploading(false);
@@ -177,7 +178,7 @@ function DocumentCard({
       });
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to remove the document.",
+        errorMessage(err, "Failed to remove the document."),
       );
     } finally {
       setRemoving(false);
@@ -386,7 +387,7 @@ function AddCustomDocument({ shopId }: { shopId: Id<"shops"> }) {
       setOpen(false);
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to upload the document.",
+        errorMessage(err, "Failed to upload the document."),
       );
     } finally {
       setUploading(false);

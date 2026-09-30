@@ -11,10 +11,12 @@
 //
 // Conflicts are rethrown as `ConvexError({ code: "SLOT_UNAVAILABLE" })` so the
 // dialog can deselect the slot and show a friendly "just got booked" notice
-// instead of a stack trace. The shared availability helpers keep throwing plain
-// `Error` — the mobile app's callers are unaffected.
+// instead of a stack trace. The shared availability helpers throw typed
+// `bookingError`s whose `.message` is still the plain sentence, so callers that
+// read `err.message` are unaffected.
 // ============================================================================
 import { ConvexError } from "convex/values";
+import { readBookingError } from "./bookingErrors";
 import { assertMechanicAvailableForWindow } from "./timeSlotAvailability";
 import {
   resolveSlotHoldForConsume,
@@ -62,12 +64,19 @@ export async function assertQuoteSlotAvailable(
       excludeSessionId: holdIsForThisMechanic ? held.excludeSessionId : undefined,
     });
   } catch (e) {
+    // The availability asserts now throw typed booking errors. A slot
+    // conflict is already the shape the quote dialogs read — pass it through
+    // untouched. Anything else (outside hours, inactive mechanic) is still a
+    // "pick another slot" for these dialogs, so wrap it under the same wire
+    // code with the inner sentence. Read `data.message` first: a ConvexError's
+    // own `.message` can be the JSON-stringified payload.
+    const inner = readBookingError(e);
+    if (inner?.code === SLOT_UNAVAILABLE) throw e;
     throw new ConvexError({
       code: SLOT_UNAVAILABLE,
       message:
-        e instanceof Error && e.message
-          ? e.message
-          : "That time is no longer available.",
+        inner?.message ??
+        (e instanceof Error && e.message ? e.message : "That time is no longer available."),
     });
   }
 

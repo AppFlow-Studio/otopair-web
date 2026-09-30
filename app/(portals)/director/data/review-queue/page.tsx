@@ -12,6 +12,7 @@ import { Ceremony } from "@/components/portal/Ceremony";
 import { AuditDrawer } from "@/components/portal/AuditDrawer";
 import type { Doc } from "@/convex/_generated/dataModel";
 import { useCan, usePortalSession } from "@/app/(portals)/portal-session";
+import { errorMessage } from "@/lib/feedback";
 
 type Item = Doc<"review_queue">;
 type Stream = "consensus" | "correction" | "report" | "survey";
@@ -92,7 +93,7 @@ export default function ReviewQueuePage() {
     try {
       await claim({ token, id: selected._id });
     } catch (e) {
-      setClaimError(e instanceof Error ? e.message : "Claim failed.");
+      setClaimError(errorMessage(e, "Claim failed."));
     } finally {
       setClaimBusy(false);
     }

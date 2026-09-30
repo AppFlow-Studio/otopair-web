@@ -1,5 +1,6 @@
 "use client";
 
+import { errorMessage } from "@/lib/feedback";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation } from "convex/react";
 import Cropper from "react-easy-crop";
@@ -101,7 +102,7 @@ export default function ShopLogoUploader({
       setSourceUrl(null);
       setMessage("Logo updated.");
     } catch (error: unknown) {
-      setDialogError(error instanceof Error ? error.message : "Could not save the logo.");
+      setDialogError(errorMessage(error, "Could not save the logo."));
     } finally {
       setIsSaving(false);
     }
@@ -113,7 +114,7 @@ export default function ShopLogoUploader({
     try {
       await clearShopLogo({ shopId });
     } catch (error: unknown) {
-      setMessage(error instanceof Error ? error.message : "Could not remove the logo.");
+      setMessage(errorMessage(error, "Could not remove the logo."));
     } finally {
       setIsRemoving(false);
     }

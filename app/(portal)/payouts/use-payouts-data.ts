@@ -17,6 +17,7 @@
  *   - lastUpdatedAt, so the header can say how fresh the numbers are
  */
 
+import { errorMessage } from "@/lib/feedback";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PayoutsOverview } from "@/components/payouts/types";
 
@@ -84,7 +85,7 @@ export function useStripeOverview(
     } catch (err) {
       if (controller.signal.aborted) return;
       if (err instanceof DOMException && err.name === "AbortError") return;
-      setError(err instanceof Error ? err.message : "Failed to load payouts.");
+      setError(errorMessage(err, "Failed to load payouts."));
     } finally {
       if (!controller.signal.aborted) {
         setLoading(false);
@@ -132,7 +133,7 @@ export async function openStripeExpressDashboard(): Promise<string | null> {
     return null;
   } catch (err) {
     target?.close();
-    return err instanceof Error ? err.message : "Failed to open Stripe Express.";
+    return errorMessage(err, "Failed to open Stripe Express.");
   }
 }
 

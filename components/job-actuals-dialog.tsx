@@ -1,11 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "convex/react";
+import { api } from "@/convex/_generated/api";
+import type { Id } from "@/convex/_generated/dataModel";
 import { createPortal } from "react-dom";
 import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
 import { MAX_PRICE_DOLLARS, clampPriceDollarsInput } from "@/lib/price-cap";
-import { hasUnnamedPricedPart, UNNAMED_PRICED_PART_MESSAGE } from "@/lib/job-actuals";
+import {
+  getDefaultLaborMinutes,
+  hasUnnamedPricedPart,
+  UNNAMED_PRICED_PART_MESSAGE,
+} from "@/lib/job-actuals";
 import { notify } from "@/lib/feedback";
 
 type JobActualPart = {
@@ -61,22 +68,6 @@ function buildPartRows(parts?: JobActualPart[]) {
   }));
 }
 
-function getDefaultLaborMinutes(
-  jobActuals: JobActualDetails,
-  estimatedLaborMinutes?: number | null
-) {
-  if (jobActuals?.actualLaborMinutes != null) {
-    return jobActuals.actualLaborMinutes;
-  }
-
-  if (jobActuals?.startedAt != null) {
-    const endedAt = jobActuals.completedAtMs ?? Date.now();
-    return Math.max(0, Math.round((endedAt - jobActuals.startedAt) / 60000));
-  }
-
-  return estimatedLaborMinutes ?? null;
-}
-
 function toPayload(parts: PartRowState[], values: {
   laborHours: string;
   partsCost: string;
@@ -114,6 +105,7 @@ function toPayload(parts: PartRowState[], values: {
 export default function JobActualsDialog({
   open,
   mode,
+  bookingId,
   estimatedLaborMinutes,
   laborRateCents,
   jobActuals,
@@ -125,6 +117,9 @@ export default function JobActualsDialog({
 }: {
   open: boolean;
   mode: "complete" | "edit";
+  /** When given, the labor prefill reads the job clock and starts at WORKED
+   *  time (pauses and blockers subtracted), not wall clock (bug #348). */
+  bookingId?: Id<"bookings"> | null;
   estimatedLaborMinutes?: number | null;
   /** Shop labor rate (cents/hr) for this booking's tier — from getJobDetail's
    *  `shopLaborRateCents`. Powers the live $10,000 labor-charge warning; the
@@ -144,13 +139,32 @@ export default function JobActualsDialog({
   const [parts, setParts] = useState<PartRowState[]>([]);
   const [activeAction, setActiveAction] = useState<"complete" | "draft" | "finalize" | null>(null);
 
+  const clock = useQuery(
+    api.jobClock.getForBooking,
+    open && bookingId ? { bookingId } : "skip",
+  );
+  // Worked-time labor (pauses and blockers subtracted) needs the clock, but
+  // the form must not wait for it: until this query answers, a dialog reopened
+  // for another booking would still show — and could save — the previous
+  // booking's figures (bug #348 follow-up). So: reset everything the moment it
+  // opens, then fill labor from the clock as a second step, only if nobody has
+  // typed in it. Later clock updates never overwrite typed hours.
+  const clockReady = !bookingId || clock !== undefined;
+  const clockRef = useRef(clock);
+  clockRef.current = clock;
+  const clockReadyRef = useRef(clockReady);
+  clockReadyRef.current = clockReady;
+  const laborTouchedRef = useRef(false);
+
   useEffect(() => {
     if (!open) return;
 
-    const defaultLaborMinutes = getDefaultLaborMinutes(
-      jobActuals,
-      estimatedLaborMinutes,
-    );
+    laborTouchedRef.current = false;
+    // Recorded labor (or a booking without a clock) is final now; anything
+    // derived from the clock waits for the effect below.
+    const defaultLaborMinutes = clockReadyRef.current
+      ? getDefaultLaborMinutes(jobActuals, estimatedLaborMinutes, clockRef.current ?? null)
+      : (jobActuals?.actualLaborMinutes ?? null);
     setLaborHoursText(
       defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
     );
@@ -160,6 +174,18 @@ export default function JobActualsDialog({
     setParts(buildPartRows(jobActuals?.partsUsed));
     setActiveAction(null);
   }, [estimatedLaborMinutes, jobActuals, open]);
+
+  useEffect(() => {
+    if (!open || !clockReady || laborTouchedRef.current) return;
+    const defaultLaborMinutes = getDefaultLaborMinutes(
+      jobActuals,
+      estimatedLaborMinutes,
+      clockRef.current ?? null,
+    );
+    setLaborHoursText(
+      defaultLaborMinutes != null ? formatHoursValue(defaultLaborMinutes) : "",
+    );
+  }, [estimatedLaborMinutes, jobActuals, open, clockReady]);
 
   useEffect(() => {
     if (!open) return;
@@ -183,7 +209,11 @@ export default function JobActualsDialog({
       ? "You can complete now and keep details as a draft, or finalize them immediately."
       : "Update or finalize the booking details recorded for this booking.";
 
+  // Saving before the clock answers would record a labor figure nobody saw
+  // settle (and, on a slow link, the blank placeholder), so hold the submit
+  // actions until it has.
   const actionDisabled = activeAction !== null;
+  const submitDisabled = actionDisabled || (open && !clockReady);
 
   // Live $10,000 labor-charge guard for the walk-in cash path: this dialog's
   // hours become minutes × the shop rate at billing (ensureWalkInCashPayment),
@@ -274,9 +304,10 @@ export default function JobActualsDialog({
               type="text"
               inputMode="decimal"
               value={laborHoursText}
-              onChange={(event) =>
-                setLaborHoursText(event.target.value.replace(/[^0-9.]/g, ""))
-              }
+              onChange={(event) => {
+                laborTouchedRef.current = true;
+                setLaborHoursText(event.target.value.replace(/[^0-9.]/g, ""));
+              }}
               className={`w-full rounded-lg border bg-background px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-primary ${
                 laborOverCap ? "border-amber-400" : "border-border"
               }`}
@@ -447,7 +478,7 @@ export default function JobActualsDialog({
             <button
               type="button"
               onClick={() => void runAction("complete", onCompleteOnly)}
-              disabled={actionDisabled || laborOverCap}
+              disabled={submitDisabled || laborOverCap}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
             >
               {activeAction === "complete" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -457,7 +488,7 @@ export default function JobActualsDialog({
             <button
               type="button"
               onClick={() => void runAction("draft", onSaveDraft)}
-              disabled={actionDisabled}
+              disabled={submitDisabled}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium text-foreground transition-colors hover:bg-muted disabled:opacity-50"
             >
               {activeAction === "draft" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
@@ -467,7 +498,7 @@ export default function JobActualsDialog({
           <button
             type="button"
             onClick={() => void runAction("finalize", onFinalize)}
-            disabled={actionDisabled || laborOverCap}
+            disabled={submitDisabled || laborOverCap}
             className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {activeAction === "finalize" ? <Loader2 className="h-4 w-4 animate-spin" /> : null}

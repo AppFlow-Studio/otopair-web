@@ -8,6 +8,7 @@ import {
   getStripe,
   getStripeConnectRequirements,
 } from "@/lib/stripe";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 function getBaseUrl(request: NextRequest) {
   return getAppBaseUrl(request.nextUrl.origin);
@@ -143,8 +144,7 @@ export async function POST(request: NextRequest) {
       url,
     });
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to start Stripe onboarding.";
+    const message = formatBookingError(error, "Failed to start Stripe onboarding.");
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -25,6 +25,7 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { Loader2, ScanLine } from "lucide-react";
+import { errorMessage } from "@/lib/feedback";
 
 export default function VinRepairPrompt({
   bookingId,
@@ -70,7 +71,7 @@ export default function VinRepairPrompt({
       setOpen(false);
       setVin("");
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not save that VIN.");
+      setError(errorMessage(err, "Could not save that VIN."));
     } finally {
       setBusy(false);
     }

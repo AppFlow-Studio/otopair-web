@@ -6,6 +6,7 @@ import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { AlertCircle, Clock, Loader2, Wrench } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
+import { errorMessage } from "@/lib/feedback";
 
 function fmt12h(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
@@ -125,7 +126,7 @@ export default function OverrunExtendCard({
       await answerCheckIn({ bookingId, isComplete: true });
       onToast?.("Overrun check-in closed");
     } catch (err) {
-      onToast?.(err instanceof Error ? err.message : "Could not close check-in");
+      onToast?.(errorMessage(err, "Could not close check-in"));
     } finally {
       setBusy(false);
     }
@@ -143,7 +144,7 @@ export default function OverrunExtendCard({
       );
       reset();
     } catch (err) {
-      onToast?.(err instanceof Error ? err.message : "Could not extend the job");
+      onToast?.(errorMessage(err, "Could not extend the job"));
     } finally {
       setBusy(false);
     }

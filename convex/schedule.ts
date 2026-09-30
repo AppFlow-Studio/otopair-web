@@ -23,6 +23,7 @@ import {
   getQuoteRevision,
   isQuoteHoldActive,
 } from "./lib/quoteHoldOwnership";
+import { slotHoldKind } from "./slotHolds";
 
 async function getCurrentUserOrNull(ctx: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -651,7 +652,17 @@ export const getActiveSlotHolds = query({
         startTime: h.start_time,
         endTime: h.end_time,
         mechanicId: h.mechanic_id,
+        // When the hold stops blocking. The grid hides it at this instant
+        // (this query doesn't re-run as time passes, only on row changes).
         expiresAt: h.expires_at,
+        // Who is holding it, so the grid can say "Customer checking out"
+        // instead of an anonymous "On hold" (bug #393). Derived from the row,
+        // so holds from app builds already in the field label correctly.
+        kind: slotHoldKind(h),
+        // The Director-TTL cap. Equal to expiresAt unless the client is on a
+        // liveness lease, in which case expiresAt is the next heartbeat
+        // deadline and this is the latest the hold can last.
+        hardExpiresAt: (h.hard_expires_at ?? h.expires_at) as number,
       }));
   },
 });

@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import { formatMoneyCents } from "./shared";
 import type { ShopPaymentDetail } from "./types";
+import { errorMessage } from "@/lib/feedback";
 
 const REASONS = [
   { value: "requested_by_customer", label: "Customer asked for it" },
@@ -126,7 +127,7 @@ export function PaymentRefundForm({
     } catch (err) {
       // Dialog stays open on failure — closing it would leave the user unsure
       // whether anything happened.
-      setError(err instanceof Error ? err.message : "Refund failed.");
+      setError(errorMessage(err, "Refund failed."));
     } finally {
       setBusy(false);
     }

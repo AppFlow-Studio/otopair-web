@@ -18,6 +18,7 @@ import { useLockedQuote } from "@/lib/use-locked-quote";
 import DiagnosticChecklistDialog from "@/components/diagnostic-checklist-dialog";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import ConfirmationDialog from "@/components/confirmation-dialog";
+import { errorCode, errorMessage, isStaleStateError, readBookingError } from "@/lib/feedback";
 import {
   splitDiagnosticServices,
   templateForSystem,
@@ -280,14 +281,16 @@ export default function MechanicDashboard() {
         bookingId: bookingId as Id<"bookings">,
         newStatus: "in_progress",
         reason: "job_started",
+        // The ready list only shows checked-in cars; a stale card must not
+        // start a booking that moved since it rendered.
+        expectedStatus: "vehicle_at_shop",
       });
       setToast("Job started");
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "";
-      if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+      if (errorCode(error) === "MECHANIC_HAS_ACTIVE_JOB") {
         setToast("Finish your current in-progress job first — then start this one.");
       } else {
-        setToast(message || "Could not start the job.");
+        setToast(errorMessage(error, "Could not start the job."));
       }
     } finally {
       setBusyAction(null);
@@ -362,18 +365,19 @@ export default function MechanicDashboard() {
         closeWorkflowDialog();
       }
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "";
-      if (message.startsWith("MECHANIC_HAS_ACTIVE_JOB:")) {
+      if (errorCode(error) === "MECHANIC_HAS_ACTIVE_JOB") {
         closeWorkflowDialog();
         setToast(
           "Finish your current in-progress job first — then start this one.",
         );
       } else {
         setToast(
-          message ||
-            (action === "close"
+          errorMessage(
+            error,
+            action === "close"
               ? "Could not save the pre-job vehicle check"
-              : "Could not start booking"),
+              : "Could not start booking",
+          ),
         );
         throw error;
       }
@@ -407,7 +411,15 @@ export default function MechanicDashboard() {
       setToast("Booking completed");
       closeWorkflowDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not complete booking");
+      if (isStaleStateError(error)) {
+        // Lost a race (customer cancelled, job moved): the dashboard already
+        // shows the new state, so say what happened and close the form —
+        // not a failure, and no rethrow so the dialog doesn't repeat it.
+        closeWorkflowDialog();
+        setToast(readBookingError(error)!.message);
+        return;
+      }
+      setToast(errorMessage(error, "Could not complete booking"));
       throw error;
     } finally {
       setBusyAction(null);
@@ -426,7 +438,7 @@ export default function MechanicDashboard() {
       setToast("Actuals draft saved.");
       closeActualsDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not save actuals");
+      setToast(errorMessage(error, "Could not save actuals"));
       throw error;
     } finally {
       setBusyAction(null);
@@ -445,7 +457,7 @@ export default function MechanicDashboard() {
       setToast("Actuals finalized.");
       closeActualsDialog();
     } catch (error: unknown) {
-      setToast(error instanceof Error ? error.message : "Could not finalize actuals");
+      setToast(errorMessage(error, "Could not finalize actuals"));
       throw error;
     } finally {
       setBusyAction(null);
@@ -1008,6 +1020,7 @@ export default function MechanicDashboard() {
         <JobActualsDialog
           open={actualsBookingId !== null}
         mode={actualsDialogMode}
+        bookingId={actualsBookingId}
         estimatedLaborMinutes={selectedBooking?.estimatedLaborMinutes ?? null}
         laborRateCents={(selectedBooking as any)?.shopLaborRateCents ?? null}
         jobActuals={selectedBooking?.jobActuals ?? null}

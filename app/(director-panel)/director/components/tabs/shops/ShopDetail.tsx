@@ -22,6 +22,7 @@ import type {
 } from './types'
 import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } from '@/lib/license-catalog'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { errorMessage } from '@/lib/feedback'
 
 const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
 
@@ -153,7 +154,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
     try {
       const res = await updateBasics({ id: sid, phone: editPhone, email: editEmail, address: editAddress, website: editWebsite, actorName, actorId })
       setToast(res?.ok ? (res.changes > 0 ? `Saved ${res.changes} change${res.changes === 1 ? '' : 's'}.` : 'No changes.') : 'Save failed.')
-    } catch (e) { setToast(e instanceof Error ? e.message : 'Save failed.') } finally { setSaving(false) }
+    } catch (e) { setToast(errorMessage(e, 'Save failed.')) } finally { setSaving(false) }
   }
 
   const handleAction = async (action: string, reason: string) => {
@@ -169,14 +170,14 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
     try {
       await reviewShopLicense({ token, licenseId: reviewTarget.id as Id<'shop_licenses'>, status: reviewTarget.status, note: reason })
       setToast(`License ${reviewTarget.status} — logged in audit.`)
-    } catch (e) { setToast(e instanceof Error ? e.message : 'Review failed.') }
+    } catch (e) { setToast(errorMessage(e, 'Review failed.')) }
   }
 
   const handleSetPromotion = async (tier: 0 | 1 | 2) => {
     try {
       await setShopPromotion({ token, id: sid, tier })
       setToast(`Promotion set to ${PROMOTION_LABEL[tier]} — logged in audit.`)
-    } catch (e) { setToast(e instanceof Error ? e.message : 'Update failed.') }
+    } catch (e) { setToast(errorMessage(e, 'Update failed.')) }
   }
 
   const handleStripeOnboarding = async () => {
@@ -186,7 +187,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
       const res = await createOnboardingLink({ stripeAccountId: profile.stripeAccountId ?? undefined, shopName: profile.name, shopEmail: profile.email ?? undefined, baseUrl: window.location.origin })
       if (res.ok) { window.open(res.url, '_blank', 'noopener,noreferrer'); setToast(res.created ? 'Connected account created. Onboarding URL opened.' : 'Onboarding URL opened in new tab.') }
       else setToast(`Stripe error: ${res.error}`)
-    } catch (e) { setToast(e instanceof Error ? e.message : 'Stripe link failed.') } finally { setStripeLoading(false) }
+    } catch (e) { setToast(errorMessage(e, 'Stripe link failed.')) } finally { setStripeLoading(false) }
   }
 
   const openRateCeremony = () => {

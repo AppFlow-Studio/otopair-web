@@ -1010,8 +1010,21 @@ export function VehiclePassportCard({
   const totalDollars = money ? money.totals.totalCents / 100 : job.totalCost;
   const laborDollars = money ? money.totals.laborCents / 100 : job.laborCost;
   const partsDollars = money ? money.totals.partsCents / 100 : job.partsCost;
-  const laborMinutes = money ? money.totals.laborMinutes : job.estimatedLaborMinutes;
   const setPriceDollars = money ? money.totals.setPriceCents / 100 : 0;
+  // A set-price line carries no labor minutes in the statement (its time is
+  // inside the price), so a set-price-only booking sums to 0 — fall back to
+  // the booked estimate so "(30M)" stays on the card (#390).
+  const laborMinutes =
+    money && (money.totals.laborMinutes ?? 0) > 0
+      ? money.totals.laborMinutes
+      : job.estimatedLaborMinutes;
+  // The statement keeps set-price lines out of laborCents/partsCents, so a
+  // set-price-only booking read "LABOR $0.00 · PARTS $0.00" under a $169.50
+  // total (#390). Like the receipt, which lists a set price among the labor
+  // lines, the LABOR cell carries the set price; PARTS says the parts are in
+  // it rather than printing $0.00.
+  const laborCellDollars = laborDollars + setPriceDollars;
+  const partsIncludedInSetPrice = setPriceDollars > 0 && partsDollars === 0;
   const taxAndFeeDollars = money
     ? (money.totals.taxCents + money.totals.feeCents) / 100
     : null;
@@ -1120,16 +1133,29 @@ export function VehiclePassportCard({
               {laborMinutes ? ` (${formatLaborMinutes(laborMinutes)})` : ""}
             </p>
             <p className="mt-0.5 text-sm font-medium text-foreground">
-              {formatCurrency(laborDollars)}
+              {formatCurrency(laborCellDollars)}
             </p>
+            {setPriceDollars > 0 ? (
+              <p className="text-[11px] tabular-nums text-muted-foreground">
+                {laborDollars > 0
+                  ? `incl. set price ${formatCurrency(setPriceDollars)}`
+                  : "Set price"}
+              </p>
+            ) : null}
           </div>
           <div className="px-4 py-2.5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Parts
             </p>
-            <p className="mt-0.5 text-sm font-medium text-foreground">
-              {formatCurrency(partsDollars)}
-            </p>
+            {partsIncludedInSetPrice ? (
+              <p className="mt-0.5 text-sm font-medium text-muted-foreground">
+                In set price
+              </p>
+            ) : (
+              <p className="mt-0.5 text-sm font-medium text-foreground">
+                {formatCurrency(partsDollars)}
+              </p>
+            )}
           </div>
         </div>
       </div>

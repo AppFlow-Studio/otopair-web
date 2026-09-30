@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import { auth } from "@clerk/nextjs/server";
 import { fetchMutation } from "convex/nextjs";
 import { api } from "@/convex/_generated/api";
+import { formatBookingError } from "@/convex/lib/bookingErrors";
 
 // STEP 4 — Authenticated owner claims the shop. Requires a Clerk session; binds
 // the owner to the shop atomically (in Convex), then sets Clerk metadata so the
@@ -35,7 +36,7 @@ export async function POST(req: NextRequest) {
         { token: convexToken },
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const message = formatBookingError(err, "Couldn't accept this invite. Try again.");
       return NextResponse.json({ error: message }, { status: 400 });
     }
 

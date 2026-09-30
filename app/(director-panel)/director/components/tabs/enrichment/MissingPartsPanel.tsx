@@ -17,6 +17,7 @@ import type { FunctionReturnType } from 'convex/server'
 import type { Id } from '@/convex/_generated/dataModel'
 import { Button, Sidebar, MicroH, Input, IconSearch } from '../../Primitives'
 import { Panel, Empty, SkeletonBlock, CarAccordionItem, CountPill, CopyableMono, RunChip, RunLink } from './helpers'
+import { errorMessage } from '@/lib/feedback'
 
 export type MissingPartFlag = FunctionReturnType<typeof api.directorPartQuality.scanMissingParts>['flags'][number]
 
@@ -138,7 +139,7 @@ export function AddMissingPartDrawer({ token, flag, onClose, goDeepDive }: {
       await addFitment({ token, vehicleConfigId: flag.configId as Id<'vehicle_configs'>, serviceSlug: flag.serviceSlug, roleKey: flag.roleKey, oemNumber: oem.trim(), partName: name.trim() || undefined })
       setBusy(false); setDone(true)
     } catch (e) {
-      setBusy(false); setErr(e instanceof Error ? e.message : 'Failed to save.')
+      setBusy(false); setErr(errorMessage(e, 'Failed to save.'))
     }
   }
 

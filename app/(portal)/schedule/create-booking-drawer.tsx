@@ -44,6 +44,7 @@ import {
 } from "@/components/custom-job-taxonomy-picker";
 import KnownNameSuggestions from "@/components/booking/known-name-suggestions";
 import { sanitizeVinInput } from "@/lib/vin";
+import { errorCode, errorMessage } from "@/lib/feedback";
 import {
   resolveCombinedLabor,
   type CombinedLaborServiceInput,
@@ -128,35 +129,21 @@ function getShopHoursForDate(shopHours: ShopHour[], date: string) {
   return shopHours.find((hour) => hour.dayOfWeek === dayOfWeek) ?? null;
 }
 
+// One readable sentence for a failed create/hold/backfill. Built on the shared
+// formatter, which reads a typed ConvexError's own copy first (SLOT_UNAVAILABLE,
+// OUTSIDE_SHOP_HOURS, SERVICE_NOT_OFFERED…) and strips the Convex wrapper and
+// stack from legacy plain Errors — the old private regex only knew
+// "Uncaught Error:", so typed errors leaked as raw text (bug #394).
 function getUserFacingErrorMessage(err: unknown): string {
-  const fallback = "Failed to create booking";
-  if (!(err instanceof Error)) return fallback;
+  return errorMessage(err, "Failed to create booking");
+}
 
-  // Prefer a structured ConvexError payload when present (no stack noise).
-  const data = (err as { data?: unknown }).data;
-  let message =
-    typeof data === "string" && data.trim()
-      ? data.trim()
-      : data && typeof (data as { message?: unknown }).message === "string"
-        ? String((data as { message: string }).message).trim()
-        : err.message.trim();
-
-  // Strip the Convex wrapper prefix: "[CONVEX M(...)] [Request ID: ...]
-  // Server Error Uncaught Error: <real message> ...".
-  const afterUncaught = message.match(/Uncaught Error:\s*([\s\S]+)$/);
-  if (afterUncaught?.[1]) message = afterUncaught[1].trim();
-
-  // Cut everything from the first stack frame (" at fn (path:line:col)") and
-  // drop the "Called by client" trailer — leaving just the human sentence.
-  message = message
-    // Cut the first stack frame (" at fn (path)") and everything after it —
-    // [\s\S]* spans newlines without needing the es2018 dotAll flag.
-    .replace(/\s+at\s+(?:async\s+)?[\w.$<>[\]]+\s*\([\s\S]*/, "")
-    .replace(/\s*\.?\s*Called by client\.?\s*$/i, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  return message || fallback;
+// The hold-failure toast asks the owner to pick another time — unless the
+// server's own sentence already says that, so it doesn't read twice.
+function withPickAnotherTime(message: string): string {
+  return /\b(?:pick|choose) (?:another|a different)\b/i.test(message)
+    ? message
+    : `${message} Please pick another open time.`;
 }
 
 function CollapsibleSection({
@@ -1327,7 +1314,7 @@ export default function CreateBookingDrawer({
         if (!cancelled) {
           setHold(null);
           onToastRef.current(
-            `${getUserFacingErrorMessage(err)} Please pick another open time.`,
+            withPickAnotherTime(getUserFacingErrorMessage(err)),
           );
         }
       }
@@ -1962,12 +1949,9 @@ export default function CreateBookingDrawer({
       );
       onClose();
     } catch (err: unknown) {
-      // ConvexError surfaces structured data on `err.data` on the client.
-      // Fall back to substring on `err.message` for safety in case the
-      // payload is missing (older builds, transport quirks).
-      const data = (err as { data?: { code?: string } } | undefined)?.data;
-      const msg = err instanceof Error ? err.message : String(err);
-      if (data?.code === "DUPLICATE_BACKFILL" || msg.includes("DUPLICATE_BACKFILL")) {
+      // backfillCompletedBooking throws a typed DUPLICATE_BACKFILL conflict
+      // (convex/lib/bookingErrors.ts), so the code is read off `err.data`.
+      if (errorCode(err) === "DUPLICATE_BACKFILL") {
         setBackfillDuplicateConfirmOpen(true);
       } else {
         onToast(getUserFacingErrorMessage(err));

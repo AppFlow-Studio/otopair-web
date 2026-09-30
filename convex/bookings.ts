@@ -45,10 +45,13 @@ import {
   evaluateRescheduleLimit,
 } from "./lib/cancellation_policy";
 import { mintClaimToken } from "./walkin_claims";
+import { blockedMinutesForBooking } from "./jobBlockers";
 import {
-  blockedMinutesForBooking,
-  isClockPausedForBooking,
-} from "./jobBlockers";
+  closeOpenJobPauses,
+  isClockStoppedAt,
+  loadJobClock,
+  stoppedMinutesAt,
+} from "./lib/jobClock";
 import {
   mileageSourceTag,
   pickPreferredOwner,
@@ -79,6 +82,23 @@ import {
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
+import { bookingError, throwBookingError } from "./lib/bookingErrors";
+import {
+  assertBookingDate,
+  assertBookingNotTerminal,
+  assertCustomerCanReschedule,
+  assertExpectedBookingState,
+  bookingStateChangedError,
+  customerRescheduleBlock,
+  finiteMsOrNull,
+  formatBookingSlotLabel,
+  inferAudience,
+  loadJobActualForBooking,
+  mechanicHasActiveJobError,
+  normalizeHHMM,
+  parseTimeToMinutes,
+  type BookingAudience,
+} from "./lib/bookingGuards";
 import { isRealVin, isPseudoVin, mintPseudoVin } from "./lib/vinIdentity";
 import {
   getActiveQuoteCheckoutHold,
@@ -110,8 +130,21 @@ import {
   resolveQuoteSeries,
   resolveVehicleConfigFromVin,
 } from "./lib/quoteEngine";
+import {
+  buildServerCheckoutLines,
+  checkoutPriceChangedError,
+  diffCheckoutPrice,
+  expectedCheckoutPriceValidator,
+  laborPriceChangedError,
+  loadServiceNames,
+  type ExpectedCheckoutPrice,
+} from "./lib/checkoutPrice";
 import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 import { assertPriceWithinCap } from "./lib/priceCap";
+import {
+  assertShopOffersServices,
+  registerQuotedServiceIfMissing,
+} from "./lib/shopServiceOffering";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
   minorRecordTypeForServiceSlug,
@@ -144,6 +177,12 @@ import {
   resolveSlotHoldForConsume,
   deleteConsumedSlotHold,
 } from "./slotHolds";
+import {
+  checkoutExpiredError,
+  isPrebookingReaped,
+  linkPrebookingAuthorization,
+  type PrebookingState,
+} from "./lib/prebookingAuthorization";
 import {
   ensureJobActualRecord,
   finalizeJobActuals,
@@ -757,42 +796,74 @@ export const cancelBooking = mutation({
   handler: async (
     ctx,
     args,
-  ): Promise<{ cancelled: boolean; feeCents: number; kind: string }> => {
+  ): Promise<{
+    cancelled: boolean;
+    feeCents: number;
+    kind: string;
+    /** Set when the booking had already ended before this call — someone else
+     *  won the race (the shop declined, it completed, or it was marked a
+     *  no-show). The caller must not claim "Booking cancelled" / "fee
+     *  charged" then; `status` + `cancelledByRole` say what actually happened. */
+    alreadyClosed?: true;
+    status?: string;
+    cancelledByRole?: string | null;
+  }> => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have already been removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have already been removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
     if (booking.user_id !== user._id) throw new Error("Not your booking.");
 
-    // Idempotent: already-terminal bookings can't be cancelled again.
+    // Idempotent: already-terminal bookings can't be cancelled again. Kept as
+    // a success-shaped return (not a throw) because builds in the field treat
+    // any throw as a failed cancel; the extra fields let new builds tell the
+    // customer who actually ended it (bug #394).
     if (isTerminal(booking.status)) {
       return {
         cancelled: booking.status === "cancelled",
         feeCents: (booking as any).cancellation_fee_cents ?? 0,
         kind: (booking as any).cancellation_kind ?? "free",
+        alreadyClosed: true,
+        status: booking.status,
+        cancelledByRole: (booking as any).cancelled_by_role ?? null,
       };
     }
 
     // Phase gate: once the car is at the shop or work has started, the
     // customer can't self-cancel — the app routes them to the shop instead.
     if (booking.status === "in_progress") {
-      throw new Error(
+      throw bookingError(
+        "JOB_ALREADY_STARTED",
         "Work is already underway — this booking can no longer be cancelled here. Message the shop to sort it out.",
+        { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "cancel" },
       );
     }
     if (booking.status === "vehicle_at_shop") {
-      throw new Error(
+      throw bookingError(
+        "VEHICLE_CHECKED_IN",
         "Your car is already at the shop. Use “Request to cancel & pick up car” so the shop can release it.",
+        { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "cancel" },
       );
     }
 
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const policy = resolvePolicy(shop);
+    // A stored time that can't be read (legacy "9:00 AM" rows are parsed; this
+    // is only true garbage) means no fee window — never a crash on cancel.
     const appointmentStartMs =
       booking.scheduled_date && booking.scheduled_time
-        ? toBookingDateTimeMs(
-            booking.scheduled_date,
-            booking.scheduled_time,
-            await getShopTimezone(ctx, booking.shop_id),
+        ? finiteMsOrNull(
+            toBookingDateTimeMs(
+              booking.scheduled_date,
+              booking.scheduled_time,
+              await getShopTimezone(ctx, booking.shop_id),
+              { onInvalid: "nan" },
+            ),
           )
         : null;
     const { feeCents, kind } = computeCancellationFee({
@@ -809,8 +880,16 @@ export const cancelBooking = mutation({
       typeof args.feeAcknowledgedCents === "number" &&
       args.feeAcknowledgedCents < feeCents
     ) {
-      throw new Error(
+      throw bookingError(
+        "FEE_CHANGED",
         "The cancellation fee changed. Please review the updated amount and try again.",
+        {
+          bookingId: String(booking._id),
+          currentStatus: booking.status,
+          attemptedAction: "cancel",
+          expectedCents: args.feeAcknowledgedCents,
+          currentCents: feeCents,
+        },
       );
     }
 
@@ -821,6 +900,7 @@ export const cancelBooking = mutation({
       reason: args.reason ?? "user_cancelled",
       cancellationFeeCents: feeCents,
       cancellationKind: kind,
+      audience: "customer",
     });
 
     if (booking.status === "pending_quote" || booking.status === "quotes_ready") {
@@ -1209,8 +1289,16 @@ export const releaseVehicleForPickup = mutation({
       typeof args.feeAcknowledgedCents === "number" &&
       args.feeAcknowledgedCents < feeCents
     ) {
-      throw new Error(
+      throw bookingError(
+        "FEE_CHANGED",
         "The cancellation fee changed. Please review the updated amount and try again.",
+        {
+          bookingId: String(booking._id),
+          currentStatus: booking.status,
+          attemptedAction: "release",
+          expectedCents: args.feeAcknowledgedCents,
+          currentCents: feeCents,
+        },
       );
     }
 
@@ -1358,17 +1446,30 @@ export const getCustomerBookingActions = query({
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const policy = resolvePolicy(shop);
     const timezone = (shop as any)?.timezone || DEFAULT_SHOP_TIMEZONE;
+    // Never throw on a stored time we can't read — the app subscribes to this
+    // query, and a throw here blanks every button on the booking card.
     const appointmentStartMs =
       booking.scheduled_date && booking.scheduled_time
-        ? toBookingDateTimeMs(booking.scheduled_date, booking.scheduled_time, timezone)
+        ? finiteMsOrNull(
+            toBookingDateTimeMs(booking.scheduled_date, booking.scheduled_time, timezone, {
+              onInvalid: "nan",
+            }),
+          )
         : null;
     const now = Date.now();
     const status = booking.status as string;
 
+    // Same predicate customerRequestReschedule enforces at commit (bug #403),
+    // so the Reschedule button can't promise a move the mutation will refuse.
+    const rescheduleBlock = customerRescheduleBlock(
+      booking,
+      await loadJobActualForBooking(ctx, booking._id),
+    );
+
     let blockedReason: string | null = null;
     let canCancel = false;
-    let canReschedule = false;
     let cancelKind: "free" | "late_cancel" | "request_shop" = "free";
+    const canReschedule = rescheduleBlock === null;
 
     if (isTerminal(status)) {
       blockedReason = `already_${status}`;
@@ -1381,9 +1482,8 @@ export const getCustomerBookingActions = query({
       cancelKind = "request_shop";
     } else {
       // pending / pending_shop_acceptance / pending_customer_acceptance /
-      // confirmed / quote stages → self-service cancel + reschedule.
+      // confirmed / quote stages → self-service cancel.
       canCancel = true;
-      canReschedule = true;
     }
 
     const cancelFee = computeCancellationFee({
@@ -1425,6 +1525,10 @@ export const getCustomerBookingActions = query({
       cancelKind,
       feeCentsIfCancelledNow,
       canReschedule,
+      // Why Reschedule is off, in the words the mutation would use.
+      rescheduleBlockedReason: rescheduleBlock
+        ? { code: rescheduleBlock.code, message: rescheduleBlock.message }
+        : null,
       rescheduleKind,
       freeUntilMs,
       rescheduleFreeUntilMs,
@@ -1752,6 +1856,10 @@ export const create = mutation({
     source_recommendation_id: v.optional(v.id("job_recommendations")),
   },
   handler: async (ctx, args) => {
+    // (bug #404) This legacy single-service path had no caller check at all:
+    // anyone could book as any user_id. Same gate createBatch uses.
+    await assertCreateBatchUser(ctx, args.user_id);
+
     const normalizedVin = toCanonicalVin(args.vin);
 
     const vehicle = await ctx.db
@@ -1770,6 +1878,12 @@ export const create = mutation({
     if (!ownership || ownership.status !== "active") {
       throw new Error("User does not own this vehicle");
     }
+
+    // (bug #404) Same commit-time offering guard as createBatchImpl.
+    await assertShopOffersServices(ctx, args.shop_id, [args.service_id], {
+      sourceRecommendationId: args.source_recommendation_id,
+      vin: normalizedVin,
+    });
 
     // ─── Enrichment gate ───────────────────────────────────────────────────
     // Parts-dependent services (anything not labor-only) require the vehicle's
@@ -2148,12 +2262,20 @@ async function assertLaborCostMatchesDuration(
         expectedDollars: expectedLaborCost,
       };
     }
-    throw new Error(
-      `LABOR_COST_TIER_MISMATCH: client labor_cost=$${args.laborCostDollars.toFixed(2)} ` +
+    // The internals stay in the log; the customer gets PRICE_CHANGED with a
+    // sentence they can act on (#390 — this used to surface verbatim as
+    // "LABOR_COST_TIER_MISMATCH: … Yassin server cost …"). In practice this is
+    // a shop labor-rate edit racing the checkout, or a stale screen.
+    console.warn(
+      `[assertLaborCostMatchesDuration] LABOR_COST_TIER_MISMATCH: client labor_cost=$${args.laborCostDollars.toFixed(2)} ` +
         `vs Yassin server cost=$${expectedLaborCost.toFixed(2)} ` +
         `(±8% = $${tolerance.toFixed(2)}, delta=-$${delta.toFixed(2)}). ` +
-        `Booking rejected — client cost is materially below engine.`,
+        `Booking rejected — client cost is materially below engine. vin=${args.vin}`,
     );
+    throw laborPriceChangedError({
+      previousLaborCents: Math.round(args.laborCostDollars * 100),
+      newLaborCents: Math.round(expectedLaborCost * 100),
+    });
   }
   return undefined;
 }
@@ -2260,6 +2382,7 @@ type CreateBatchArgs = {
     hold_amount_cents: number;
     payment_origin?: "card" | "apple_pay" | "google_pay";
   };
+  expected_price?: ExpectedCheckoutPrice;
 };
 
 /**
@@ -2353,6 +2476,12 @@ const createBatchArgs = {
         ),
       }),
     ),
+    // What Review & Pay showed when the customer tapped Authorize (#390).
+    // createBatchImpl rejects with PRICE_CHANGED when the commit would price a
+    // line differently (convex/lib/checkoutPrice.ts). Optional: builds that
+    // don't send it book exactly as before. Deploy the server before any app
+    // build sends it — the args validator rejects unknown fields.
+    expected_price: v.optional(expectedCheckoutPriceValidator),
 };
 
 async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise<string[]> {
@@ -2378,6 +2507,20 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
     if (!ownership || ownership.status !== "active") {
       throw new Error("User does not own this vehicle");
     }
+
+    // (bug #404) Re-read the shop's Settings → Services switch inside this
+    // transaction. A customer whose Review & Pay was open when the shop turned
+    // a service off used to book it anyway — nothing here read shop_services,
+    // so the toggle and the booking never conflicted. Covers createBatch,
+    // _createBatchAfterAuthorization and confirmPreauthorizedBatch (whose catch
+    // voids the card hold on this throw). A service the shop itself
+    // recommended for this car stays bookable there.
+    await assertShopOffersServices(
+      ctx,
+      args.shop_id,
+      args.services.map((s) => s.service_id),
+      { sourceRecommendationId: args.source_recommendation_id, vin: normalizedVin },
+    );
 
     const legacySlot = args.time_slot_id ? await ctx.db.get(args.time_slot_id) : null;
     const scheduledDate = legacySlot?.date ?? args.scheduled_date;
@@ -2475,15 +2618,6 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       serviceIds: args.services.map((s) => s.service_id),
       clientMinutes: args.displayed_labor_minutes,
       serverMinutes: enrichmentLaborMinutes,
-    });
-
-    const laborCostCheck = await assertLaborCostMatchesDuration(ctx, {
-      shopId: args.shop_id,
-      vin: normalizedVin,
-      serviceIds: args.services.map((s) => s.service_id),
-      laborCostDollars: labor_cost,
-      expectMinutes: args.displayed_labor_minutes,
-      servicePositions: Object.fromEntries(laborPositionByServiceId),
     });
 
     // ── Pre-Job Approval flow: disclosed range snapshot ──────────────
@@ -2628,24 +2762,6 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       },
     );
 
-    // Booking-level aggregate: union of computeDisclosedRange engine flags +
-    // any per-service `fallback_catch` / `engine_corrected_parts` we just
-    // detected + the booking-total price_outside_fallback_band check from
-    // Phase 2. Persisted on the booking row; the mobile review screen
-    // renders an "Estimate" pill when non-empty.
-    const aggregatedFlags = new Set<string>(disclosedRange.quote_flags);
-    for (const row of serviceQuoteFlagsForBooking) {
-      for (const f of row.flags) aggregatedFlags.add(f);
-    }
-    if (laborCostCheck) aggregatedFlags.add("labor_cost_above_engine");
-    const quoteFlagsForBooking = computeQuoteFallbackFlags({
-      baseFlags: Array.from(aggregatedFlags),
-      fallbackLow: disclosedRange.quote_fallback_low_dollars,
-      fallbackHigh: disclosedRange.quote_fallback_high_dollars,
-      clientTotalDollars: labor_cost + parts_cost,
-      vin: normalizedVin,
-    });
-
     // Single-point quote the mechanic confirms against (no min/max). For
     // flat-priced services, the locked-in `price_cents` replaces the raw
     // OEM unit prices captured in `pricedPartsSnapshot`, so the mechanic
@@ -2665,6 +2781,98 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       disclosedRange,
       quoted.total_cents,
     );
+
+    // ── Still the price the customer saw? (#390) ─────────────────────
+    // Everything above priced this booking from LIVE rows. New builds send
+    // `expected_price` — what Review & Pay rendered when the customer tapped
+    // Authorize — and a line that would now commit at a different price is
+    // rejected instead of booked silently (Tire Rotation shown $85, booked
+    // $150). Shop-priced lines compare exactly; estimate lines compare labor
+    // only (convex/lib/checkoutPrice.ts explains why parts/totals don't).
+    // Runs before the labor guard so a stale screen gets the itemized
+    // PRICE_CHANGED, not the generic labor one. No expected_price (every
+    // build in the field today) → no check, same as before.
+    if (args.expected_price) {
+      const expected = args.expected_price;
+      const fixedIds = new Set(
+        disclosedRange.fixed_price_lines.map((l) => String(l.service_id)),
+      );
+      // The engine is only needed to price an estimate line's labor (or the
+      // "after" of a removed set price); skip the reads otherwise.
+      const needsEngine = expected.lines.some(
+        (l) =>
+          (l.basis === "estimate" && l.labor_cents != null) ||
+          (l.basis === "shop_price" && !fixedIds.has(String(l.service_id))),
+      );
+      let engineQuotes: Awaited<ReturnType<typeof resolveQuoteSeries>>["quotes"] | null =
+        null;
+      if (needsEngine) {
+        const cfg = vehicle.vehicle_config_id
+          ? await ctx.db.get(vehicle.vehicle_config_id)
+          : await resolveVehicleConfigFromVin(ctx, normalizedVin);
+        if (cfg) {
+          engineQuotes = (
+            await resolveQuoteSeries(ctx, {
+              vehicle_config_id: cfg._id,
+              service_ids: args.services.map((s) => s.service_id),
+              shop_id: args.shop_id,
+              service_positions: Object.fromEntries(laborPositionByServiceId),
+            })
+          ).quotes;
+        }
+      }
+      const priceChanges = diffCheckoutPrice(
+        expected,
+        buildServerCheckoutLines({
+          services: args.services,
+          fixedPriceLines: disclosedRange.fixed_price_lines,
+          engineQuotes,
+        }),
+      );
+      if (priceChanges.length > 0) {
+        console.warn(
+          `[createBatch] PRICE_CHANGED shop=${args.shop_id} user=${args.user_id} ` +
+            JSON.stringify(priceChanges),
+        );
+        throw checkoutPriceChangedError({
+          changes: priceChanges,
+          serviceNames: await loadServiceNames(
+            ctx,
+            priceChanges.map((c) => c.serviceId),
+          ),
+          expected,
+          newTotalLowCents: reconciledRange.low_cents,
+          newTotalHighCents: reconciledRange.high_cents,
+        });
+      }
+    }
+
+    const laborCostCheck = await assertLaborCostMatchesDuration(ctx, {
+      shopId: args.shop_id,
+      vin: normalizedVin,
+      serviceIds: args.services.map((s) => s.service_id),
+      laborCostDollars: labor_cost,
+      expectMinutes: args.displayed_labor_minutes,
+      servicePositions: Object.fromEntries(laborPositionByServiceId),
+    });
+
+    // Booking-level aggregate: union of computeDisclosedRange engine flags +
+    // any per-service `fallback_catch` / `engine_corrected_parts` we just
+    // detected + the booking-total price_outside_fallback_band check from
+    // Phase 2. Persisted on the booking row; the mobile review screen
+    // renders an "Estimate" pill when non-empty.
+    const aggregatedFlags = new Set<string>(disclosedRange.quote_flags);
+    for (const row of serviceQuoteFlagsForBooking) {
+      for (const f of row.flags) aggregatedFlags.add(f);
+    }
+    if (laborCostCheck) aggregatedFlags.add("labor_cost_above_engine");
+    const quoteFlagsForBooking = computeQuoteFallbackFlags({
+      baseFlags: Array.from(aggregatedFlags),
+      fallbackLow: disclosedRange.quote_fallback_low_dollars,
+      fallbackHigh: disclosedRange.quote_fallback_high_dollars,
+      clientTotalDollars: labor_cost + parts_cost,
+      vin: normalizedVin,
+    });
 
     // What the booking row STORES for labor / parts / total: shop-priced
     // services at the shop's price, not the phone's $0 engine labor (#390).
@@ -2785,6 +2993,16 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
     await deleteConsumedSlotHold(ctx, holdConsume.consumeHoldId);
 
     if (args.preauthorized_payment) {
+      // (bug #393) Link the checkout's $20 authorization to this booking in the
+      // same transaction as its payments row. If the orphan reaper already
+      // claimed it (the app sat too long between authorizing and booking), this
+      // throws CHECKOUT_EXPIRED and the whole commit — booking, hold delete —
+      // rolls back, so no booking is left on a PI being cancelled.
+      await linkPrebookingAuthorization(ctx, {
+        paymentIntentId: args.preauthorized_payment.stripe_payment_intent_id,
+        bookingId,
+        now,
+      });
       const paymentId = await ctx.db.insert("payments", {
         booking_id: bookingId,
         user_id: args.user_id,
@@ -2915,6 +3133,17 @@ export const confirmPreauthorizedBatch = action({
       pi.status !== "succeeded" &&
       pi.status !== "processing"
     ) {
+      // (bug #393) The orphan reaper cancels a checkout authorization the app
+      // never turned into a booking — say that, not a raw Stripe status.
+      if (pi.status === "canceled") {
+        const prebookingState: string | null = await ctx.runQuery(
+          internal.payments_stripe._getPrebookingAuthorizationState,
+          { paymentIntentId },
+        );
+        if (prebookingState && isPrebookingReaped(prebookingState as PrebookingState)) {
+          throw checkoutExpiredError();
+        }
+      }
       throw new Error(`Card authorization failed (status: ${pi.status}).`);
     }
 
@@ -2971,6 +3200,8 @@ export const updateStatus = mutation({
     newStatus: v.string(),
     changed_by: v.optional(v.id("users")),
     reason: v.optional(v.string()),
+    /** The status the staff member saw when they clicked (stale-view guard). */
+    expectedStatus: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Auth: this generic setter drives operational lifecycle transitions only
@@ -2980,8 +3211,16 @@ export const updateStatus = mutation({
     // the fee, capture, and gating enforced by the dedicated mutations.
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
     await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const guard = { audience: "shop" as const, attemptedAction: args.newStatus };
 
     // Money-moving / terminal states must go through the policy-gated mutations
     // (cancelBooking/cancel, completeWithPostjob, markNoShow/markPostThresholdNoShow)
@@ -2993,10 +3232,43 @@ export const updateStatus = mutation({
       "completed",
     ]);
     if (POLICY_GATED_STATUSES.has(args.newStatus)) {
-      throw new Error(
-        `updateStatus can't set "${args.newStatus}" — use the dedicated action so fees and capture are enforced.`,
+      throw bookingStateChangedError(
+        booking,
+        guard,
+        "Use the booking's Cancel, No-show or Complete action for this, so fees and payment are handled.",
       );
     }
+
+    // Same-status call: nothing to do, report success without writing. Portal
+    // tabs still running the old bundle call updateStatus("confirmed") on a
+    // booking that was already confirmed (estimate popup's "Confirm booking");
+    // that was a harmless no-op before and must stay one. It moves nothing,
+    // so it isn't the #403 back door the allowlist below closes.
+    if (args.newStatus === booking.status) {
+      return { success: true, oldStatus: booking.status, newStatus: booking.status };
+    }
+
+    // Allowlist: this setter only starts a job. Every other target had a
+    // dedicated mutation with guards this path skipped — "confirmed" bypassed
+    // accept's hours/blocks, pre-job-estimate and customer-reschedule checks
+    // (the estimate dialog's silent accept, bug #403), and the pending_*
+    // targets bypassed the reschedule flows' snapshots and slot handling.
+    if (args.newStatus !== "in_progress") {
+      throw bookingStateChangedError(
+        booking,
+        guard,
+        args.newStatus === "confirmed"
+          ? "Use Accept to confirm this booking."
+          : args.newStatus === "vehicle_at_shop"
+            ? "Use Vehicle here to check this car in."
+            : args.newStatus.startsWith("pending")
+              ? "Use Reschedule to change this booking's time."
+              : "This change isn't available here. Refresh to see the latest.",
+      );
+    }
+
+    assertBookingNotTerminal(booking, guard);
+    assertExpectedBookingState(booking, { expectedStatus: args.expectedStatus }, guard);
 
     return await applyBookingStatusTransition(ctx, {
       booking,
@@ -3004,6 +3276,7 @@ export const updateStatus = mutation({
       // Actor is the authenticated staff member — never a caller-supplied id.
       changedBy: user._id,
       reason: args.reason,
+      audience: "shop",
     });
   },
 });
@@ -3013,7 +3286,13 @@ export const markVehicleAtShop = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
     // Idempotent: if the booking is already at-shop, in-progress, or completed,
@@ -3028,7 +3307,16 @@ export const markVehicleAtShop = mutation({
       return { success: true, oldStatus: booking.status, newStatus: booking.status };
     }
     if (booking.status !== "confirmed") {
-      throw new Error("Only confirmed bookings can be marked vehicle here.");
+      const guard = { audience: "shop" as const, attemptedAction: "vehicle_at_shop" };
+      assertBookingNotTerminal(booking, guard);
+      // e.g. the customer moved the booking and it's back to awaiting the shop.
+      throw bookingStateChangedError(
+        booking,
+        guard,
+        booking.status === "pending" || booking.status === "pending_shop_acceptance"
+          ? "Accept this booking before marking the vehicle here."
+          : undefined,
+      );
     }
 
     const now = Date.now();
@@ -3403,6 +3691,10 @@ export const getActiveJobsForHeader = query({
       const jobActual = await getLatestJobActualForBooking(ctx, active._id);
       const vehicle = active.vin ? await resolveVehicleLabel(ctx, active.vin) : null;
       const serviceNames = await resolveServiceNames(ctx, active.service_ids, active.custom_services);
+      // The header pill and popover render straight from this row, so they
+      // carry the same clock the full-screen pane does (bug #348).
+      const clock = await loadJobClock(ctx, active._id);
+      const nowMs = Date.now();
       return {
         kind: "mechanic" as const,
         job: {
@@ -3410,6 +3702,9 @@ export const getActiveJobsForHeader = query({
           vehicleLabel: vehicle?.full ?? vehicle?.short ?? "Vehicle",
           serviceSummary: serviceNames.join(" · "),
           startedAtMs: jobActual?.started_at ?? null,
+          clock,
+          blockedMinutes: stoppedMinutesAt(clock, nowMs),
+          clockPaused: isClockStoppedAt(clock, nowMs),
         },
       };
     }
@@ -3449,6 +3744,10 @@ export const getActiveJobsForHeader = query({
           b.service_ids,
           b.custom_services,
         );
+        // The picker renders a live timer per row, so it needs the same clock
+        // the focused pane gets. Without it a paused job keeps ticking here
+        // while reading "paused" one screen over (bug #348).
+        const clock = await loadJobClock(ctx, b._id);
         return {
           bookingId: b._id,
           mechanicName: mechanic
@@ -3459,11 +3758,10 @@ export const getActiveJobsForHeader = query({
           serviceSummary: serviceNames.join(" · "),
           startedAt: jobActual?.started_at ?? null,
           scheduledDate: b.scheduled_date ?? null,
-          // The picker renders a live timer per row, so it needs the same
-          // stopped-clock figures the focused pane gets. Without them a blocked
-          // job keeps ticking here while reading "paused" one screen over.
-          blockedMinutes: await blockedMinutesForBooking(ctx, b._id, nowMs),
-          clockPaused: await isClockPausedForBooking(ctx, b._id, nowMs),
+          clock,
+          // Legacy whole-minute fields for bundles that predate `clock`.
+          blockedMinutes: stoppedMinutesAt(clock, nowMs),
+          clockPaused: isClockStoppedAt(clock, nowMs),
         };
       }),
     );
@@ -4101,12 +4399,27 @@ export const customerRequestReschedule = mutation({
     newScheduledDate: v.string(),
     newScheduledTime: v.string(),
     newMechanicId: v.optional(v.id("mechanics")),
+    // Stale-view guard: the status/date/time the customer was looking at when
+    // they picked the new time. Optional so builds in the field keep working.
+    expectedStatus: v.optional(v.string()),
+    expectedScheduledDate: v.optional(v.string()),
+    expectedScheduledTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Normalize before anything reads the time: old iOS builds send
+    // "9:00 AM", which made every hours/overlap comparison NaN (so it silently
+    // passed) and was stored verbatim (bug #403).
+    const newScheduledDate = assertBookingDate(args.newScheduledDate);
+    const newScheduledTime = normalizeHHMM(args.newScheduledTime);
+
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
     if (!booking) {
-      throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
     }
     if (String(booking.user_id) !== String(user._id)) {
       throw new Error("Not your booking.");
@@ -4114,16 +4427,21 @@ export const customerRequestReschedule = mutation({
     if (!booking.shop_id) {
       throw new Error("This booking doesn't have a shop assigned yet.");
     }
-    if (
-      ["cancelled", "completed", "no_show", "in_progress", "vehicle_at_shop"].includes(
-        booking.status,
-      )
-    ) {
-      const label =
-        BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
-        String(booking.status).replace(/_/g, " ");
-      throw new Error(`This booking can't be rescheduled while it's ${label}.`);
-    }
+
+    // The same predicate getCustomerBookingActions draws the button from.
+    // Reading job_actuals here puts the start's write in this transaction's
+    // read set, so a Start job that commits first forces a retry that lands
+    // on JOB_ALREADY_STARTED instead of both succeeding (bug #403).
+    assertCustomerCanReschedule(booking, await loadJobActualForBooking(ctx, booking._id));
+    assertExpectedBookingState(
+      booking,
+      {
+        expectedStatus: args.expectedStatus,
+        expectedScheduledDate: args.expectedScheduledDate,
+        expectedScheduledTime: args.expectedScheduledTime,
+      },
+      { audience: "customer", attemptedAction: "reschedule" },
+    );
 
     // Reschedule limit (v1: limit-only, no fee). Beyond the free count or
     // inside the reschedule cutoff, the customer must contact the shop.
@@ -4131,10 +4449,13 @@ export const customerRequestReschedule = mutation({
     const reschedulesUsed = (booking as any).reschedule_count ?? 0;
     const currentApptMs =
       booking.scheduled_date && booking.scheduled_time
-        ? toBookingDateTimeMs(
-            booking.scheduled_date,
-            booking.scheduled_time,
-            await getShopTimezone(ctx, booking.shop_id),
+        ? finiteMsOrNull(
+            toBookingDateTimeMs(
+              booking.scheduled_date,
+              booking.scheduled_time,
+              await getShopTimezone(ctx, booking.shop_id),
+              { onInvalid: "nan" },
+            ),
           )
         : null;
     const rescheduleLimit = evaluateRescheduleLimit({
@@ -4144,10 +4465,20 @@ export const customerRequestReschedule = mutation({
       reschedulesUsed,
     });
     if (rescheduleLimit.kind === "limited") {
-      throw new Error(
+      // Typed so the sentence survives prod redaction. Not a stale view — the
+      // app keeps the picker open and offers "Message the shop"; `reason`
+      // tells it which limit it hit.
+      throwBookingError(
+        "RESCHEDULE_LIMIT_REACHED",
         rescheduleLimit.reason === "max_free_reschedules_reached"
           ? "You've used all your free reschedules for this booking. Message the shop to change your appointment."
           : "It's too close to your appointment to reschedule here. Message the shop to change your appointment.",
+        {
+          bookingId: String(booking._id),
+          currentStatus: booking.status,
+          attemptedAction: "reschedule",
+          reason: rescheduleLimit.reason,
+        },
       );
     }
 
@@ -4155,8 +4486,8 @@ export const customerRequestReschedule = mutation({
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
     const targetMechanicId = await resolveMechanicForWindow(ctx, {
       shopId: booking.shop_id,
-      date: args.newScheduledDate,
-      startTime: args.newScheduledTime,
+      date: newScheduledDate,
+      startTime: newScheduledTime,
       durationMinutes,
       preferredMechanicId: args.newMechanicId ?? currentMechanicId ?? undefined,
       excludeBookingId: String(booking._id),
@@ -4165,18 +4496,38 @@ export const customerRequestReschedule = mutation({
     const now = Date.now();
     const previousStatus = booking.status;
 
+    // Answering a shop proposal with a time of their own: the booking's
+    // current date/time is the SHOP's proposal, not the original appointment.
+    // Keep the original previous_* snapshot (as proposeRescheduleImpl does) so
+    // "the customer moved this from <old>" and any restore point stay the
+    // appointment the customer actually had.
+    const answeringProposal = booking.status === "pending_customer_acceptance";
+    const snapshot = answeringProposal
+      ? {
+          previous_scheduled_date:
+            (booking as any).previous_scheduled_date ?? booking.scheduled_date,
+          previous_scheduled_time:
+            (booking as any).previous_scheduled_time ?? booking.scheduled_time,
+          previous_mechanic_id:
+            (booking as any).previous_mechanic_id ?? currentMechanicId ?? undefined,
+          previous_status: (booking as any).previous_status ?? previousStatus,
+        }
+      : {
+          previous_scheduled_date: booking.scheduled_date,
+          previous_scheduled_time: booking.scheduled_time,
+          previous_mechanic_id: currentMechanicId ?? undefined,
+          previous_status: previousStatus,
+        };
+
     await ctx.db.patch(booking._id, {
-      scheduled_date: args.newScheduledDate,
-      scheduled_time: args.newScheduledTime,
+      scheduled_date: newScheduledDate,
+      scheduled_time: newScheduledTime,
       mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       status: "pending_shop_acceptance",
       live_stage: undefined,
       assignment_preference: args.newMechanicId ? "specific_mechanic" : "any",
-      previous_scheduled_date: booking.scheduled_date,
-      previous_scheduled_time: booking.scheduled_time,
-      previous_mechanic_id: currentMechanicId ?? undefined,
-      previous_status: previousStatus,
+      ...snapshot,
       reschedule_proposed_at: now,
       schedule_change_mode: "customer_reschedule",
       customer_can_restore_original: false,
@@ -4206,14 +4557,14 @@ export const customerRequestReschedule = mutation({
       {
         shopId: booking.shop_id,
         mechanicId: targetMechanicId,
-        date: args.newScheduledDate,
+        date: newScheduledDate,
       },
     ]);
 
     await upsertAppointmentReminderForBooking(ctx, {
       ...booking,
-      scheduled_date: args.newScheduledDate,
-      scheduled_time: args.newScheduledTime,
+      scheduled_date: newScheduledDate,
+      scheduled_time: newScheduledTime,
       mechanic_id: targetMechanicId,
       time_slot_id: undefined,
       status: "pending_shop_acceptance",
@@ -4814,9 +5165,47 @@ function getShopLocalDateTimeParts(timeZone: string, date: Date) {
   };
 }
 
-function toBookingDateTimeMs(date: string, time: string, timeZone: string) {
-  const [year, month, day] = date.split("-").map(Number);
-  const [hours, minutes] = time.split(":").map(Number);
+/**
+ * Epoch ms for a booking's shop-local date + time.
+ *
+ * Parses "HH:MM" exactly as before, and now also the "h:mm AM/PM" strings old
+ * iOS builds stored (bug #403) — those used to reach Intl as an Invalid Date
+ * and throw a raw RangeError out of every caller (reminders, cancel fees,
+ * getCustomerBookingActions). Input that still can't be read throws a typed
+ * INVALID_TIME by default, so a cron that can't reason about a missing time
+ * stops rather than acting on NaN; callers that can cope pass
+ * `{ onInvalid: "nan" }` and treat the result as "no appointment time".
+ */
+function toBookingDateTimeMs(
+  date: string,
+  time: string,
+  timeZone: string,
+  opts: { onInvalid?: "throw" | "nan" } = {},
+) {
+  const [year, month, day] = String(date ?? "").split("-").map(Number);
+  // Legacy split kept as the fallback so every string that parsed before
+  // ("9:5", "14:00:00") still means exactly what it meant.
+  const legacy = String(time ?? "").split(":").map(Number);
+  const minutesOfDay =
+    parseTimeToMinutes(time) ??
+    (Number.isFinite(legacy[0]) && Number.isFinite(legacy[1])
+      ? legacy[0] * 60 + legacy[1]
+      : null);
+  if (
+    minutesOfDay == null ||
+    !Number.isFinite(year) ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(day)
+  ) {
+    if (opts.onInvalid === "nan") return Number.NaN;
+    throw bookingError(
+      "INVALID_TIME",
+      "This booking's date or time couldn't be read. Pick a new time for it.",
+      { scheduledDate: String(date ?? ""), scheduledTime: String(time ?? "") },
+    );
+  }
+  const hours = Math.floor(minutesOfDay / 60);
+  const minutes = minutesOfDay % 60;
   const utcGuess = Date.UTC(year, month - 1, day, hours, minutes, 0, 0);
 
   const initialOffset = getTimeZoneOffsetMs(timeZone, new Date(utcGuess));
@@ -10005,6 +10394,7 @@ export async function applyBookingStatusTransition(
     reason,
     cancellationFeeCents,
     cancellationKind,
+    audience,
   }: {
     booking: any;
     newStatus: string;
@@ -10014,33 +10404,88 @@ export async function applyBookingStatusTransition(
      *  from the deposit hold (capture instead of void). 0 / undefined = void. */
     cancellationFeeCents?: number;
     cancellationKind?: string;
+    /** Who reads a rejection — copy only. Defaults to the same inference that
+     *  stamps cancelled_by_role (no actor = system, the booking's customer =
+     *  customer, anyone else = shop). */
+    audience?: BookingAudience;
   }
 ) {
-  const error = validateTransition(booking.status, newStatus);
-  if (error) throw new Error(error);
+  // Every guard below runs before the first write: the crons that call this
+  // catch and continue, and Convex has no savepoints, so a throw after a patch
+  // would persist half a transition.
+  const guard = {
+    audience: audience ?? inferAudience(booking, changedBy),
+    attemptedAction: newStatus,
+  };
 
-  // Pre-Job Approval guard: don't let the mechanic flip a booking into
-  // `in_progress` while it's still waiting on the customer's approval.
-  // Pre-feature bookings (state == null) and approved/in-range bookings
-  // pass. Reauth-required is hard-blocked so the customer can fix payment
-  // before work continues.
-  if (newStatus === "in_progress") {
+  // (a) Terminal source first. validateTransition returns null for a
+  // same-status "transition" (cancelled -> cancelled), and for every other
+  // terminal source it produced the developer string "Invalid transition:
+  // completed -> cancelled". Either way the loser of a race (customer cancel
+  // vs shop decline, bug #394) now learns who ended the booking.
+  assertBookingNotTerminal(booking, guard);
+
+  // (b) FSM. A failure here means the booking moved under the caller.
+  if (validateTransition(booking.status, newStatus)) {
+    throw bookingStateChangedError(booking, guard);
+  }
+
+  // (c) Start gate — the one funnel every start path goes through, so the
+  // rules can't differ per button (bug #403). The FSM still allows
+  // confirmed -> in_progress for legacy reasons; that edge skipped the
+  // check-in and let a stale "Start job" begin a booking the customer had
+  // just moved. Every in-repo start (startWithPrejob, legacy start,
+  // job_actuals.startJob, updateStatus) already requires vehicle_at_shop, and
+  // test_helpers bypass this helper.
+  if (newStatus === "in_progress" && booking.status !== "in_progress") {
+    if (booking.status !== "vehicle_at_shop") {
+      throw bookingError("NOT_CHECKED_IN", "Mark the vehicle here before starting work.", {
+        bookingId: String(booking._id),
+        currentStatus: booking.status,
+        attemptedAction: "start",
+      });
+    }
+
+    // Pre-Job Approval guard: don't let the mechanic flip a booking into
+    // `in_progress` while it's still waiting on the customer's approval.
+    // Pre-feature bookings (state == null) and approved/in-range bookings
+    // pass. Reauth-required is hard-blocked so the customer can fix payment
+    // before work continues.
     const pas = (booking as any).payment_approval_state as string | undefined;
     const allowed = new Set([undefined, "none", "in_range", "pre_job_approved"]);
     if (!allowed.has(pas)) {
-      throw new Error(
-        pas === "reauth_required"
-          ? "Customer needs to update their payment method before work can start."
-          : "Waiting on the customer to approve the updated estimate.",
-      );
+      throw pas === "reauth_required"
+        ? bookingError(
+            "PAYMENT_METHOD_REQUIRED",
+            "Customer needs to update their payment method before work can start.",
+            { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "start" },
+          )
+        : bookingError(
+            "AWAITING_CUSTOMER_APPROVAL",
+            "Waiting on the customer to approve the updated estimate.",
+            { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "start" },
+          );
     }
-  }
 
-  if (isTerminal(booking.status)) {
-    const label =
-      BOOKING_STATUS_VISUALS[booking.status as BookingStatus]?.label?.toLowerCase() ??
-      String(booking.status).replace(/_/g, " ");
-    throw new Error(`This booking is already ${label} and can no longer be updated.`);
+    // One active job per mechanic. Reads the shop's in_progress index range,
+    // which is exactly what a competing start writes, so two starts for the
+    // same mechanic serialize and the second one lands here. updateStatus
+    // used to skip this check entirely.
+    if (booking.mechanic_id && booking.shop_id) {
+      const conflict = await findMechanicActiveBooking(
+        ctx,
+        booking.shop_id,
+        booking.mechanic_id,
+        booking._id,
+      );
+      if (conflict) {
+        throw await mechanicHasActiveJobError(ctx, {
+          bookingId: booking._id,
+          mechanicId: booking.mechanic_id,
+          conflictBookingId: conflict._id,
+        });
+      }
+    }
   }
 
   const patch: {
@@ -10119,6 +10564,18 @@ export async function applyBookingStatusTransition(
       mpiPatch.started_at = jobActual.started_at ?? now;
     }
     await ctx.db.patch(jobActual._id, mpiPatch);
+  }
+
+  // A manual Pause never outlives the job it paused (bug #348). Closed before
+  // runCompletionSideEffects below so the recorded blocked_minutes includes it.
+  // pauseJob reads this booking and the open-pause range, so a Pause racing
+  // this transition either retries into JOB_NOT_IN_PROGRESS or is closed here.
+  if (booking.status === "in_progress" && newStatus !== "in_progress") {
+    await closeOpenJobPauses(ctx, booking._id, {
+      now: patch.updated_at,
+      closedByUserId: changedBy,
+      closeReason: "job_left_in_progress",
+    });
   }
 
   /*
@@ -10893,7 +11350,15 @@ export const getMyOwnerDashboard = query({
               .map((actual: any) => actual.started_at)
               .filter((value: any) => value != null)
               .sort((a: number, b: number) => a - b)[0] ?? null;
+          // Same clock as the header pill and the full-screen pane, so the
+          // dashboard picker shows a pause too (bug #348). The rows never
+          // carried blockedMinutes/clockPaused before, though the page read them.
+          const clock = await loadJobClock(ctx, booking._id);
+          const nowMs = Date.now();
           return {
+            clock,
+            blockedMinutes: stoppedMinutesAt(clock, nowMs),
+            clockPaused: isClockStoppedAt(clock, nowMs),
             mechanicId: mechanic._id,
             mechanicName:
               `${mechanic.first_name} ${mechanic.last_name}`.trim(),
@@ -11946,6 +12411,12 @@ export const getJobDetail = query({
       previousMechanicId: booking.previous_mechanic_id ?? null,
       previousMechanicName,
       rescheduleProposedAt: booking.reschedule_proposed_at ?? null,
+      // "customer_reschedule" while a customer-moved request awaits the shop:
+      // the drawer shows "Customer requested a new time: <old> → <new>" and
+      // Accept asks for confirmation first (bug #403). cancelledByRole lets
+      // the drawer say who ended a booking.
+      scheduleChangeMode: (booking as any).schedule_change_mode ?? null,
+      cancelledByRole: (booking as any).cancelled_by_role ?? null,
       invoiceNumber: (booking as any).invoice_number ?? null,
       // Pickup ("request to cancel & pick up car") round trip, surfaced so the
       // booking drawer can show + act on it even after the request drops off the
@@ -12174,7 +12645,11 @@ export const startWithPrejob = mutation({
         booking._id,
       );
       if (conflict) {
-        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+        throw await mechanicHasActiveJobError(ctx, {
+          bookingId: booking._id,
+          mechanicId: booking.mechanic_id,
+          conflictBookingId: conflict._id,
+        });
       }
     }
 
@@ -12298,7 +12773,11 @@ export const commitInspectionAndAwaitEstimate = mutation({
         booking._id,
       );
       if (conflict) {
-        throw new Error(`MECHANIC_HAS_ACTIVE_JOB:${String(conflict._id)}`);
+        throw await mechanicHasActiveJobError(ctx, {
+          bookingId: booking._id,
+          mechanicId: booking.mechanic_id,
+          conflictBookingId: conflict._id,
+        });
       }
     }
 
@@ -13310,6 +13789,17 @@ export const customerDecideRecommendation = mutation({
       status: "completed",
       updated_at: now,
     });
+
+    // This completion bypasses applyBookingStatusTransition, so it has to end
+    // the parent's manual Pause itself — otherwise the pause would stay open on
+    // a finished job (bug #348).
+    if (booking.status === "in_progress") {
+      await closeOpenJobPauses(ctx, booking._id, {
+        now,
+        closedByUserId: user._id,
+        closeReason: "job_left_in_progress",
+      });
+    }
 
     return { success: true, followUpBookingId: followUpId };
   },
@@ -14865,16 +15355,33 @@ export const update = mutation({
 });
 
 export const accept = mutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    // Stale-view guard: what the staff member saw when they clicked Accept.
+    // Optional so older portal builds keep working.
+    expectedStatus: v.optional(v.string()),
+    expectedScheduledDate: v.optional(v.string()),
+    expectedScheduledTime: v.optional(v.string()),
+    /** The staff member confirmed the customer's new time (see below). */
+    acknowledgeCustomerReschedule: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
+    const guard = { audience: "shop" as const, attemptedAction: "accept" };
+    assertBookingNotTerminal(booking, guard);
     if (!["pending", "pending_shop_acceptance"].includes(booking.status)) {
-      throw new Error("Only pending bookings can be accepted");
+      throw bookingStateChangedError(booking, guard);
     }
 
     // A pre-job quote that's out of the customer's disclosed range is awaiting
@@ -14882,10 +15389,48 @@ export const accept = mutation({
     // unsettled — the shop must not be able to accept the booking out from
     // under the open approval.
     if ((booking as any).payment_approval_state === "pre_job_pending") {
-      throw new Error(
+      throw bookingError(
+        "AWAITING_CUSTOMER_APPROVAL",
         "Your quote is awaiting the customer's approval. You can accept once they approve or decline it.",
+        { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "accept" },
       );
     }
+
+    // The customer moved this request. Accept used to confirm whatever time
+    // was on the row, so a click (or the keyboard 'a') that landed just after
+    // the move confirmed a time nobody at the shop had looked at (bug #403).
+    // Require an explicit acknowledgement; the portal shows old → new first.
+    if (
+      (booking as any).schedule_change_mode === "customer_reschedule" &&
+      args.acknowledgeCustomerReschedule !== true
+    ) {
+      throw bookingError(
+        "CUSTOMER_RESCHEDULE_PENDING",
+        `The customer asked to move this booking to ${
+          formatBookingSlotLabel(booking.scheduled_date, booking.scheduled_time) || "a new time"
+        }. Review the new time before accepting.`,
+        {
+          bookingId: String(booking._id),
+          currentStatus: booking.status,
+          attemptedAction: "accept",
+          actorRole: "customer",
+          newScheduledDate: booking.scheduled_date ?? undefined,
+          newScheduledTime: booking.scheduled_time ?? undefined,
+          previousScheduledDate: (booking as any).previous_scheduled_date ?? undefined,
+          previousScheduledTime: (booking as any).previous_scheduled_time ?? undefined,
+        },
+      );
+    }
+
+    assertExpectedBookingState(
+      booking,
+      {
+        expectedStatus: args.expectedStatus,
+        expectedScheduledDate: args.expectedScheduledDate,
+        expectedScheduledTime: args.expectedScheduledTime,
+      },
+      guard,
+    );
 
     // Hours or blocked time may have changed since the request came in (or the
     // request slipped past a check). Never confirm a window the shop is closed
@@ -14899,12 +15444,41 @@ export const accept = mutation({
       action: "Can't accept — propose a new time instead.",
     });
 
-    return await applyBookingStatusTransition(ctx, {
+    const result = await applyBookingStatusTransition(ctx, {
       booking,
       newStatus: "confirmed",
       changedBy: user._id,
       reason: "accepted_by_shop",
+      audience: "shop",
     });
+
+    // The customer's move is settled: drop the markers its path left behind so
+    // the next Accept/Start doesn't re-ask and no chip lingers on a confirmed
+    // booking.
+    const b = booking as any;
+    if (
+      b.schedule_change_mode != null ||
+      b.reschedule_proposed_at != null ||
+      b.previous_status != null ||
+      b.previous_scheduled_date != null ||
+      b.previous_scheduled_time != null ||
+      b.previous_mechanic_id != null ||
+      b.customer_can_restore_original != null ||
+      b.schedule_change_source_booking_id != null
+    ) {
+      await ctx.db.patch(booking._id, {
+        schedule_change_mode: undefined,
+        reschedule_proposed_at: undefined,
+        previous_status: undefined,
+        previous_scheduled_date: undefined,
+        previous_scheduled_time: undefined,
+        previous_mechanic_id: undefined,
+        customer_can_restore_original: undefined,
+        schedule_change_source_booking_id: undefined,
+      });
+    }
+
+    return result;
   },
 });
 
@@ -15024,13 +15598,64 @@ export const cancel = mutation({
   args: {
     bookingId: v.id("bookings"),
     reason: v.optional(v.string()),
+    // What the staff member meant. "decline" = turn down a request that
+    // hasn't been accepted; a Decline that lands after someone accepted it
+    // (or after the customer cancelled) must not silently become a cancel of
+    // a confirmed booking (bug #394). Omitted by older callers → today's
+    // behaviour.
+    intent: v.optional(v.union(v.literal("decline"), v.literal("cancel"))),
+    expectedStatus: v.optional(v.string()),
+    expectedScheduledDate: v.optional(v.string()),
+    expectedScheduledTime: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
+
+    const guard = { audience: "shop" as const, attemptedAction: args.intent ?? "cancel" };
+    // Terminal first, so the loser of "customer cancels while the shop
+    // declines" hears who won instead of a stack trace (bug #394).
+    assertBookingNotTerminal(booking, guard);
+
+    if (args.intent === "decline") {
+      if (booking.status !== "pending" && booking.status !== "pending_shop_acceptance") {
+        throw bookingStateChangedError(
+          booking,
+          guard,
+          ["confirmed", "vehicle_at_shop", "in_progress"].includes(booking.status)
+            ? "This request was already accepted, so it can't be declined. Refresh to see the latest."
+            : undefined,
+        );
+      }
+      // Mirrors accept and the drawer, which hides Decline while a pre-job
+      // quote waits on the customer.
+      if ((booking as any).payment_approval_state === "pre_job_pending") {
+        throw bookingError(
+          "AWAITING_CUSTOMER_APPROVAL",
+          "Your quote is awaiting the customer's approval. You can decline once they approve or decline it.",
+          { bookingId: String(booking._id), currentStatus: booking.status, attemptedAction: "decline" },
+        );
+      }
+    }
+
+    assertExpectedBookingState(
+      booking,
+      {
+        expectedStatus: args.expectedStatus,
+        expectedScheduledDate: args.expectedScheduledDate,
+        expectedScheduledTime: args.expectedScheduledTime,
+      },
+      guard,
+    );
 
     const reason = args.reason ?? "cancelled_by_shop";
     const result = await applyBookingStatusTransition(ctx, {
@@ -15038,6 +15663,7 @@ export const cancel = mutation({
       newStatus: "cancelled",
       changedBy: user._id,
       reason,
+      audience: "shop",
     });
     await notifyCustomerOfShopCancel(ctx, booking, { kind: "cancelled", reason });
     return result;
@@ -15496,16 +16122,42 @@ export const proposeReschedule = mutation({
 });
 
 export const customerApproveReschedule = mutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    // The proposal the customer was looking at. If the shop re-proposed (or
+    // withdrew) in the meantime, the answer must not apply to a time they
+    // never saw. Optional so builds in the field keep working.
+    expectedScheduledDate: v.optional(v.string()),
+    expectedScheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
     if (booking.user_id !== user._id) throw new Error("Not your booking.");
 
+    const guard = { audience: "customer" as const, attemptedAction: "approve_reschedule" };
+    assertBookingNotTerminal(booking, guard);
     if (booking.status !== "pending_customer_acceptance") {
-      throw new Error("Booking is not pending customer acceptance");
+      throw bookingStateChangedError(booking, guard, "This change was already handled.");
     }
+    assertExpectedBookingState(
+      booking,
+      {
+        expectedScheduledDate: args.expectedScheduledDate,
+        expectedScheduledTime: args.expectedScheduledTime,
+      },
+      {
+        ...guard,
+        message: "The shop changed this proposal since you opened it. Take another look.",
+      },
+    );
 
     const currentMechanicId = await getBookingMechanicId(ctx, booking);
     const durationMinutes = booking.estimated_labor_minutes ?? 60;
@@ -15513,6 +16165,11 @@ export const customerApproveReschedule = mutation({
     const originalTime = booking.previous_scheduled_time ?? booking.scheduled_time;
     const originalMechanicId = booking.previous_mechanic_id ?? currentMechanicId;
     const isManualReschedule = getScheduleChangeMode(booking) === "manual_reschedule";
+    // A proposal made while the car was on site sends the car home: any
+    // "request to cancel & pick up car" from that visit is over. Clear it so
+    // the confirmed booking doesn't keep showing a pickup request (customer
+    // card, activity, the shop's pickup queues) for a car that already left.
+    const clearsPickupRequest = booking.previous_status === "vehicle_at_shop";
     const now = Date.now();
 
     await assertBookingWindowAgainstHoursAndBlocks(ctx, {
@@ -15560,6 +16217,17 @@ export const customerApproveReschedule = mutation({
       schedule_change_mode: undefined,
       schedule_change_source_booking_id: undefined,
       customer_can_restore_original: undefined,
+      ...(clearsPickupRequest
+        ? {
+            cancel_requested_at_ms: undefined,
+            cancel_request_reason: undefined,
+            pickup_response: undefined,
+            pickup_responded_at_ms: undefined,
+            pickup_response_by: undefined,
+            pickup_response_note: undefined,
+            pickup_request_resolved_at_ms: undefined,
+          }
+        : {}),
       updated_at: now,
     });
 
@@ -15618,6 +16286,9 @@ export const customerApproveReschedule = mutation({
       schedule_change_mode: undefined,
       schedule_change_source_booking_id: undefined,
       customer_can_restore_original: undefined,
+      ...(clearsPickupRequest
+        ? { cancel_requested_at_ms: undefined, cancel_request_reason: undefined }
+        : {}),
     };
     await upsertCustomerLateMonitorForBooking(ctx, confirmedBooking);
     await upsertAppointmentReminderForBooking(ctx, confirmedBooking);
@@ -15637,12 +16308,25 @@ export const shopCancelReschedule = mutation({
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
 
     await requireShopStaff(ctx, user._id, booking.shop_id);
 
     if (booking.status !== "pending_customer_acceptance") {
-      throw new Error("Booking is not pending customer acceptance");
+      const guard = { audience: "shop" as const, attemptedAction: "cancel_reschedule" };
+      assertBookingNotTerminal(booking, guard);
+      // Usually the customer answered the proposal a moment earlier.
+      throw bookingStateChangedError(
+        booking,
+        guard,
+        "The customer already answered this proposed time. Refresh to see the latest.",
+      );
     }
     if (getScheduleChangeMode(booking) === "forced_delay") {
       throw new Error(
@@ -15776,16 +16460,42 @@ export const shopCancelReschedule = mutation({
 });
 
 export const customerDeclineReschedule = mutation({
-  args: { bookingId: v.id("bookings") },
+  args: {
+    bookingId: v.id("bookings"),
+    // The proposal the customer was looking at. If the shop re-proposed (or
+    // withdrew) in the meantime, the answer must not apply to a time they
+    // never saw. Optional so builds in the field keep working.
+    expectedScheduledDate: v.optional(v.string()),
+    expectedScheduledTime: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
     const user = await getCurrentUser(ctx);
     const booking = await ctx.db.get(args.bookingId);
-    if (!booking) throw new Error("We couldn't find that booking. It may have been cancelled or removed.");
+    if (!booking) {
+      throw bookingError(
+        "BOOKING_NOT_FOUND",
+        "We couldn't find that booking. It may have been cancelled or removed.",
+        { bookingId: String(args.bookingId) },
+      );
+    }
     if (booking.user_id !== user._id) throw new Error("Not your booking.");
 
+    const guard = { audience: "customer" as const, attemptedAction: "decline_reschedule" };
+    assertBookingNotTerminal(booking, guard);
     if (booking.status !== "pending_customer_acceptance") {
-      throw new Error("Booking is not pending customer acceptance");
+      throw bookingStateChangedError(booking, guard, "This change was already handled.");
     }
+    assertExpectedBookingState(
+      booking,
+      {
+        expectedScheduledDate: args.expectedScheduledDate,
+        expectedScheduledTime: args.expectedScheduledTime,
+      },
+      {
+        ...guard,
+        message: "The shop changed this proposal since you opened it. Take another look.",
+      },
+    );
     if (getScheduleChangeMode(booking) === "forced_delay") {
       throw new Error(
         "This booking cannot be restored to its original time. Please choose a new time or cancel the booking."
@@ -18058,6 +18768,15 @@ async function recordPreauthorizedQuoteDeposit(
     .withIndex("by_booking_id", (q) => q.eq("booking_id", args.bookingId))
     .unique();
   if (existing) return existing._id;
+  // (bug #393) Same handshake as createBatchImpl: link the checkout's $20
+  // authorization in the transaction that records it, or refuse the accept
+  // with CHECKOUT_EXPIRED (rolling the accept back) if the orphan reaper has
+  // already claimed it.
+  await linkPrebookingAuthorization(ctx, {
+    paymentIntentId: args.preauth.stripe_payment_intent_id,
+    bookingId: args.bookingId,
+    now: args.now,
+  });
   const paymentId = await ctx.db.insert("payments", {
     booking_id: args.bookingId,
     user_id: args.userId,
@@ -18218,26 +18937,18 @@ export const acceptTireQuote = mutation({
 
     let attachServiceId: Id<"services"> | null = null;
     if (tireService) {
-      // The shop has already committed to install these tires (they
-      // submitted the quote we're accepting), so auto-register the
-      // shop_services row if it's missing. This avoids the cosmetic
-      // regression on the schedule/dashboard for shops with incomplete
-      // service-catalog onboarding.
-      const offered = await ctx.db
-        .query("shop_services")
-        .withIndex("by_shop_and_service", (q) =>
-          q.eq("shop_id", response.shop_id).eq("service_id", tireService!._id),
-        )
-        .first();
-      if (!offered) {
-        await ctx.db.insert("shop_services", {
-          shop_id: response.shop_id,
-          service_id: tireService._id,
-          is_offered: true,
-        });
-      } else if (!offered.is_offered) {
-        await ctx.db.patch(offered._id, { is_offered: true });
-      }
+      // (bug #404) The shop's Settings switch wins over an open quote: if the
+      // shop turned Tire Replacement OFF after quoting, the accept is refused
+      // (read in this transaction, so it serializes against the toggle). This
+      // used to flip the row back ON, silently re-enabling the service for
+      // every customer. A shop with NO row is still fine — submitting the quote
+      // is its commitment — and we register the row so the schedule/dashboard
+      // surfaces that read offered services keep resolving the name.
+      await assertShopOffersServices(ctx, response.shop_id, [tireService._id], {
+        allowMissingRow: true,
+        copy: "quote_accept",
+      });
+      await registerQuotedServiceIfMissing(ctx, response.shop_id, tireService._id);
       attachServiceId = tireService._id;
     } else {
       console.warn(
@@ -18617,23 +19328,14 @@ export const acceptRotorQuote = mutation({
 
     let attachServiceId: Id<"services"> | null = null;
     if (rotorService) {
-      // The shop committed to do this rotor job by submitting a quote, so
-      // auto-register the shop_services row if missing.
-      const offered = await ctx.db
-        .query("shop_services")
-        .withIndex("by_shop_and_service", (q) =>
-          q.eq("shop_id", response.shop_id).eq("service_id", rotorService!._id),
-        )
-        .first();
-      if (!offered) {
-        await ctx.db.insert("shop_services", {
-          shop_id: response.shop_id,
-          service_id: rotorService._id,
-          is_offered: true,
-        });
-      } else if (!offered.is_offered) {
-        await ctx.db.patch(offered._id, { is_offered: true });
-      }
+      // (bug #404) Same rule as acceptTireQuote: an explicit OFF refuses the
+      // accept (never flipped back ON by a customer); a missing row is the
+      // quote's commitment, so it is registered.
+      await assertShopOffersServices(ctx, response.shop_id, [rotorService._id], {
+        allowMissingRow: true,
+        copy: "quote_accept",
+      });
+      await registerQuotedServiceIfMissing(ctx, response.shop_id, rotorService._id);
       attachServiceId = rotorService._id;
     } else {
       console.warn(

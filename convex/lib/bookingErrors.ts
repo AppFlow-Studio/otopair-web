@@ -50,6 +50,7 @@ export const BOOKING_ERROR_CODES = [
   "SLOT_HOLD_EXPIRED",
   "CHECKOUT_EXPIRED",
   "INVALID_TIME",
+  "RESCHEDULE_LIMIT_REACHED",
   // Job clock (pause / resume).
   "JOB_NOT_IN_PROGRESS",
   "JOB_CLOCK_NOT_STARTED",
@@ -126,6 +127,7 @@ const DEFAULT_COPY: Record<BookingErrorCode, string> = {
   SLOT_HOLD_EXPIRED: "Your held time expired. Pick a time again to continue.",
   CHECKOUT_EXPIRED: "This checkout expired. Start again to book.",
   INVALID_TIME: "Pick a time from the list.",
+  RESCHEDULE_LIMIT_REACHED: "This booking can't be rescheduled here any more. Message the shop to change your appointment.",
   JOB_NOT_IN_PROGRESS: "This job isn't in progress any more.",
   JOB_CLOCK_NOT_STARTED: "The labor clock hasn't started yet.",
   QUOTE_UNAVAILABLE: "This quote is no longer available.",

@@ -26,6 +26,14 @@ import {
   X,
 } from "lucide-react";
 import ElapsedTimer from "./elapsed-timer";
+import {
+  clockFromLegacyRow,
+  isJobClockPaused,
+  jobClockPauseSource,
+  patchJobClockQueries,
+  useJobClock,
+  type JobClock,
+} from "@/lib/use-job-clock";
 import FlagIssueSheet from "./flag-issue-sheet";
 import MidJobScopeDialog from "@/components/booking/mid-job-scope-dialog";
 import OverrunExtendCard from "./overrun-extend-card";
@@ -35,6 +43,7 @@ import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import type { AxlePosition } from "@/convex/lib/brakeScope";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { errorMessage } from "@/lib/feedback";
 
 /** Brake-pad / rotor replacement needs an axle scope before it's added mid-job
  *  — the same services deriveTierInspectionScope requires an axle for. Matched
@@ -137,7 +146,20 @@ export function NowWorkingPane({
   );
   const saveDraft = useMutation(api.bookings.saveInProgressDraft);
 
-  const [paused, setPaused] = useState(false);
+  // Pause is the server's job clock, not local state (bug #348): a `useState`
+  // here froze this one screen while every other timer kept counting, and was
+  // lost on close, "All jobs", Escape or the next remount. When the job has
+  // already left in_progress, step out of the pane — there's nothing to pause.
+  const {
+    clock,
+    isPaused,
+    pauseSource,
+    isManuallyPaused,
+    canControl,
+    pause,
+    resume,
+    pending: clockPending,
+  } = useJobClock(bookingId, { onJobNotInProgress: onBack ?? onClose });
   const [flagOpen, setFlagOpen] = useState(false);
   const [scopeOpen, setScopeOpen] = useState(false);
   const [addingFinding, setAddingFinding] = useState<string | null>(null);
@@ -172,34 +194,24 @@ export function NowWorkingPane({
      stalled job is visibly stalled rather than looking like it's being worked. */
   const blockers = useQuery(api.jobBlockers.listForBooking, { bookingId });
   const resolveBlocker = useMutation(api.jobBlockers.resolveBlocker);
-  /* Optimistically bump this booking's blockedMinutes the instant the flag flow
-     closes, so the timer resumes where it paused instead of jumping up for the
-     round-trip. The real query result (with the recorded span merged in) then
-     replaces it seamlessly; if the write fails, Convex rolls the bump back and
-     the timer honestly reflects that the span wasn't credited. */
+  /* Optimistically add the flag-flow span to this booking's clock the instant
+     the flow closes, so the timer resumes where it froze instead of jumping up
+     for the round-trip. Milliseconds, not rounded minutes — a 40-second flag
+     used to either vanish or count as a whole minute. The server's clock (with
+     the recorded span merged in) then replaces it; if the write fails, Convex
+     rolls the bump back and the timer honestly shows it wasn't credited. */
   const recordFlagAdminPause = useMutation(
     api.jobBlockers.recordFlagAdminPause,
   ).withOptimisticUpdate((localStore, args) => {
-    const cur = localStore.getQuery(api.jobBlockers.listForBooking, {
-      bookingId: args.bookingId,
+    patchJobClockQueries(localStore, args.bookingId, (c: JobClock) => {
+      if (c.startedAtMs == null || c.endedAtMs != null) return c;
+      const addMs = Math.max(
+        0,
+        args.closedAt - Math.max(args.openedAt, c.startedAtMs),
+      );
+      return addMs > 0 ? { ...c, stoppedMsClosed: c.stoppedMsClosed + addMs } : c;
     });
-    if (!cur) return;
-    const addMinutes = Math.round(
-      Math.max(0, args.closedAt - args.openedAt) / 60_000,
-    );
-    if (addMinutes <= 0) return;
-    localStore.setQuery(
-      api.jobBlockers.listForBooking,
-      { bookingId: args.bookingId },
-      { ...cur, blockedMinutes: (cur.blockedMinutes ?? 0) + addMinutes },
-    );
   });
-  /* Server-derived and now the single source of truth for stopped time — clock-
-     stopping blockers AND recorded flag-issue admin pauses, folded together in
-     jobBlockers.clockStoppedSpans. Don't recompute from `blockers[]` here; that
-     predicate drifted between surfaces. */
-  const clockPaused = Boolean(blockers?.clockPaused);
-  const blockedMs = (blockers?.blockedMinutes ?? 0) * 60_000;
 
   /* Inspection findings nothing has acted on yet — see the "Flagged, not
      addressed" block below. The query owns the four exclusion paths, and derives
@@ -237,7 +249,7 @@ export function NowWorkingPane({
       setScopeOpen(true);
     } catch (err: unknown) {
       onToast?.(
-        err instanceof Error ? err.message : "Could not add that to the job",
+        errorMessage(err, "Could not add that to the job"),
       );
     } finally {
       setAddingFinding(null);
@@ -347,7 +359,7 @@ export function NowWorkingPane({
      On close, send the completed span to the server. */
   useEffect(() => {
     if (flagFlowOpen) {
-      if (flagOpenedAtRef.current == null && !clockPaused) {
+      if (flagOpenedAtRef.current == null && !isPaused) {
         flagOpenedAtRef.current = Date.now();
       }
       return;
@@ -369,7 +381,7 @@ export function NowWorkingPane({
     // recordFlagAdminPause is recreated each render by withOptimisticUpdate; the
     // open→close logic is idempotent (guarded by the ref), so it's safe to omit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flagFlowOpen, clockPaused, bookingId]);
+  }, [flagFlowOpen, isPaused, bookingId]);
 
   const notesRef = useRef(notes);
   notesRef.current = notes;
@@ -415,7 +427,7 @@ export function NowWorkingPane({
       await saveDraft({ bookingId, notes: notesRef.current });
     } catch (error) {
       onToast?.(
-        error instanceof Error ? error.message : "Could not save notes",
+        errorMessage(error, "Could not save notes"),
       );
     }
   };
@@ -525,9 +537,7 @@ export function NowWorkingPane({
           ),
         );
         onToast?.(
-          uploadError instanceof Error
-            ? uploadError.message
-            : "Photo upload failed",
+          errorMessage(uploadError, "Photo upload failed"),
         );
       }
     }
@@ -545,7 +555,7 @@ export function NowWorkingPane({
       await saveDraft({ bookingId, photos: nextPhotos });
     } catch (error) {
       onToast?.(
-        error instanceof Error ? error.message : "Could not remove photo",
+        errorMessage(error, "Could not remove photo"),
       );
     }
   }
@@ -592,10 +602,23 @@ export function NowWorkingPane({
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setPaused((p) => !p)}
-            className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3.5 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10"
+            onClick={() => void (isManuallyPaused ? resume() : pause())}
+            // Only a running labor clock can be paused: in_progress, the
+            // on-lift inspection done, not yet completed. The server enforces
+            // the same (JOB_NOT_IN_PROGRESS / JOB_CLOCK_NOT_STARTED).
+            disabled={
+              clockPending ||
+              job?.status !== "in_progress" ||
+              !canControl
+            }
+            title={
+              canControl
+                ? undefined
+                : "The clock starts once the on-lift inspection is done"
+            }
+            className="inline-flex items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3.5 py-2 text-sm font-medium text-slate-100 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white/5"
           >
-            {paused ? (
+            {isManuallyPaused ? (
               <>
                 <Play className="h-4 w-4" /> Resume
               </>
@@ -649,7 +672,7 @@ export function NowWorkingPane({
                       onToast?.("Unblocked — clock running again");
                     } catch (err: unknown) {
                       onToast?.(
-                        err instanceof Error ? err.message : "Could not resolve",
+                        errorMessage(err, "Could not resolve"),
                       );
                     }
                   }}
@@ -732,14 +755,12 @@ export function NowWorkingPane({
             <div className="flex min-w-0 flex-col items-start gap-2">
               <p className="text-sm text-slate-400">Elapsed</p>
               <ElapsedTimer
-                startedAtMs={startedAt}
-                // Stopped time is excluded by blockedMs, not by `paused` —
-                // `paused` only freezes the tick. blockedMs is server-derived
-                // (blocker spans + recorded flag-issue admin pauses); freezing
-                // while the flag flow is open just holds the display until the
-                // close writes the span, so it resumes where it paused.
-                paused={paused || clockPaused || flagFlowOpen}
-                blockedMs={blockedMs}
+                // Stopped time lives in the clock (blockers, recorded flag
+                // time, the persisted Pause). `freeze` only holds the display
+                // while the flag flow is open, until its close records the span
+                // and the clock resumes exactly where it froze.
+                clock={clock}
+                freeze={flagFlowOpen}
                 className={elapsedTimerClass}
               />
               <p className="text-sm text-slate-400">
@@ -747,9 +768,9 @@ export function NowWorkingPane({
                   ? `Started ${formatClockTime(startedAt)}`
                   : "Not started yet"}
                 {etaMs != null ? ` · ETA ${formatClockTime(etaMs)}` : ""}
-                {clockPaused
+                {pauseSource === "blocker"
                   ? " · Paused (blocked)"
-                  : paused
+                  : pauseSource === "manual"
                     ? " · Paused"
                     : ""}
               </p>
@@ -1164,9 +1185,11 @@ export type ActiveJobRow = {
   startedAt: number | null;
   /** YYYY-MM-DD the job was scheduled for; anything but today reads as overrun. */
   scheduledDate: string | null;
-  /** Minutes the work clock was stopped — excluded from the row's timer. */
+  /** The job clock (lib/jobClock) — the row's timer and paused state. */
+  clock?: JobClock | null;
+  /** Legacy minute figure, used only when a row predates `clock`. */
   blockedMinutes?: number;
-  /** Whether the clock is stopped right now (blocker or unanswered re-quote). */
+  /** Legacy paused flag, used only when a row predates `clock`. */
   clockPaused?: boolean;
 };
 
@@ -1216,7 +1239,7 @@ function ActiveJobsList({
       </header>
 
       <p className="mt-4 text-sm text-slate-400">
-        Pick a car to focus on — the clock keeps running for every job in the bay.
+        Pick a car to focus on — focusing one job doesn&apos;t pause the others.
       </p>
 
       <div className="mt-4 flex-1 space-y-3 overflow-y-auto pb-6">
@@ -1228,6 +1251,12 @@ function ActiveJobsList({
           jobs.map((job) => {
             const overrun =
               !!job.scheduledDate && job.scheduledDate !== today;
+            const rowClock = clockFromLegacyRow(job);
+            const rowPaused = job.clock
+              ? isJobClockPaused(job.clock)
+              : Boolean(job.clockPaused);
+            const rowBlocked =
+              job.clock ? jobClockPauseSource(job.clock) === "blocker" : false;
             return (
               <button
                 key={String(job.bookingId)}
@@ -1246,17 +1275,20 @@ function ActiveJobsList({
                 </div>
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <ElapsedTimer
-                    startedAtMs={job.startedAt}
-                    paused={job.clockPaused}
-                    blockedMs={(job.blockedMinutes ?? 0) * 60_000}
-                    className="font-mono text-lg font-semibold tabular-nums text-emerald-300"
+                    clock={rowClock}
+                    freeze={!job.clock && Boolean(job.clockPaused)}
+                    className={`font-mono text-lg font-semibold tabular-nums ${
+                      rowPaused ? "text-amber-200" : "text-emerald-300"
+                    }`}
                   />
                   {overrun ? (
                     <span className="rounded bg-amber-400/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                       from {job.scheduledDate}
                     </span>
-                  ) : job.clockPaused ? (
-                    <span className="text-[11px] text-amber-300">paused</span>
+                  ) : rowPaused ? (
+                    <span className="text-[11px] text-amber-300">
+                      {rowBlocked ? "paused (blocked)" : "paused"}
+                    </span>
                   ) : (
                     <span className="text-[11px] text-slate-500">in progress</span>
                   )}

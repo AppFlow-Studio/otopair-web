@@ -18,6 +18,7 @@ import {
   Badge, Button, Card, Modal, Select, Input, SegmentedControl, NotesPanel, AuditLogCompact, tableStyles,
 } from '../Primitives'
 import { StatCard, fmtNumber, money, fmtDate, fmtDateTime } from '../Charts'
+import { errorMessage } from '@/lib/feedback'
 
 type Kind = 'web_support' | 'app_dispute' | 'stripe_chargeback'
 
@@ -97,7 +98,7 @@ const LinkBookingPanel = ({
       })
       onDone('Linked to booking.')
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to link.')
+      setError(errorMessage(e, 'Failed to link.'))
       setBusyId(null)
     }
   }
@@ -183,7 +184,7 @@ const ResolvePanel = ({
           : `Refund issued (${moneyCents((res as any)?.refundedTotalCents ?? refundCents ?? 0)}).`,
       )
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to resolve.')
+      setError(errorMessage(e, 'Failed to resolve.'))
       setBusy(false)
     }
   }
@@ -317,11 +318,11 @@ const DisputeDrawer = ({
         {/* Triage controls (web_support) */}
         {row.kind === 'web_support' && canTriage && (
           <div style={{ marginTop: 14, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            <Button size="sm" onClick={async () => { try { await assign({ token, id: row.id as Id<'support_requests'> }); onToast('Assigned to you.') } catch (e) { onToast(e instanceof Error ? e.message : 'Failed.') } }}>
+            <Button size="sm" onClick={async () => { try { await assign({ token, id: row.id as Id<'support_requests'> }); onToast('Assigned to you.') } catch (e) { onToast(errorMessage(e, 'Failed.')) } }}>
               Assign to me
             </Button>
             {row.status !== 'closed' && (
-              <Button size="sm" onClick={async () => { try { await setStatus({ token, id: row.id as Id<'support_requests'>, status: 'closed' }); onToast('Closed.') } catch (e) { onToast(e instanceof Error ? e.message : 'Failed.') } }}>
+              <Button size="sm" onClick={async () => { try { await setStatus({ token, id: row.id as Id<'support_requests'>, status: 'closed' }); onToast('Closed.') } catch (e) { onToast(errorMessage(e, 'Failed.')) } }}>
                 Close
               </Button>
             )}
@@ -358,7 +359,7 @@ const DisputeDrawer = ({
               notes={notes}
               onAdd={async (text) => {
                 try { await addNote({ token, id: row.id as Id<'support_requests'>, text }) }
-                catch (e) { onToast(e instanceof Error ? e.message : 'Failed to add note.') }
+                catch (e) { onToast(errorMessage(e, 'Failed to add note.')) }
               }}
             />
           </div>

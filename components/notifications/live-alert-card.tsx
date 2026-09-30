@@ -10,6 +10,7 @@ import {
   DeclinePickupDialog,
   ReleaseVehicleDialog,
 } from "@/components/pickup/release-vehicle-dialog";
+import { errorMessage } from "@/lib/feedback";
 
 const ACCENT_TEXT: Record<LiveAlert["accent"], string> = {
   emerald: "text-emerald-600",
@@ -69,7 +70,7 @@ export function LiveAlertCard({ alert, onAfterAction }: LiveAlertCardProps) {
       await fn();
       onAfterAction?.();
     } catch (e: any) {
-      setError(e?.message ?? "Could not complete that action.");
+      setError(errorMessage(e, "Could not complete that action."));
       setPending(false);
     }
   }

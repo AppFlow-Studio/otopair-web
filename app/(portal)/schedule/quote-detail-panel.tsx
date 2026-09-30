@@ -5,7 +5,7 @@ import { useMutation, useQuery } from "convex/react";
 import { CalendarDays, Car, DollarSign, UserRound, Wrench, X } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import { notify } from "@/lib/feedback";
+import { errorMessage, notify } from "@/lib/feedback";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { TireQuoteSubmissionDialog } from "@/app/(portal)/bookings/tire-quote-requests/page";
 import { RotorQuoteSubmissionDialog } from "@/app/(portal)/bookings/rotor-quote-requests/page";
@@ -148,7 +148,7 @@ export default function QuoteDetailPanel({
         return;
       }
       setConfirmCancel(false);
-      setError(caught instanceof Error ? caught.message : "Couldn't cancel this quote.");
+      setError(errorMessage(caught, "Couldn't cancel this quote."));
     }
   };
 

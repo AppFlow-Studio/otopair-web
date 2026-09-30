@@ -164,10 +164,22 @@ type LockedQuote = {
   taxCents: number;
   feeCents: number;
   totalCents: number;
-  /** The pre-adjustment quote total (cents). Set only when the mechanic's
-   *  adjustment changed the price, so the confirmation can show original →
-   *  new. Null when the quote was never adjusted. */
+  /** The "before" total (cents) struck through next to the agreed total: the
+   *  last total the customer confirmed BEFORE the current one (#350) — not the
+   *  create-time quote. Null when the price never moved. */
   originalTotalCents?: number | null;
+  /** What that "before" was: "Last approved" (an earlier estimate) or
+   *  "Original quote" (the booked quote). */
+  beforeLabel?: string | null;
+  /** The create-time quote, shown as its own labelled line when it differs
+   *  from the "before" — so nobody reads it as the confirmed price. */
+  originalQuoteCents?: number | null;
+  /** Shop set prices (pre-tax) — a row of their own. */
+  setPriceCents?: number;
+  /** Explicit reconciliation line on legacy rows. */
+  adjustmentCents?: number;
+  /** Billed part lines, from the same statement as the money. */
+  partsCount?: number | null;
   /** Whether partsCents/laborCents/taxCents/feeCents reconcile to totalCents.
    *  False in the robust fallback where only the agreed TOTAL is known (the
    *  per-line breakdown isn't available) — callers hide the per-line rows. */
@@ -4560,7 +4572,14 @@ function StepContent(props: {
           timeVariance={props.timeVariance}
           timeReason={props.timeReason}
           difficultyRating={props.difficultyRating}
-          partsCount={props.parts.filter((p) => p.part_name.trim()).length}
+          partsCount={
+            // Locked billing: the count of the parts the customer is billed
+            // for, from the same statement as the money (#331 — "3 logged"
+            // against 5 billed). Editable flows count the rows being edited.
+            props.readOnlyBilling && props.lockedQuote?.partsCount != null
+              ? props.lockedQuote.partsCount
+              : props.parts.filter((p) => p.part_name.trim()).length
+          }
           photoCount={
             new Set(
               [...props.photos, ...props.layoverPhotos]
@@ -5541,6 +5560,22 @@ function PartsStep({
                       ${(lockedQuote.laborCents / 100).toFixed(2)}
                     </span>
                   </div>
+                  {(lockedQuote.setPriceCents ?? 0) > 0 ? (
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Set price</span>
+                      <span className="font-medium tabular-nums text-foreground">
+                        ${((lockedQuote.setPriceCents ?? 0) / 100).toFixed(2)}
+                      </span>
+                    </div>
+                  ) : null}
+                  {(lockedQuote.adjustmentCents ?? 0) !== 0 ? (
+                    <div className="flex items-center justify-between">
+                      <span className="text-muted-foreground">Adjustment</span>
+                      <span className="font-medium tabular-nums text-foreground">
+                        ${((lockedQuote.adjustmentCents ?? 0) / 100).toFixed(2)}
+                      </span>
+                    </div>
+                  ) : null}
                   <div className="flex items-center justify-between">
                     <span className="text-muted-foreground">Tax + fee</span>
                     <span className="font-medium tabular-nums text-foreground">
@@ -5570,6 +5605,19 @@ function PartsStep({
                 </span>
               </span>
             </div>
+            {wasAdjusted && originalCents != null ? (
+              // Say what the struck-through number was — the last total the
+              // customer confirmed, and (separately) the original booked quote.
+              <div className="border-t border-primary/15 bg-primary/5 px-4 pb-2.5 text-[11px] text-muted-foreground">
+                {lockedQuote?.beforeLabel ?? "Previously"} $
+                {(originalCents / 100).toFixed(2)}
+                {lockedQuote?.originalQuoteCents != null &&
+                lockedQuote.originalQuoteCents !== originalCents &&
+                lockedQuote.beforeLabel !== "Original quote"
+                  ? ` · Original quote $${(lockedQuote.originalQuoteCents / 100).toFixed(2)}`
+                  : ""}
+              </div>
+            ) : null}
           </div>
           <p className="text-center text-[11px] text-muted-foreground">
             Parts and labor are locked to what the customer approved. To change

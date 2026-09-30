@@ -31,6 +31,13 @@ import { BOOKING_DEPOSIT_CENTS } from "./lib/payment_constants";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { resolveShopSetForBooking } from "./booking_quotes";
+import {
+  agreedCaptureFor,
+  approvalsNewestFirst,
+  latestSubmittedApproval,
+  selectAgreedApproval,
+} from "./lib/bookingMoney";
+import { loadBookingMoney } from "./bookingMoney";
 
 // ─────────────────────────────────────────────────────────────
 // Constants
@@ -1224,9 +1231,16 @@ export const _stampApprovalStripeAction = internalMutation({
       .withIndex("by_booking_and_cycle", (q: any) =>
         q.eq("booking_id", args.bookingId),
       )
-      .order("desc")
       .collect();
-    const target = candidates[0];
+    // The cycle this Stripe action belongs to. `.order("desc")` on this index
+    // sorts by the cycle string and always stamped the pre-job row (see
+    // approvalsNewestFirst in lib/bookingMoney). A final capture belongs to the
+    // AGREED row it charged — not a later declined request; every other action
+    // (increment / reauth for the change in flight) to the newest submission.
+    const target =
+      (args.stripeAction === "capture_final"
+        ? selectAgreedApproval(candidates as any[])
+        : null) ?? latestSubmittedApproval(candidates as any[]);
     if (!target) return;
     await ctx.db.patch(target._id, {
       stripe_action: args.stripeAction,
@@ -2292,14 +2306,15 @@ export const _computeFinalTotalForBooking = internalQuery({
       .withIndex("by_booking_and_cycle", (q: any) =>
         q.eq("booking_id", args.bookingId),
       )
-      .order("desc")
       .collect();
-    const latestApproved = approvals.find(
-      (r: any) =>
-        r.decision === "approved" ||
-        r.decision === "auto_approved_within_range" ||
-        r.decision === "fixed_price_informational",
-    );
+    // Newest AGREED row by decision time. This used `.order("desc")`, which
+    // sorts by the cycle string and so always took the PRE-job row's labor —
+    // a mid-job-approved job was recomputed at its pre-job price (#334).
+    const latestApproved: any =
+      selectAgreedApproval(approvals as any[]) ??
+      approvalsNewestFirst(approvals as any[]).find(
+        (r: any) => r.decision === "fixed_price_informational",
+      );
     const laborCents =
       latestApproved?.labor_cents != null
         ? (latestApproved.labor_cents as number)
@@ -2315,6 +2330,9 @@ export const _computeFinalTotalForBooking = internalQuery({
       partsSubtotalCents: partsCents,
       laborCents,
       isShopSet: shopSet.isShopSet,
+      // The canonical statement — when the price is agreed, finalize captures
+      // its total (agreedCaptureFor) instead of the recompute above.
+      money: await loadBookingMoney(ctx, booking),
       // Caller will recompute tax + fee.
     };
   },
@@ -2427,6 +2445,29 @@ export const finalizeAndChargeForBooking = internalAction({
       computePlatformFeeDollars(subtotalCents / 100) * 100,
     );
     const finalCents = subtotalCents + taxCents + feeCents;
+
+    // The price is agreed (an approved estimate, an accepted quote, or a fixed
+    // price): capture exactly the agreed statement, fee included. Billing is
+    // locked at completion, so the recompute above can only ADD drift — it is
+    // what captured $111.77 on a job approved at $198.21 (#334). It stays as a
+    // diagnostic. The settlement "owed" is the agreed total too, so a hold that
+    // can't cover it becomes a real, visible shortfall the reconcile cron chases.
+    const agreed = agreedCaptureFor(computed.money);
+    if (agreed) {
+      if (Math.abs(finalCents - agreed.captureCents) > FINALIZE_DRIFT_TOLERANCE_CENTS) {
+        console.warn(
+          `[finalizeAndChargeForBooking] booking=${String(args.bookingId)} recomputed ${finalCents} vs agreed ${agreed.captureCents} (${agreed.source}); capturing agreed`,
+        );
+      }
+      return await captureAtAmount(
+        ctx,
+        args.bookingId,
+        agreed.captureCents,
+        agreed.captureCents,
+        partsSnapshot,
+        agreed.feeCents,
+      );
+    }
 
     const mechanicSet = booking.mechanic_set_price_cents ?? 0;
     if (mechanicSet <= 0) {

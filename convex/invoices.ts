@@ -23,9 +23,25 @@ import { resolveLaborRate, type VehicleTier } from "./lib/vehicleTiers";
 import { customServiceNames } from "./lib/customServiceNames";
 import { axlePositionByServiceId } from "./lib/brakeScope";
 import { partDisplayName } from "./lib/parts";
+import { loadBookingMoney } from "./bookingMoney";
 
-const PLATFORM_FEE_BPS = 700;
+// Cash walk-in bills only: labor there is actual minutes × rate, with this as
+// the last-resort rate. Card receipts read the agreed statement instead.
 const DEFAULT_LABOR_RATE = 120;
+
+/**
+ * PDFs stored before card receipts read the money statement printed a fee of
+ * 7% of the TOTAL and a leftover "tax" (#417). A PDF generated before this
+ * re-renders (render-only, no email) on the next Share.
+ */
+export const INVOICE_MONEY_V1_MS = Date.UTC(2026, 9, 1);
+
+export function isStoredInvoiceStale(payment: any): boolean {
+  return (
+    payment?.invoice_storage_id != null &&
+    (payment.invoice_generated_at_ms ?? 0) < INVOICE_MONEY_V1_MS
+  );
+}
 
 /**
  * URL-safe random token used as capability auth for /receipts/[bookingId]?t=…
@@ -54,6 +70,14 @@ export type AssembledInvoicePart = {
   lineCents: number;
 };
 
+export type AssembledInvoiceServiceLine = {
+  name: string;
+  kind: "labor" | "set_price";
+  minutes: number | null;
+  rateCents: number | null;
+  amountCents: number;
+};
+
 export type AssembledInvoiceData = {
   bookingId: Id<"bookings">;
   paymentId: Id<"payments">;
@@ -64,6 +88,9 @@ export type AssembledInvoiceData = {
   invoiceStorageId: Id<"_storage"> | null;
   invoiceGeneratedAtMs: number | null;
   invoiceEmailedAtMs: number | null;
+  /** The stored PDF predates receipts reading the agreed statement
+   *  (isStoredInvoiceStale) and should be re-rendered. */
+  invoiceStale: boolean;
 
   customer: { name: string; email: string; phone: string | null };
   vehicle: {
@@ -96,10 +123,19 @@ export type AssembledInvoiceData = {
 
   services: string[];
   parts: AssembledInvoicePart[];
+  /** Per-service lines from the money statement: labor at its billed minutes
+   *  and rate, or a shop set price. Empty on cash / cancellation-fee bills,
+   *  which keep the single Labor line. */
+  serviceLines: AssembledInvoiceServiceLine[];
 
   laborMinutes: number;
   laborCents: number;
   partsTotalCents: number;
+  /** Shop set prices (pre-tax), when any service is flat-priced. */
+  setPriceCents: number;
+  /** An explicit reconciliation line — never folded into tax. Non-zero only
+   *  when the captured amount or a legacy row can't be matched by its lines. */
+  adjustmentCents: number;
   subtotalCents: number;
   // null on a cash walk-in invoice — the template omits the line entirely
   // (shop bill = parts + labor, no sales tax / Otopair platform fee).
@@ -226,9 +262,9 @@ async function assembleInvoiceData(
         });
     }
 
-    const partsTotalCents = parts.reduce((sum, p) => sum + p.lineCents, 0);
+    let partsTotalCents = parts.reduce((sum, p) => sum + p.lineCents, 0);
 
-    const laborMinutes = Number(ja?.actual_labor_minutes ?? 0);
+    let laborMinutes = Number(ja?.actual_labor_minutes ?? 0);
 
     // Tier-aware labor rate (Pricing v2). Falls back to flat shop.labor_rate
     // and then DEFAULT_LABOR_RATE so invoice generation never breaks on an
@@ -261,10 +297,10 @@ async function assembleInvoiceData(
           `for booking=${bookingId} shop=${booking.shop_id ?? "?"} vin=${booking.vin ?? "?"}`,
       );
     }
-    const laborCents = Math.round((laborMinutes / 60) * laborRate * 100);
+    let laborCents = Math.round((laborMinutes / 60) * laborRate * 100);
 
     const capturedCents = Number(payment.captured_amount_cents ?? 0);
-    const subtotalCents = partsTotalCents + laborCents;
+    let subtotalCents = partsTotalCents + laborCents;
 
     // A cancelled / no-show booking's captured amount is the pickup / late-cancel
     // forfeit fee (the $20 deposit), not a service bill. Represent it as a single
@@ -282,6 +318,12 @@ async function assembleInvoiceData(
     let totalCents: number;
     let platformFeeCents: number | null;
     let taxCents: number | null;
+    let serviceLines: AssembledInvoiceServiceLine[] = [];
+    let setPriceCents = 0;
+    let adjustmentCents = 0;
+    const money = isCancellationFeeReceipt || isCash
+      ? null
+      : await loadBookingMoney(ctx, booking);
     if (isCancellationFeeReceipt) {
       totalCents = capturedCents;
       platformFeeCents = 0;
@@ -290,16 +332,43 @@ async function assembleInvoiceData(
       totalCents = capturedCents > 0 ? capturedCents : subtotalCents;
       platformFeeCents = null;
       taxCents = null;
+    } else if (money) {
+      // Card receipt: the agreed statement — the same lines, tax and fee the
+      // customer confirmed (#417). This used to take the fee as 7% of the
+      // TOTAL and "tax" as whatever was left, so the split changed even when
+      // the total didn't. The total is what was actually captured; any gap
+      // against the agreed total is an explicit Adjustment line, never tax.
+      parts = money.parts.map((p) => ({
+        name: p.name,
+        oemNumber: displayOem(p.partNumber),
+        brand: p.brand,
+        qty: p.quantity,
+        unitCents: p.unitCents,
+        lineCents: p.lineCents,
+      }));
+      partsTotalCents = money.totals.partsCents;
+      serviceLines = money.services.map((s) => ({
+        name: s.name,
+        kind: s.kind,
+        minutes: s.minutes,
+        rateCents: s.rateCents,
+        amountCents: s.amountCents,
+      }));
+      laborMinutes = money.totals.laborMinutes ?? 0;
+      laborCents = money.totals.laborCents;
+      setPriceCents = money.totals.setPriceCents;
+      taxCents = money.totals.taxCents;
+      platformFeeCents = money.totals.feeCents;
+      totalCents = capturedCents > 0 ? capturedCents : money.totals.totalCents;
+      adjustmentCents =
+        money.totals.adjustmentCents + (totalCents - money.totals.totalCents);
+      subtotalCents = partsTotalCents + laborCents + setPriceCents + adjustmentCents;
     } else {
-      totalCents =
-        capturedCents > 0
-          ? capturedCents
-          : Math.round(Number(payment.amount ?? 0) * 100);
-      platformFeeCents = Math.max(
-        0,
-        Math.round((totalCents * PLATFORM_FEE_BPS) / 10000),
-      );
-      taxCents = Math.max(0, totalCents - subtotalCents - platformFeeCents);
+      totalCents = capturedCents;
+      platformFeeCents = null;
+      taxCents = null;
+      adjustmentCents = totalCents - subtotalCents;
+      subtotalCents = totalCents;
     }
 
     // Pricing v2 sanity check: compare captured subtotal against engine band
@@ -400,6 +469,7 @@ async function assembleInvoiceData(
       invoiceStorageId: payment.invoice_storage_id ?? null,
       invoiceGeneratedAtMs: payment.invoice_generated_at_ms ?? null,
       invoiceEmailedAtMs: payment.invoice_emailed_at_ms ?? null,
+      invoiceStale: isStoredInvoiceStale(payment),
 
       customer: {
         name: customerName,
@@ -445,10 +515,13 @@ async function assembleInvoiceData(
             }),
           ],
       parts: isCancellationFeeReceipt ? [] : parts,
+      serviceLines: isCancellationFeeReceipt ? [] : serviceLines,
 
       laborMinutes: isCancellationFeeReceipt ? 0 : laborMinutes,
       laborCents: isCancellationFeeReceipt ? 0 : laborCents,
       partsTotalCents: isCancellationFeeReceipt ? 0 : partsTotalCents,
+      setPriceCents: isCancellationFeeReceipt ? 0 : setPriceCents,
+      adjustmentCents: isCancellationFeeReceipt ? 0 : adjustmentCents,
       subtotalCents: isCancellationFeeReceipt ? totalCents : subtotalCents,
       taxCents,
       platformFeeCents,
@@ -628,8 +701,15 @@ export const _patchInvoiceMeta = internalMutation({
   },
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = {};
-    if (args.invoiceStorageId !== undefined)
+    if (args.invoiceStorageId !== undefined) {
       patch.invoice_storage_id = args.invoiceStorageId;
+      // A re-render replaces the stored PDF — drop the old file.
+      const current: any = await ctx.db.get(args.paymentId);
+      const oldId = current?.invoice_storage_id;
+      if (oldId && String(oldId) !== String(args.invoiceStorageId)) {
+        await ctx.storage.delete(oldId);
+      }
+    }
     if (args.invoiceGeneratedAtMs !== undefined)
       patch.invoice_generated_at_ms = args.invoiceGeneratedAtMs;
     if (args.invoiceEmailedAtMs !== undefined)
@@ -743,9 +823,12 @@ export const getReceiptForBooking = query({
       emailedAtMs: data.invoiceEmailedAtMs,
       breakdown: {
         parts: data.parts,
+        serviceLines: data.serviceLines,
         laborMinutes: data.laborMinutes,
         laborCents: data.laborCents,
         partsTotalCents: data.partsTotalCents,
+        setPriceCents: data.setPriceCents,
+        adjustmentCents: data.adjustmentCents,
         subtotalCents: data.subtotalCents,
         taxCents: data.taxCents,
         platformFeeCents: data.platformFeeCents,
@@ -798,6 +881,10 @@ export const getInvoicePdfUrl = query({
       .unique();
     const storageId = (payment as any)?.invoice_storage_id;
     if (!storageId) return null;
+    // A PDF rendered before receipts read the agreed statement can state a
+    // different tax/fee split than the customer confirmed (#417). Report it as
+    // absent so the caller asks for a fresh render (requestInvoiceGeneration).
+    if (isStoredInvoiceStale(payment)) return null;
 
     return await ctx.storage.getUrl(storageId);
   },
@@ -824,11 +911,13 @@ export const requestInvoiceGeneration = mutation({
     if (!payment) throw new Error("no payment");
     if (payment.status !== "completed" && payment.status !== "refunded")
       throw new Error("payment not finalized");
-    if (payment.invoice_storage_id) return { scheduled: false };
+    const stale = isStoredInvoiceStale(payment);
+    if (payment.invoice_storage_id && !stale) return { scheduled: false };
     await ctx.scheduler.runAfter(
       0,
       (internal as any).invoices_node.generateAndEmail,
-      { bookingId },
+      // A stale PDF re-renders in place; the customer already has the email.
+      stale ? { bookingId, renderOnly: true } : { bookingId },
     );
     return { scheduled: true };
   },

@@ -219,7 +219,20 @@ for (const quoteType of ["tire", "rotor"] as const) {
       hold: await ctx.db.get(seed.holdId),
     }));
     expect(result.booking?.status).toBe("confirmed");
-    expect(result.booking?.total_cost).toBe(quoteType === "tire" ? 590 : 410);
+    // The stored total is the quote PLUS tax and the service fee — what Review
+    // & Pay showed the customer (#445), not the bare pre-tax quote. This shop
+    // has no state/zip, so tax is the 6% default and the fee is 7%:
+    // 590 → 590 + 35.40 + 41.30 = 666.70; 410 → 410 + 24.60 + 28.70 = 463.30.
+    const quoted = quoteType === "tire" ? 590 : 410;
+    const allInCents = quoteType === "tire" ? 66670 : 46330;
+    expect(Math.round((result.booking?.total_cost ?? 0) * 100)).toBe(allInCents);
+    expect(result.booking?.disclosed_range_high_cents).toBe(allInCents);
+    expect(result.booking?.quoted_set_price_cents).toBe(allInCents);
+    const qb = result.booking?.quoted_breakdown as any;
+    expect(qb.parts_cents + qb.labor_cents).toBe(quoted * 100);
+    expect(qb.parts_cents + qb.labor_cents + qb.tax_cents + qb.service_fee_cents).toBe(
+      allInCents,
+    );
     expect(result.hold).toBeNull();
   });
 

@@ -68,6 +68,14 @@ import { bookingVisibleUnderScope, getCurrentNotificationScope } from "./lib/not
 import { BOOKING_STATUS_VISUALS, type BookingStatus } from "../lib/booking-status";
 import { computePlatformFeeDollars } from "../lib/platformFee";
 import { isNamedPart, partDisplayName } from "./lib/parts";
+import { loadBookingMoney } from "./bookingMoney";
+import {
+  isAgreedDecision,
+  quoteAllInCents,
+  selectAgreedApproval,
+  storedMoneyForCreate,
+  taxLocationForShop,
+} from "./lib/bookingMoney";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
@@ -2658,6 +2666,18 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       quoted.total_cents,
     );
 
+    // What the booking row STORES for labor / parts / total: shop-priced
+    // services at the shop's price, not the phone's $0 engine labor (#390).
+    // Null when nothing is shop-priced → the client sums, exactly as before.
+    const stored = storedMoneyForCreate({
+      services: args.services,
+      fixedPriceLines: disclosedRange.fixed_price_lines,
+      loc: taxLocationForShop(shop),
+    });
+    const storedLaborCost = stored?.laborCost ?? labor_cost;
+    const storedPartsCost = stored?.partsCost ?? parts_cost;
+    const storedTotalCost = stored?.totalCost ?? total_cost;
+
     const durationMinutes =
       estimated_labor_minutes > 0
         ? estimated_labor_minutes
@@ -2695,9 +2715,9 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
       service_ids: args.services.map((s) => s.service_id),
       scheduled_date: scheduledDate,
       scheduled_time: scheduledTime,
-      labor_cost,
-      parts_cost,
-      total_cost,
+      labor_cost: storedLaborCost,
+      parts_cost: storedPartsCost,
+      total_cost: storedTotalCost,
       estimated_labor_minutes: estimated_labor_minutes > 0 ? estimated_labor_minutes : undefined,
       status: "pending",
       assignment_preference: assignmentPreferenceFromRequestedMechanic(args.mechanic_id),
@@ -2769,7 +2789,7 @@ async function createBatchImpl(ctx: MutationCtx, args: CreateBatchArgs): Promise
         booking_id: bookingId,
         user_id: args.user_id,
         shop_id: args.shop_id,
-        amount: total_cost,
+        amount: storedTotalCost,
         payment_method: "card",
         status: "processing",
         stripe_payment_intent_id:
@@ -11521,29 +11541,12 @@ export const getJobDetail = query({
         q.eq("booking_id", booking._id),
       )
       .collect();
-    const AGREED_DECISIONS = new Set(["approved", "auto_approved_within_range"]);
-    const AGREED_CYCLE_RANK: Record<string, number> = {
-      pre_job: 1,
-      mid_job: 2,
-      post_job: 3,
-    };
-    const agreedApproval: any = jobDetailApprovals
-      .filter(
-        (a: any) =>
-          AGREED_DECISIONS.has(a.decision ?? "") &&
-          a.parts_subtotal_cents != null &&
-          Array.isArray(a.parts_snapshot),
-      )
-      .sort((a: any, b: any) => {
-        const byCycle =
-          (AGREED_CYCLE_RANK[a.cycle] ?? 0) - (AGREED_CYCLE_RANK[b.cycle] ?? 0);
-        if (byCycle !== 0) return byCycle;
-        return (
-          (a.submitted_at_ms ?? a._creationTime) -
-          (b.submitted_at_ms ?? b._creationTime)
-        );
-      })
-      .at(-1);
+    // THE agreed-approval rule (lib/bookingMoney selectAgreedApproval): the
+    // newest row the customer agreed to, by decision time — the same row the
+    // money statement, the receipt and capture use.
+    const agreedApproval: any = selectAgreedApproval(
+      jobDetailApprovals.filter((a: any) => Array.isArray(a.parts_snapshot)) as any[],
+    );
     const effectivePricedPartsSnapshot: any =
       agreedApproval != null
         ? (agreedApproval.parts_snapshot as any[]).map((p: any) => {
@@ -11697,7 +11700,7 @@ export const getJobDetail = query({
     const seenScopeReasons = new Set<string>();
     const agreedScopeReasons: string[] = [];
     for (const a of jobDetailApprovals) {
-      if (!AGREED_DECISIONS.has((a as any).decision ?? "")) continue;
+      if (!isAgreedDecision((a as any).decision)) continue;
       const reason = (a as any).notes;
       if (typeof reason === "string" && reason.trim()) {
         const trimmed = reason.trim();
@@ -12023,6 +12026,16 @@ export const getJobDetail = query({
           : null,
       quotedBreakdown: (booking as any).quoted_breakdown ?? null,
       pricedPartsSnapshot: effectivePricedPartsSnapshot,
+      // The canonical money statement (convex/lib/bookingMoney.ts). The shop
+      // card, the Timeline and the completion screen render totals, line counts
+      // and the "before" price from this — the same numbers the customer's
+      // receipt, the PDF and the capture use.
+      money: await loadBookingMoney(ctx, booking, {
+        estimateRateCents:
+          mechanicLaborRateDollars != null
+            ? Math.round(mechanicLaborRateDollars * 100)
+            : null,
+      }),
       // Booking origin — lets the detail panel detect mechanic walk-ins and
       // unlock billing / suppress catalog parts for them.
       source: (booking as any).source ?? null,
@@ -18073,6 +18086,46 @@ async function recordPreauthorizedQuoteDeposit(
  * Fills in shop_id, costs, and pricing onto the booking, flips status to
  * "confirmed", and supersedes the remaining responses.
  */
+/**
+ * The all-in price of an accepted tire / rotor quote: the shop's quoted total
+ * plus tax and the service fee, computed exactly the way Review & Pay shows it
+ * to the customer (lib/bookingMoney quoteAllInCents). Stored as the booking's
+ * total, its disclosed band and its quoted breakdown, so the shop card, the
+ * approval gate and capture all use the number the customer authorized — not
+ * the bare pre-tax quote (#445).
+ */
+async function quoteAcceptMoney(
+  ctx: any,
+  args: {
+    shopId: Id<"shops">;
+    laborDollars: number;
+    partsDollars: number;
+    quoteTotalDollars: number;
+  },
+) {
+  const shop = await ctx.db.get(args.shopId);
+  const laborCents = Math.round(args.laborDollars * 100);
+  const partsCents = Math.round(args.partsDollars * 100);
+  const quoteTotalCents = Math.round(args.quoteTotalDollars * 100);
+  const allIn = quoteAllInCents({
+    laborCents,
+    partsCents,
+    quoteTotalCents,
+    loc: taxLocationForShop(shop),
+  });
+  return {
+    totalCents: allIn.totalCents,
+    breakdown: {
+      // Any gap between the shop's typed total and parts + labor sits with
+      // parts, so the breakdown always sums to the stored total.
+      parts_cents: quoteTotalCents - laborCents,
+      labor_cents: laborCents,
+      tax_cents: allIn.taxCents,
+      service_fee_cents: allIn.feeCents,
+    },
+  };
+}
+
 export const acceptTireQuote = mutation({
   args: {
     booking_id: v.id("bookings"),
@@ -18206,23 +18259,33 @@ export const acceptTireQuote = mutation({
     // Fill in the chosen shop + pricing + scheduled slot + service. Schedule
     // comes from the customer's picked slot (already validated above); price
     // fields always come from `response`, never from client args.
+    const tireAllIn = await quoteAcceptMoney(ctx, {
+      shopId: response.shop_id,
+      laborDollars: response.labor_cost,
+      partsDollars: response.per_tire_price * response.quantity,
+      quoteTotalDollars: response.total,
+    });
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
       mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: response.per_tire_price * response.quantity,
-      total_cost: response.total,
+      total_cost: tireAllIn.totalCents / 100,
       scheduled_date: args.scheduled_date,
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
-      // The customer agreed to the quoted total, so it IS the disclosed price
-      // band — capture up to it needs no further consent; added scope beyond it
-      // reauthorizes. Matches the normal pre-job-approval booking shape so the
-      // deposit / capture / mid-job flows treat a quote booking identically.
+      // The customer agreed to the quoted total PLUS tax and the service fee —
+      // that's what Review & Pay showed them — so the all-in amount IS the
+      // disclosed price band: capture up to it needs no further consent, and a
+      // pre-job estimate at the quote lands in range instead of asking the
+      // customer to re-approve their own price. Added scope beyond it
+      // reauthorizes, like every other booking.
       payment_approval_state: "none",
-      disclosed_range_low_cents: Math.round(response.total * 100),
-      disclosed_range_high_cents: Math.round(response.total * 100),
+      disclosed_range_low_cents: tireAllIn.totalCents,
+      disclosed_range_high_cents: tireAllIn.totalCents,
+      quoted_set_price_cents: tireAllIn.totalCents,
+      quoted_breakdown: tireAllIn.breakdown,
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
@@ -18235,7 +18298,7 @@ export const acceptTireQuote = mutation({
         bookingId: args.booking_id,
         userId: booking.user_id,
         shopId: response.shop_id,
-        amount: response.total,
+        amount: tireAllIn.totalCents / 100,
         now,
         preauth: args.preauthorized_payment,
       });
@@ -18593,20 +18656,29 @@ export const acceptRotorQuote = mutation({
       excludeSessionId: holdConsume.excludeSessionId,
     });
 
+    const rotorAllIn = await quoteAcceptMoney(ctx, {
+      shopId: response.shop_id,
+      laborDollars: response.labor_cost,
+      partsDollars: rotorsSubtotal + padsSubtotal,
+      quoteTotalDollars: response.total,
+    });
     await ctx.db.patch(args.booking_id, {
       shop_id: response.shop_id,
       mechanic_id: acceptedMechanicId,
       labor_cost: response.labor_cost,
       parts_cost: rotorsSubtotal + padsSubtotal,
-      total_cost: response.total,
+      total_cost: rotorAllIn.totalCents / 100,
       scheduled_date: args.scheduled_date,
       scheduled_time: args.scheduled_time,
       estimated_labor_minutes: acceptedDurationMinutes,
       status: "confirmed",
-      // Quoted total IS the disclosed price band (see acceptTireQuote).
+      // The all-in quote (+ tax + fee, what Review & Pay showed) IS the
+      // disclosed price band (see acceptTireQuote).
       payment_approval_state: "none",
-      disclosed_range_low_cents: Math.round(response.total * 100),
-      disclosed_range_high_cents: Math.round(response.total * 100),
+      disclosed_range_low_cents: rotorAllIn.totalCents,
+      disclosed_range_high_cents: rotorAllIn.totalCents,
+      quoted_set_price_cents: rotorAllIn.totalCents,
+      quoted_breakdown: rotorAllIn.breakdown,
       updated_at: now,
       ...(attachServiceId ? { service_ids: [attachServiceId] } : {}),
     });
@@ -18617,7 +18689,7 @@ export const acceptRotorQuote = mutation({
         bookingId: args.booking_id,
         userId: booking.user_id,
         shopId: response.shop_id,
-        amount: response.total,
+        amount: rotorAllIn.totalCents / 100,
         now,
         preauth: args.preauthorized_payment,
       });
@@ -18962,74 +19034,22 @@ export const getReceipt = query({
       .withIndex("by_booking_id", (q) => q.eq("booking_id", booking._id))
       .first();
 
-    // Authoritative final breakdown — the frozen parts/labor/tax/fee on the
-    // last agreed booking_approvals row (same source the activity log prints).
-    // Without it the totals below fall back to deriving tax as a leftover of
-    // the booking's stale total_cost, which collapses tax to $0 and makes the
-    // receipt total disagree with what the customer actually approved.
+    // Every approval row — only for the mechanic's per-cycle notes below. The
+    // money itself comes from the canonical statement (loadBookingMoney).
     const approvalRows = await ctx.db
       .query("booking_approvals")
       .withIndex("by_booking_and_cycle", (q: any) =>
         q.eq("booking_id", booking._id),
       )
       .collect();
-    const CYCLE_RANK: Record<string, number> = {
-      pre_job: 1,
-      mid_job: 2,
-      post_job: 3,
-    };
-    // A frozen breakdown is only "agreed" — and therefore chargeable and
-    // printable as the customer's receipt — when they actually accepted it:
-    // explicitly ("approved") or by auto-accept within the pre-authorized
-    // range ("auto_approved_within_range"). EVERY other decision is a
-    // non-agreement and must not drive the receipt: "declined"/"withdrawn",
-    // and also "sla_expired" (an estimate offered mid-job and never answered),
-    // "reauth_required", or a still-"pending"/null row. The old blocklist only
-    // dropped declined/withdrawn, so an expired upsell the customer let lapse —
-    // e.g. a "tires were worn" mid-job estimate — was picked as the final
-    // breakdown and billed onto the receipt as if the work had happened.
-    // Mirrors customJobs.ts's is-agreed predicate, which already excludes
-    // sla_expired.
-    const isAgreedDecision = (d: string | null | undefined) =>
-      d === "approved" || d === "auto_approved_within_range";
-    const finalApproval = approvalRows
-      .filter(
-        (a) =>
-          a.parts_subtotal_cents != null &&
-          a.labor_cents != null &&
-          a.tax_cents != null &&
-          a.service_fee_cents != null &&
-          isAgreedDecision(a.decision),
-      )
-      .sort((a, b) => {
-        const byCycle =
-          (CYCLE_RANK[a.cycle] ?? 0) - (CYCLE_RANK[b.cycle] ?? 0);
-        if (byCycle !== 0) return byCycle;
-        return a.submitted_at_ms - b.submitted_at_ms;
-      })
-      .pop();
 
-    // Custom jobs on this booking — the structured record behind the
-    // `custom_services` display copy. Used two ways below: to drop declined
-    // lines from the charged line items (defense-in-depth on top of the
-    // decline-time strip of `custom_services`), and to build the
-    // "Declined — not charged" audit block.
+    // Custom jobs on this booking — for the "Declined — not charged" audit
+    // block (declined lines never reach the charged lines: the statement
+    // skips them).
     const customJobRows = await ctx.db
       .query("custom_jobs")
       .withIndex("by_booking", (q: any) => q.eq("booking_id", booking._id))
       .collect();
-    const declinedMatchKeys = new Set<string>(
-      customJobRows
-        .filter((c: any) => c.status === "declined")
-        .map((c: any) => c.match_key ?? serviceMatchKey(String(c.name))),
-    );
-    // Labor-time fallback per custom line. An added line's duration lives on
-    // `custom_services.duration_minutes`, but a line added before that was
-    // persisted at add-time (or via a path that never set it) carries the
-    // estimate only on the `custom_jobs` row. Read through to it so the split
-    // below can still attribute labor to the line instead of dumping the whole
-    // labor subtotal onto the original service's row. Keyed on the same
-    // match_key the display copy dedupes on.
     const shop = booking.shop_id ? await ctx.db.get(booking.shop_id) : null;
     const mechanic = booking.mechanic_id
       ? await ctx.db.get(booking.mechanic_id)
@@ -19053,90 +19073,25 @@ export const getReceipt = query({
       : null;
     const meta: any = vehicleRow?.metadata ?? {};
 
-    // Service line items — pull names and labor cost. The booking carries
-    // a single labor_cost across all services; split is proportional to
-    // the catalog default_labor_hours so each line item reads naturally.
+    // Lines and totals come from the canonical money statement — the SAME one
+    // the shop card, the PDF, the card-hold and capture read — so the receipt
+    // can't disagree with any of them (#334/#417). The response shape is
+    // unchanged so the current app keeps rendering it:
+    //   • "service" lines render under LABOR: labor at its billed minutes and
+    //     rate (minutes × rate reproduces each amount, #335), plus shop
+    //     set-price lines (labor_hours null). labor_subtotal includes both.
+    //   • "part" lines render under PARTS; a legacy reconciliation gap appears
+    //     as an explicit "Adjustment" part line, never inside tax.
+    const money = await loadBookingMoney(ctx, booking);
     type ServiceLine = {
       type: "service";
       name: string;
       labor_hours: number | null;
       labor_cost: number | null;
+      kind: "labor" | "set_price";
+      labor_minutes: number | null;
+      labor_rate: number | null;
     };
-    // Booked (catalog) services — name + catalog default hours. The per-line
-    // AGREED split lives in resolveAgreedLaborLines (the single reader shared
-    // with the post-job Labor step's seeding), so both derive per-line labor
-    // from the same canonical source instead of a hand-rolled copy that drifts.
-    const baseServices: Array<{
-      name: string;
-      catalogHours: number | null;
-      serviceId: string;
-    }> = [];
-    if (Array.isArray(booking.service_ids)) {
-      for (const sid of booking.service_ids) {
-        const svc: any = await ctx.db.get(sid);
-        if (!svc) continue;
-        baseServices.push({
-          name: svc.name ?? "Service",
-          serviceId: String(sid),
-          catalogHours:
-            typeof svc.default_labor_hours === "number"
-              ? svc.default_labor_hours
-              : null,
-        });
-      }
-    }
-    // Off-catalog lines share the split so labor is apportioned across
-    // everything the customer pays for. Declined mid-job lines are reverted off
-    // `custom_services` at decline time; this guard drops any that slipped
-    // through so a declined line can never bill or steal apportionment.
-    const customServices: Array<{
-      name: string;
-      durationMinutes: number | null;
-    }> = Array.isArray((booking as any).custom_services)
-      ? ((booking as any).custom_services as any[])
-          .filter((c: any) => {
-            const name = typeof c?.name === "string" ? c.name.trim() : "";
-            return name && !declinedMatchKeys.has(serviceMatchKey(name));
-          })
-          .map((c: any) => ({
-            name: String(c.name).trim(),
-            durationMinutes:
-              typeof c?.duration_minutes === "number"
-                ? c.duration_minutes
-                : null,
-          }))
-      : [];
-    // Labor to split — the agreed approval labor when present, else the
-    // booking's labor_cost. Keeps each line consistent with the Labor row below.
-    const laborSubtotal: number | null =
-      finalApproval != null
-        ? finalApproval.labor_cents! / 100
-        : (booking.labor_cost ?? null);
-    const { lines: resolvedLaborLines } = resolveAgreedLaborLines({
-      baseServices,
-      customServices,
-      customJobs: customJobRows as any,
-      allocations: (finalApproval as any)?.labor_allocations ?? null,
-      laborSubtotalDollars: laborSubtotal,
-    });
-    const serviceLines: ServiceLine[] = resolvedLaborLines.map((l) => ({
-      type: "service",
-      name: l.name,
-      labor_hours: l.laborHours,
-      labor_cost: l.laborCost,
-    }));
-
-    // Parts line items — prefer the approved pre-job estimate snapshot, which
-    // carries the prices + quantities the customer agreed to (including any
-    // mechanic price adjustment). That snapshot is what `parts_subtotal_cents`
-    // on the same approval row is computed from, so each line's total
-    // reconciles exactly with the "Parts" aggregate below. Fall back to
-    // job_actuals.parts_used for legacy bookings with no approval row.
-    //
-    // `cost` is the LINE TOTAL (unit_cost × quantity); `unit_cost` + `quantity`
-    // are carried so the UI can render "4 × $39.48". Mirror the exact filtering
-    // in partsSubtotalCents (booking_approvals.ts): drop not-used and
-    // customer-supplied rows so the lines sum to the aggregate.
     type PartLine = {
       type: "part";
       name: string;
@@ -19145,68 +19100,56 @@ export const getReceipt = query({
       unit_cost: number | null;
       cost: number | null;
     };
-    const partsLineSource: any[] =
-      finalApproval != null && Array.isArray((finalApproval as any).parts_snapshot)
-        ? ((finalApproval as any).parts_snapshot as any[])
-        : Array.isArray(jobActual?.parts_used)
-          ? (jobActual!.parts_used as any[])
-          : [];
-    const partLines: PartLine[] = partsLineSource
-      // Intentionally NOT billablePart here: a legacy blank-name row is already
-      // baked into this booking's FROZEN parts_subtotal_cents, so dropping it
-      // from the lines would make them stop summing to that aggregate. Keep it
-      // and let partDisplayName give it a name ("Unnamed part") instead. New
-      // bookings never reach here with a blank row — performSubmission strips
-      // them before the snapshot is frozen.
-      .filter((p: any) => p?.not_used !== true && p?.supplied_by !== "customer")
-      .map((p: any) => {
-        const unit = typeof p.cost === "number" ? p.cost : null;
-        const qty = Math.max(0, typeof p.quantity === "number" ? p.quantity : 1);
-        return {
-          type: "part" as const,
-          name: partDisplayName(p),
-          oem_number: p.oem_number ?? null,
-          quantity: qty,
-          unit_cost: unit,
-          cost: unit != null ? Math.round(unit * qty * 100) / 100 : null,
-        };
+    const serviceLines: ServiceLine[] = (money?.services ?? []).map((s) => ({
+      type: "service",
+      name: s.name,
+      labor_hours:
+        s.minutes != null ? Math.round((s.minutes / 60) * 100) / 100 : null,
+      labor_cost: s.amountCents / 100,
+      kind: s.kind,
+      labor_minutes: s.minutes,
+      labor_rate: s.rateCents != null ? s.rateCents / 100 : null,
+    }));
+    const partLines: PartLine[] = (money?.parts ?? []).map((p) => ({
+      type: "part" as const,
+      name: p.name,
+      oem_number: p.partNumber,
+      quantity: p.quantity,
+      unit_cost: p.unitCents / 100,
+      cost: p.lineCents / 100,
+    }));
+    const adjustmentCents = money?.totals.adjustmentCents ?? 0;
+    if (adjustmentCents !== 0) {
+      partLines.push({
+        type: "part",
+        name: "Adjustment",
+        oem_number: null,
+        quantity: 1,
+        unit_cost: adjustmentCents / 100,
+        cost: adjustmentCents / 100,
       });
-
-    // Totals stack. Prefer the frozen breakdown on the final approval row
-    // (parts / labor / tax / fee all captured at submit-time, summing exactly
-    // to the agreed total). Fall back to the legacy derivation only for old
-    // bookings that predate the frozen breakdown.
-    const partsSubtotalQuoted: number = booking.parts_cost ?? 0;
-    let partsSubtotalActual: number;
-    let platformFee: number;
-    let taxRemainder: number;
-    let grandTotal: number;
-
-    if (finalApproval != null) {
-      partsSubtotalActual = finalApproval.parts_subtotal_cents! / 100;
-      platformFee = finalApproval.service_fee_cents! / 100;
-      taxRemainder = finalApproval.tax_cents! / 100;
-      grandTotal = finalApproval.mechanic_set_price_cents / 100;
-    } else {
-      partsSubtotalActual =
-        typeof jobActual?.actual_parts_cost === "number"
-          ? jobActual!.actual_parts_cost!
-          : (booking.parts_cost ?? 0);
-      platformFee =
-        laborSubtotal != null
-          ? computePlatformFeeDollars(laborSubtotal + partsSubtotalActual)
-          : 0;
-      grandTotal =
-        typeof booking.total_cost === "number"
-          ? booking.total_cost
-          : (laborSubtotal ?? 0) + partsSubtotalActual + platformFee;
-      // Tax isn't tracked discretely on legacy rows — derive the remainder so
-      // the four-row stack still sums to the captured total.
-      taxRemainder = Math.max(
-        0,
-        grandTotal - (laborSubtotal ?? 0) - partsSubtotalActual - platformFee,
-      );
     }
+    const laborSubtotal: number | null = money
+      ? (money.totals.laborCents + money.totals.setPriceCents) / 100
+      : (booking.labor_cost ?? null);
+    const partsSubtotalActual: number = money
+      ? (money.totals.partsCents + adjustmentCents) / 100
+      : (booking.parts_cost ?? 0);
+    const platformFee = (money?.totals.feeCents ?? 0) / 100;
+    const taxRemainder = (money?.totals.taxCents ?? 0) / 100;
+    const grandTotal = money
+      ? money.totals.totalCents / 100
+      : (booking.total_cost ?? 0);
+    // The rate the labor lines were billed at, when they share one — the
+    // receipt caption multiplies it by each line's hours.
+    const billedRates = new Set(
+      (money?.services ?? [])
+        .filter((s) => s.kind === "labor" && s.rateCents != null)
+        .map((s) => s.rateCents as number),
+    );
+    const billedRate =
+      billedRates.size === 1 ? [...billedRates][0] / 100 : null;
+    const partsSubtotalQuoted: number = booking.parts_cost ?? 0;
     const partsSaved = Math.max(0, partsSubtotalQuoted - partsSubtotalActual);
 
     // The mechanic's own "why I changed this" notes, one per estimate cycle
@@ -19261,7 +19204,10 @@ export const getReceipt = query({
             phone: (shop as any).phone ?? null,
             rating: (shop as any).rating ?? null,
             review_count: (shop as any).review_count ?? null,
-            labor_rate: (shop as any).labor_rate ?? null,
+            // The rate the labor lines were actually billed at (the tier /
+            // approval rate), so "hours @ rate" on the receipt multiplies out.
+            // Falls back to the shop's flat rate when lines differ or none bill.
+            labor_rate: billedRate ?? (shop as any).labor_rate ?? null,
           }
         : null,
       mechanic: mechanic
@@ -19344,17 +19290,35 @@ export const getReceipt = query({
         tax: taxRemainder,
         total: grandTotal,
         parts_saved: partsSaved,
+        // Additive detail (labor_subtotal / parts_subtotal above already fold
+        // these in so the four-row stack sums for the current app).
+        set_price_subtotal: (money?.totals.setPriceCents ?? 0) / 100,
+        adjustment: adjustmentCents / 100,
+        labor_minutes: money?.totals.laborMinutes ?? null,
+        // What was actually collected, when it differs from the agreed total.
+        captured: money?.payment.capturedCents != null
+          ? money.payment.capturedCents / 100
+          : null,
       },
       payment: payment
         ? {
             method: (payment as any).payment_method ?? null,
             card_brand: (payment as any).card_brand ?? null,
             card_last4: (payment as any).card_last4 ?? null,
-            amount: (payment as any).amount,
+            // What was actually captured. `payments.amount` is the estimate
+            // written when the hold was created and never updated.
+            amount:
+              typeof (payment as any).captured_amount_cents === "number"
+                ? (payment as any).captured_amount_cents / 100
+                : (payment as any).amount,
             status: (payment as any).status,
             stripe_intent_id:
               (payment as any).stripe_payment_intent_id ?? null,
-            charged_at: (payment as any).updated_at ?? (payment as any).created_at ?? null,
+            charged_at:
+              (payment as any).captured_at_ms ??
+              (payment as any).updated_at ??
+              (payment as any).created_at ??
+              null,
             invoice_storage_id: (payment as any).invoice_storage_id ?? null,
             // Cumulative refunded total in CENTS. shopPaymentRefunds recomputes
             // this as SUM(payment_refunds) on every settle, so it's authoritative

@@ -235,12 +235,17 @@ function eventVisual(ev: ActivityEvent): {
       // service payment. "Cancellation fee" is the domain term (covers pickup
       // releases, late cancels, and no-shows alike); the neighbouring "Vehicle
       // released for pickup" entry supplies the pickup-specific context.
+      // Collected less than the agreed total: say so, with both numbers — the
+      // shop must never read a short capture as the job's price (#334).
+      const short = (ev.data.shortfallCents ?? 0) > 0 && ev.data.agreedCents != null;
       const title =
         ev.data.kind === "cancellation_fee"
           ? `Cancellation fee collected — ${amount}`
-          : `Payment collected — ${amount}`;
+          : short
+            ? `Payment collected — ${amount} of $${(ev.data.agreedCents! / 100).toFixed(2)} agreed`
+            : `Payment collected — ${amount}`;
       return {
-        icon: iconWrap("emerald", <Banknote className="h-3.5 w-3.5" />),
+        icon: iconWrap(short ? "amber" : "emerald", <Banknote className="h-3.5 w-3.5" />),
         title,
       };
     }
@@ -441,10 +446,21 @@ function EventDetail({
     case "part_edit":
       return <PartEditDetail data={ev.data} />;
     case "payment_captured":
-      return ev.data.cardBrand || ev.data.last4 ? (
+      return ev.data.cardBrand || ev.data.last4 || (ev.data.shortfallCents ?? 0) > 0 ? (
         <p className="mt-0.5 text-[11px] text-muted-foreground">
-          {ev.data.cardBrand ?? "Card"}
-          {ev.data.last4 ? ` ···· ${ev.data.last4}` : ""}
+          {ev.data.cardBrand || ev.data.last4 ? (
+            <>
+              {ev.data.cardBrand ?? "Card"}
+              {ev.data.last4 ? ` ···· ${ev.data.last4}` : ""}
+            </>
+          ) : null}
+          {(ev.data.shortfallCents ?? 0) > 0 ? (
+            <span className="text-amber-700 dark:text-amber-400">
+              {ev.data.cardBrand || ev.data.last4 ? " · " : ""}
+              ${((ev.data.shortfallCents ?? 0) / 100).toFixed(2)} short of the agreed
+              total
+            </span>
+          ) : null}
         </p>
       ) : null;
     default:

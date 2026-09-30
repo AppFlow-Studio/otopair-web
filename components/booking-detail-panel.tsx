@@ -13,6 +13,7 @@ import {
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { BookingMoney } from "@/convex/lib/bookingMoney";
 import { notify } from "@/lib/feedback";
 import { ArrowRight, Bell, Car, Clock, Ellipsis, Loader2, MessageSquare, User, X } from "lucide-react";
 import { useEntityLabel } from "@/lib/use-entity-label";
@@ -600,6 +601,9 @@ const DIAGNOSTIC_SYSTEM_LABELS: Record<
 export interface JobDetailData {
   _id: Id<"bookings">;
   _creationTime: number;
+  /** The canonical money statement (convex/lib/bookingMoney.ts) — every total,
+   *  line count and "before" price the shop sees comes from this. */
+  money?: BookingMoney | null;
   status: string;
   customerName: string;
   customerEmail: string;

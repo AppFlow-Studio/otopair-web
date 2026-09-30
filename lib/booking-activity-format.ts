@@ -128,6 +128,10 @@ export type ActivityEvent =
          *  not a service charge. Mirror of the server union in
          *  convex/booking_activity.ts — keep the two in lockstep. */
         kind: "service" | "cancellation_fee";
+        /** The agreed total from the money statement (service charges only). */
+        agreedCents?: number | null;
+        /** agreed − collected, when the capture fell short (> $1). */
+        shortfallCents?: number | null;
       };
     }
   | {

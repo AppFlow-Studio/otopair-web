@@ -36,6 +36,7 @@ import { requireShopOwnerBySubject, requireShopViewerForPayments } from "./lib/s
 import { resolveServiceNames, resolveVehicleDisplay } from "./lib/bookingEnrichment";
 import { formatPartIdentity } from "../lib/vehicle-passport";
 import { partDisplayName } from "./lib/parts";
+import { selectAgreedApproval } from "./lib/bookingMoney";
 
 const STRIPE_API_VERSION = Stripe.API_VERSION;
 let stripeClient: Stripe | null = null;
@@ -337,34 +338,27 @@ export const getShopInvoice = query({
     // re-quoted (Adjust quote / Add unforeseen scope), the original estimate in
     // priced_parts_snapshot + quoted_breakdown is stale; the approval row holds
     // the customer-approved parts and labor.
-    const finalApproval = booking
-      ? ((
-          await ctx.db
-            .query("booking_approvals")
-            .withIndex("by_booking_and_cycle", (q: any) =>
-              q.eq("booking_id", booking._id),
-            )
-            .collect()
-        )
-          .filter(
+    // THE agreed-approval rule (lib/bookingMoney selectAgreedApproval): newest
+    // AGREED row by decision time. This used a blocklist (not declined /
+    // withdrawn), so an sla_expired or still-open estimate could be invoiced as
+    // if the customer had agreed to it.
+    const finalApproval: any = booking
+      ? selectAgreedApproval(
+          (
+            await ctx.db
+              .query("booking_approvals")
+              .withIndex("by_booking_and_cycle", (q: any) =>
+                q.eq("booking_id", booking._id),
+              )
+              .collect()
+          ).filter(
             (a: any) =>
               a.parts_subtotal_cents != null &&
               a.labor_cents != null &&
               a.tax_cents != null &&
-              a.service_fee_cents != null &&
-              a.decision !== "declined" &&
-              a.decision !== "withdrawn",
-          )
-          .sort((a: any, b: any) => {
-            const rank: Record<string, number> = { pre_job: 1, mid_job: 2, post_job: 3 };
-            const byCycle = (rank[a.cycle] ?? 0) - (rank[b.cycle] ?? 0);
-            if (byCycle !== 0) return byCycle;
-            return (
-              (a.submitted_at_ms ?? a._creationTime) -
-              (b.submitted_at_ms ?? b._creationTime)
-            );
-          })
-          .at(-1) ?? null)
+              a.service_fee_cents != null,
+          ) as any[],
+        )
       : null;
 
     /* ---- line items: the work ---- */

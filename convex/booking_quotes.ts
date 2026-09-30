@@ -18,6 +18,7 @@ import type { Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { computeBookingTax } from "../lib/tax";
 import { computePlatformFeeDollars } from "../lib/platformFee";
+import { shopLineAllInCents } from "./lib/bookingMoney";
 import { resolveWinningPartForService } from "./serviceParts";
 import { quoteUnitPrice, isPriceDataStale } from "./part_prices";
 import type { TraceEntry } from "./partSelector";
@@ -607,29 +608,12 @@ export function computeShopSetBand(args: {
 
 /**
  * All-in (parts + tax + fee) cents for a shop-priced amount whose labor is
- * folded into the flat line (laborDollars = 0). Extracted so `computeShopSetBand`
- * (the aggregate band) and `computeShopSetServiceLines` (its per-service
- * breakdown) are computed on the identical tax/fee basis and reconcile.
+ * folded into the flat line (laborDollars = 0). Lives in lib/bookingMoney so
+ * the band (`computeShopSetBand`), its per-service lines, and the money
+ * statement's decomposition of an agreed set price all share one forward
+ * function and reconcile. Re-exported here for existing importers.
  */
-export function shopLineAllInCents(args: {
-  partsCents: number;
-  shopState: string | null;
-  shopZip: string | null;
-}): number {
-  const taxDollars =
-    computeBookingTax({
-      laborDollars: 0,
-      partsDollars: args.partsCents / 100,
-      state: args.shopState,
-      zip: args.shopZip,
-    }).taxDollars ?? 0;
-  const feeDollars = computePlatformFeeDollars(args.partsCents / 100);
-  return (
-    args.partsCents +
-    Math.round(taxDollars * 100) +
-    Math.max(0, Math.round(feeDollars * 100))
-  );
-}
+export { shopLineAllInCents };
 
 /** Per-service all-in band for a single shop-priced line, for the mechanic's
  *  per-service set-price UI. `all_in_*` are on the same basis as the aggregate

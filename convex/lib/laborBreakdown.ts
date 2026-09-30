@@ -99,6 +99,16 @@ export type ResolvedLaborLine = {
   laborHours: number | null;
   /** Dollar share of the labor subtotal for this line (full-precision split). */
   laborCost: number | null;
+  /** Full-precision hours behind `laborHours` — the weight a caller splits by. */
+  rawHours: number | null;
+  /** "booked" = one of booking.service_ids; "custom" = an added line. */
+  lineKind: "booked" | "custom";
+  /** Booked lines: the catalog service id (when known). */
+  serviceId: string | null;
+  /** Custom lines: the matching custom_jobs id (when one exists). */
+  customJobId: string | null;
+  /** Custom lines: serviceMatchKey(name) — joins custom_jobs / parts. */
+  matchKey: string | null;
 };
 
 /**
@@ -143,7 +153,14 @@ export function resolveAgreedLaborLines(input: {
     if (mins != null && !jobMinutesByKey.has(key)) jobMinutesByKey.set(key, mins);
   }
 
-  const raw: Array<{ name: string; hours: number | null }> = [];
+  const raw: Array<{
+    name: string;
+    hours: number | null;
+    lineKind: "booked" | "custom";
+    serviceId: string | null;
+    customJobId: string | null;
+    matchKey: string | null;
+  }> = [];
   let totalHours = 0;
 
   // Keys of the BOOKED services, so a custom line that duplicates one (a service
@@ -180,7 +197,14 @@ export function resolveAgreedLaborLines(input: {
             : b.catalogHours;
     }
     if (hours != null) totalHours += hours;
-    raw.push({ name: b.name, hours });
+    raw.push({
+      name: b.name,
+      hours,
+      lineKind: "booked",
+      serviceId: b.serviceId != null ? String(b.serviceId) : null,
+      customJobId: null,
+      matchKey: null,
+    });
   }
 
   // Custom lines: the AGREED allocation wins over the line's original estimate.
@@ -205,7 +229,14 @@ export function resolveAgreedLaborLines(input: {
       hours = mins != null ? mins / 60 : null;
     }
     if (hours != null) totalHours += hours;
-    raw.push({ name, hours });
+    raw.push({
+      name,
+      hours,
+      lineKind: "custom",
+      serviceId: null,
+      customJobId: jobId ?? null,
+      matchKey: key,
+    });
   }
 
   const subtotal = input.laborSubtotalDollars;
@@ -220,6 +251,11 @@ export function resolveAgreedLaborLines(input: {
       name: s.name,
       laborHours: s.hours != null ? Math.round(s.hours * 100) / 100 : null,
       laborCost,
+      rawHours: s.hours,
+      lineKind: s.lineKind,
+      serviceId: s.serviceId,
+      customJobId: s.customJobId,
+      matchKey: s.matchKey,
     };
   });
 

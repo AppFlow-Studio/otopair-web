@@ -15,6 +15,7 @@ import {
   getCurrentNotificationScope,
 } from "./lib/notificationScope";
 import { metaMakeModel } from "./lib/bookingEnrichment";
+import { capturedCentsOrNull } from "./lib/money";
 import { customServiceNames } from "./lib/customServiceNames";
 import {
   getActiveQuoteCheckoutHold,
@@ -384,12 +385,13 @@ export const getBookingsForRange = query({
               q.eq("booking_id", booking._id),
             )
             .collect();
-          const sum = payments.reduce(
-            (acc: number, p: any) =>
-              p.status === "completed" ? acc + (p.amount ?? 0) : acc,
-            0,
-          );
-          capturedAmount = sum > 0 ? sum : null;
+          // What was actually captured — `payments.amount` is the estimate
+          // written when the hold was created and never updated (lib/money.ts).
+          const sumCents = payments.reduce((acc: number, p: any) => {
+            const c = capturedCentsOrNull(p);
+            return c != null ? acc + c : acc;
+          }, 0);
+          capturedAmount = sumCents > 0 ? sumCents / 100 : null;
         }
 
         return {

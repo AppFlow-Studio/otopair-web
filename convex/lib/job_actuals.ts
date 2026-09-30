@@ -12,6 +12,7 @@ import {
   vehicleUpdateValuesValidator,
 } from "./vehicle_passports";
 import { recomputeLaborForConfigService } from "./labor_aggregation";
+import { isNamedPart } from "./parts";
 import { blockedMinutesForBooking } from "../jobBlockers";
 
 export const jobActualPartValidator = postjobPartValidator;
@@ -238,7 +239,24 @@ function applyActualsInputToPatch(patch: Record<string, any>, actuals?: JobActua
     patch.mechanic_findings = actuals.mechanic_findings ?? "";
   }
   if (hasOwn(actuals, "parts_used")) {
-    patch.parts_used = actuals.parts_used ?? [];
+    // Same rule as the estimate path (booking_approvals.performSubmission): a
+    // part the shop is charging for must have a name. These rows feed walk-in
+    // bills and the invoice fallback, where an unnamed priced row printed as a
+    // blank line (#331). Uncharged blank rows are stray entries — dropped.
+    const rows = (actuals.parts_used ?? []) as any[];
+    const unnamedPriced = rows.find(
+      (p) =>
+        !isNamedPart(p) &&
+        p?.not_used !== true &&
+        p?.supplied_by !== "customer" &&
+        (Number(p?.cost) || 0) > 0,
+    );
+    if (unnamedPriced) {
+      throw new Error(
+        "Every part with a price needs a name. Add a name or remove the part, then save again.",
+      );
+    }
+    patch.parts_used = rows.filter((p) => isNamedPart(p));
   }
   if (hasOwn(actuals, "prejob_report")) {
     patch.prejob_report = actuals.prejob_report ?? undefined;

@@ -2837,12 +2837,51 @@ export default defineSchema({
     quote_revision: v.optional(v.number()),
     tire_quote_response_id: v.optional(v.id("tire_quote_responses")),
     rotor_quote_response_id: v.optional(v.id("rotor_quote_responses")),
+    // Liveness lease (bug #393). A client that opts in (`holdSlot({ lease:
+    // true })`) gets a short `expires_at` it must keep extending through
+    // `touchSlotHold` while the checkout screen is alive; `hard_expires_at`
+    // caps the total at the Director TTL. A killed app stops heartbeating, so
+    // its hold stops blocking within one lease instead of the full TTL.
+    // Absent on legacy (non-lease) holds, whose `expires_at` IS the TTL.
+    lease_ms: v.optional(v.number()),
+    hard_expires_at: v.optional(v.number()),
+    last_seen_at: v.optional(v.number()),
   })
     .index("by_shop_and_date", ["shop_id", "date"]) // availability read
     .index("by_expiry", ["expires_at"]) // cron sweep
     .index("by_session", ["session_id"])
+    .index("by_held_by", ["held_by"]) // per-customer supersede on relaunch (#393)
     .index("by_tire_quote_response", ["tire_quote_response_id"])
     .index("by_rotor_quote_response", ["rotor_quote_response_id"]),
+
+  // The $20 checkout authorization placed BEFORE a booking row exists
+  // (payments_stripe.preauthorizePaymentForBooking). If the app dies between
+  // that Stripe call and the booking commit, the PaymentIntent has no payments
+  // row, the webhook can't match it, and the card stays held ~7 days. Each
+  // prebooking PI gets a row here and a scheduled reaper: the booking commit
+  // flips it to `linked` in the same transaction that inserts the payments row;
+  // the reaper claims `authorizing` rows (→ `reaping`) and cancels the PI.
+  // Reading this row inside both mutations makes OCC serialize "link" against
+  // "reap", so a PI is never cancelled under a booking that just used it.
+  prebooking_authorizations: defineTable({
+    payment_intent_id: v.string(),
+    user_id: v.id("users"),
+    shop_id: v.optional(v.id("shops")),
+    attempt_id: v.optional(v.string()),
+    state: v.union(
+      v.literal("authorizing"),
+      v.literal("linked"),
+      v.literal("reaping"),
+      v.literal("cancelled"),
+      v.literal("cancel_failed"),
+    ),
+    linked_booking_id: v.optional(v.id("bookings")),
+    reap_after_ms: v.number(),
+    created_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_payment_intent", ["payment_intent_id"])
+    .index("by_state_and_reap_after", ["state", "reap_after_ms"]),
 
   // ===== BOOKINGS & PAYMENTS =====
 
@@ -5230,6 +5269,36 @@ export default defineSchema({
     closed_at: v.number(),
     created_at: v.number(),
   }).index("by_booking", ["booking_id"]),
+
+  // A mechanic's explicit Pause on a running job (bug #348). Unlike the flag
+  // sheet above, Pause is deliberate intent that lasts until Resume, so the row
+  // is OPEN (`closed_at` unset) while paused — that is what lets every screen
+  // (overlay, drawer pill, header strip, dashboard) read the same paused state
+  // back on mount. Open rows are bounded: the job clock clamps a manual span at
+  // MAX_MANUAL_PAUSE_MS and a scheduled auto-close ends a forgotten pause, and
+  // applyBookingStatusTransition closes any open row when the job leaves
+  // in_progress. Merged with job_blockers + job_admin_pauses by lib/jobClock.
+  job_pauses: defineTable({
+    booking_id: v.id("bookings"),
+    job_actual_id: v.optional(v.id("job_actuals")),
+    shop_id: v.id("shops"),
+    mechanic_id: v.optional(v.id("mechanics")),
+    reason: v.optional(v.string()),
+    opened_at: v.number(),
+    opened_by_user_id: v.id("users"),
+    closed_at: v.optional(v.number()),
+    closed_by_user_id: v.optional(v.id("users")),
+    close_reason: v.optional(
+      v.union(
+        v.literal("resumed"),
+        v.literal("job_left_in_progress"),
+        v.literal("auto_closed"),
+      ),
+    ),
+    created_at: v.number(),
+  })
+    .index("by_booking", ["booking_id"])
+    .index("by_booking_open", ["booking_id", "closed_at"]),
 
   // Audit trail for pseudo-VIN → real-VIN re-keys (Off-Catalog Work spec, §5).
   //

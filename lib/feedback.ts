@@ -1,4 +1,17 @@
 import { toast } from "sonner";
+import {
+  formatBookingError,
+  readBookingError,
+  type BookingErrorCode,
+} from "@/convex/lib/bookingErrors";
+
+export {
+  readBookingError,
+  isBookingError,
+  isStaleStateError,
+  type BookingErrorCode,
+  type BookingErrorData,
+} from "@/convex/lib/bookingErrors";
 
 // Single choke point for reaction feedback across the shop portal. Handlers call
 // `notify.*` for one-off reactions or wrap a mutation in `runAction` so every
@@ -9,46 +22,26 @@ export const notify = {
   success: (message: string) => toast.success(message),
   error: (message: string) => toast.error(message),
   info: (message: string) => toast.info(message),
+  warning: (message: string) => toast.warning(message),
 };
 
 const GENERIC_ERROR = "Something went wrong. Please try again.";
 
 /**
- * Turn a thrown value into a human-readable string. Convex surfaces two shapes:
- *  - `ConvexError` carries a structured `.data` payload (string or `{ message }`).
- *  - A plain `throw new Error("msg")` in a mutation reaches the client wrapped as
- *    `[CONVEX M(path)] [Request ID: …] Server Error\nUncaught Error: msg\n  at …`.
- * We dig the real message out of both, falling back to a generic line.
+ * Turn a thrown value into one readable sentence. Structured booking conflicts
+ * (`ConvexError` with `{ code, message }`, see convex/lib/bookingErrors.ts)
+ * return their server-written copy; a legacy plain `throw new Error("msg")` is
+ * dug out of the `[CONVEX M(path)] [Request ID: …] … Uncaught Error: msg at …`
+ * wrapper. Wrapper text, stack frames, file paths, JSON payloads, bare codes
+ * and prod's redacted "Server Error" never come back — `fallback` does.
  */
 export function errorMessage(err: unknown, fallback = GENERIC_ERROR): string {
-  if (!err) return fallback;
+  return formatBookingError(err, fallback);
+}
 
-  const data = (err as { data?: unknown }).data;
-  if (typeof data === "string" && data.trim()) return data.trim();
-  if (
-    data &&
-    typeof data === "object" &&
-    typeof (data as { message?: unknown }).message === "string" &&
-    (data as { message: string }).message.trim()
-  ) {
-    return (data as { message: string }).message.trim();
-  }
-
-  const raw =
-    err instanceof Error ? err.message : typeof err === "string" ? err : "";
-  if (!raw) return fallback;
-
-  const uncaught = raw.match(
-    /Uncaught (?:Convex)?Error:\s*([\s\S]*?)(?:\n\s*at\s|\n\s*Called by|$)/,
-  );
-  if (uncaught && uncaught[1].trim()) return uncaught[1].trim();
-
-  const cleaned = raw
-    .replace(/^\[CONVEX[^\]]*\]\s*/, "")
-    .replace(/^\[Request ID:[^\]]*\]\s*/, "")
-    .split("\n")[0]
-    .trim();
-  return cleaned || fallback;
+/** The structured conflict code on a thrown Convex error, if any. */
+export function errorCode(err: unknown): BookingErrorCode | null {
+  return readBookingError(err)?.code ?? null;
 }
 
 /**

@@ -29,8 +29,14 @@ function buildReceiptUrl(bookingId: string, token: string): string {
 }
 
 export const generateAndEmail = internalAction({
-  args: { bookingId: v.id("bookings") },
-  handler: async (ctx, { bookingId }) => {
+  args: {
+    bookingId: v.id("bookings"),
+    // Re-render the stored PDF in place (a PDF made before receipts read the
+    // agreed statement — invoices.isStoredInvoiceStale) without emailing the
+    // customer a second time.
+    renderOnly: v.optional(v.boolean()),
+  },
+  handler: async (ctx, { bookingId, renderOnly }) => {
     const assembled: any = await ctx.runQuery(
       (internal as any).invoices._assembleInvoiceData,
       { bookingId },
@@ -40,6 +46,7 @@ export const generateAndEmail = internalAction({
     // Idempotency: if we already have a stored PDF and an emailed-at stamp,
     // and the booking hasn't been refunded since, skip the regen pass.
     if (
+      !renderOnly &&
       assembled.invoiceStorageId &&
       assembled.invoiceEmailedAtMs &&
       assembled.status === "paid"
@@ -68,9 +75,12 @@ export const generateAndEmail = internalAction({
       mechanicName: assembled.mechanicName,
       services: assembled.services,
       parts: assembled.parts,
+      serviceLines: assembled.serviceLines,
       laborMinutes: assembled.laborMinutes,
       laborCents: assembled.laborCents,
       partsTotalCents: assembled.partsTotalCents,
+      setPriceCents: assembled.setPriceCents,
+      adjustmentCents: assembled.adjustmentCents,
       subtotalCents: assembled.subtotalCents,
       taxCents: assembled.taxCents,
       platformFeeCents: assembled.platformFeeCents,
@@ -95,7 +105,7 @@ export const generateAndEmail = internalAction({
     });
 
     let emailedAtMs: number | null = null;
-    const to = assembled.customer.email;
+    const to = renderOnly ? null : assembled.customer.email;
     if (to) {
       const receiptUrl = buildReceiptUrl(String(bookingId), receiptToken);
       const result = await sendInvoiceEmail({
@@ -180,9 +190,12 @@ export const sendInvoiceToEmail = action({
       mechanicName: assembled.mechanicName,
       services: assembled.services,
       parts: assembled.parts,
+      serviceLines: assembled.serviceLines,
       laborMinutes: assembled.laborMinutes,
       laborCents: assembled.laborCents,
       partsTotalCents: assembled.partsTotalCents,
+      setPriceCents: assembled.setPriceCents,
+      adjustmentCents: assembled.adjustmentCents,
       subtotalCents: assembled.subtotalCents,
       taxCents: assembled.taxCents,
       platformFeeCents: assembled.platformFeeCents,
@@ -194,9 +207,8 @@ export const sendInvoiceToEmail = action({
 
     const buffer = await renderInvoiceToBuffer(data);
     // Refresh the stored copy too so the deep-link in the email matches the
-    // PDF the customer downloads. Idempotent if the storage id is still the
-    // same.
-    if (!assembled.invoiceStorageId) {
+    // PDF the customer downloads — also when the stored one is stale.
+    if (!assembled.invoiceStorageId || assembled.invoiceStale) {
       const blob = new Blob([new Uint8Array(buffer)], {
         type: "application/pdf",
       });

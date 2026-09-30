@@ -7,11 +7,12 @@ import {
   type KeyboardEvent,
 } from "react";
 import {
-  appendFixedCentDigit,
-  backspaceFixedCentCurrency,
+  deleteFixedCentDigit,
   fixedCentCurrencyCents,
   formatFixedCentCurrency,
+  parsePastedCurrencyCents,
   syncFixedCentCurrencyInput,
+  typeFixedCentDigit,
 } from "@/lib/fixed-cent-currency";
 
 type FixedCentCurrencyInputProps = Omit<
@@ -36,6 +37,13 @@ function placeCurrencyCaretAtEnd(input: HTMLInputElement) {
   });
 }
 
+/** True when text is selected in the field (select-all, a drag over the
+ *  digits) — the next keystroke or paste then REPLACES the value (#419). */
+function hasSelection(input: HTMLInputElement): boolean {
+  const { selectionStart, selectionEnd } = input;
+  return selectionStart != null && selectionEnd != null && selectionStart !== selectionEnd;
+}
+
 export default function FixedCentCurrencyInput({
   value,
   onValueChange,
@@ -58,16 +66,16 @@ export default function FixedCentCurrencyInput({
       : next;
   };
 
-  const pushDigit = (digit: string) => {
-    const candidate = appendFixedCentDigit(value, digit);
+  const pushDigit = (digit: string, replacesSelection: boolean) => {
+    const candidate = typeFixedCentDigit(value, digit, replacesSelection);
     // Over the cap: ignore the keystroke entirely so the field is un-typable
     // past the ceiling (rather than snapping to the max mid-type).
     if (maxCents != null && fixedCentCurrencyCents(candidate) > maxCents) return;
     onValueChange(formatValue(candidate));
   };
 
-  const popDigit = () => {
-    onValueChange(formatValue(backspaceFixedCentCurrency(value)));
+  const popDigit = (replacesSelection: boolean) => {
+    onValueChange(formatValue(deleteFixedCentDigit(value, replacesSelection)));
   };
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
@@ -76,14 +84,14 @@ export default function FixedCentCurrencyInput({
 
     if (/^\d$/.test(event.key)) {
       event.preventDefault();
-      pushDigit(event.key);
+      pushDigit(event.key, hasSelection(event.currentTarget));
       placeCurrencyCaretAtEnd(event.currentTarget);
       return;
     }
 
     if (event.key === "Backspace" || event.key === "Delete") {
       event.preventDefault();
-      popDigit();
+      popDigit(hasSelection(event.currentTarget));
       placeCurrencyCaretAtEnd(event.currentTarget);
       return;
     }
@@ -116,7 +124,7 @@ export default function FixedCentCurrencyInput({
     if (inputEvent.inputType === "insertText" && inputEvent.data) {
       event.preventDefault();
       if (/^\d$/.test(inputEvent.data)) {
-        pushDigit(inputEvent.data);
+        pushDigit(inputEvent.data, hasSelection(event.currentTarget));
       }
       placeCurrencyCaretAtEnd(event.currentTarget);
       return;
@@ -127,7 +135,7 @@ export default function FixedCentCurrencyInput({
       inputEvent.inputType === "deleteContentForward"
     ) {
       event.preventDefault();
-      popDigit();
+      popDigit(hasSelection(event.currentTarget));
       placeCurrencyCaretAtEnd(event.currentTarget);
     }
   }
@@ -137,11 +145,13 @@ export default function FixedCentCurrencyInput({
     if (event.defaultPrevented) return;
 
     event.preventDefault();
-    const digits = event.clipboardData.getData("text").replace(/\D/g, "");
-    const next = digits
-      .split("")
-      .reduce((currentValue, digit) => appendFixedCentDigit(currentValue, digit), value);
-    onValueChange(formatValue(clampToMax(formatFixedCentCurrency(next))));
+    // A paste is a dollar amount and REPLACES the value — it used to append
+    // each pasted digit to the existing cents (20.00 + "99999" → 2,000,999.99,
+    // #419). Clamped to the cap like any other edit.
+    const cents = parsePastedCurrencyCents(event.clipboardData.getData("text"));
+    if (cents != null) {
+      onValueChange(formatValue(clampToMax(formatFixedCentCurrency(cents / 100))));
+    }
     placeCurrencyCaretAtEnd(event.currentTarget);
   }
 

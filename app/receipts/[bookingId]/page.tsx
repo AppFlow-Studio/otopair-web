@@ -130,30 +130,56 @@ export default function ReceiptPage({
             <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
               Parts & labor
             </h2>
-            {breakdown.parts.length === 0 ? (
-              <p className="text-sm text-slate-500">No parts on this job.</p>
-            ) : (
-              <ul className="divide-y divide-slate-100">
-                {breakdown.parts.map((p: typeof breakdown.parts[number], i: number) => (
+            <ul className="divide-y divide-slate-100">
+              {breakdown.parts.map((p: typeof breakdown.parts[number], i: number) => (
+                <li
+                  key={`p-${i}`}
+                  className="flex items-start justify-between gap-4 py-3"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-slate-900">
+                      {p.name}
+                    </p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      {p.brand ? `${p.brand} · ` : ""}
+                      {p.oemNumber ?? "—"} · Qty {p.qty} ·{" "}
+                      {formatCents(p.unitCents)} ea
+                    </p>
+                  </div>
+                  <p className="whitespace-nowrap text-sm font-semibold text-slate-900">
+                    {formatCents(p.lineCents)}
+                  </p>
+                </li>
+              ))}
+              {/* Per-service lines from the agreed statement: labor at its billed
+                  time and rate (they multiply out), or a shop set price. */}
+              {(breakdown.serviceLines ?? []).length > 0 ? (
+                (breakdown.serviceLines ?? []).map((s: any, i: number) => (
                   <li
-                    key={i}
+                    key={`s-${i}`}
                     className="flex items-start justify-between gap-4 py-3"
                   >
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-medium text-slate-900">
-                        {p.name}
+                        {s.name}
                       </p>
                       <p className="mt-0.5 text-xs text-slate-500">
-                        {p.brand ? `${p.brand} · ` : ""}
-                        {p.oemNumber ?? "—"} · Qty {p.qty} ·{" "}
-                        {formatCents(p.unitCents)} ea
+                        {s.kind === "set_price"
+                          ? "Set price"
+                          : [
+                              s.minutes ? formatLabor(s.minutes) : null,
+                              s.rateCents ? `${formatCents(s.rateCents)}/hr` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" @ ") || "Labor"}
                       </p>
                     </div>
                     <p className="whitespace-nowrap text-sm font-semibold text-slate-900">
-                      {formatCents(p.lineCents)}
+                      {formatCents(s.amountCents)}
                     </p>
                   </li>
-                ))}
+                ))
+              ) : breakdown.laborCents > 0 ? (
                 <li className="flex items-start justify-between gap-4 py-3">
                   <p className="text-sm font-medium text-slate-900">
                     Labor · {formatLabor(breakdown.laborMinutes)}
@@ -162,8 +188,21 @@ export default function ReceiptPage({
                     {formatCents(breakdown.laborCents)}
                   </p>
                 </li>
-              </ul>
-            )}
+              ) : null}
+              {breakdown.adjustmentCents ? (
+                <li className="flex items-start justify-between gap-4 py-3">
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-medium text-slate-900">Adjustment</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Difference between the itemized lines and the amount charged
+                    </p>
+                  </div>
+                  <p className="text-sm font-semibold text-slate-900">
+                    {formatCents(breakdown.adjustmentCents)}
+                  </p>
+                </li>
+              ) : null}
+            </ul>
           </section>
 
           <section className="rounded-xl bg-slate-50 px-5 py-4">
@@ -175,6 +214,12 @@ export default function ReceiptPage({
               label="Labor"
               value={formatCents(breakdown.laborCents)}
             />
+            {(breakdown.setPriceCents ?? 0) > 0 ? (
+              <TotalsRow
+                label="Set price"
+                value={formatCents(breakdown.setPriceCents)}
+              />
+            ) : null}
             <TotalsRow
               label="Subtotal"
               value={formatCents(breakdown.subtotalCents)}

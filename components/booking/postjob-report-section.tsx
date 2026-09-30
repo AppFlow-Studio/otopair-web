@@ -23,13 +23,16 @@ import { formatServiceDisplayName } from "@/lib/service-catalog";
 import {
   buildPartRows,
   getDefaultLaborMinutes,
+  hasUnnamedPricedPart,
   toNumberString,
   toPayload,
+  UNNAMED_PRICED_PART_MESSAGE,
   type JobActualDetails,
   type JobActualPart,
   type JobActualsPayload,
   type PartRowState,
 } from "@/lib/job-actuals";
+import { notify } from "@/lib/feedback";
 
 type Mode = "view" | "edit";
 
@@ -325,6 +328,10 @@ function ReportEditor({
     fn: ((payload: JobActualsPayload) => Promise<void>) | undefined,
   ) {
     if (!fn) return;
+    if (hasUnnamedPricedPart(parts)) {
+      notify.error(UNNAMED_PRICED_PART_MESSAGE);
+      return;
+    }
     setActiveAction(action);
     try {
       await fn(

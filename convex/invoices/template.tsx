@@ -32,6 +32,14 @@ export type InvoicePart = {
   lineCents: number;
 };
 
+export type InvoiceServiceLine = {
+  name: string;
+  kind: "labor" | "set_price";
+  minutes: number | null;
+  rateCents: number | null;
+  amountCents: number;
+};
+
 export type InvoiceData = {
   invoiceNumber: string;
   issuedAtMs: number;
@@ -59,10 +67,16 @@ export type InvoiceData = {
 
   services: string[];
   parts: InvoicePart[];
+  /** Per-service lines (labor at billed minutes × rate, or a shop set price).
+   *  When present they replace the single "Labor" row. */
+  serviceLines?: InvoiceServiceLine[];
 
   laborMinutes: number;
   laborCents: number;
   partsTotalCents: number;
+  setPriceCents?: number;
+  /** Explicit reconciliation line; printed only when non-zero. */
+  adjustmentCents?: number;
   subtotalCents: number;
   taxCents?: number | null;
   platformFeeCents?: number | null;
@@ -449,7 +463,33 @@ function Invoice({ data }: { data: InvoiceData }) {
           </View>
         ))}
 
-        {data.laborCents > 0 || data.laborMinutes > 0 ? (
+        {data.serviceLines && data.serviceLines.length > 0 ? (
+          // One row per service, from the agreed statement: labor lines show
+          // the billed time at the billed rate (they multiply out), set-price
+          // lines show the shop's flat price.
+          data.serviceLines.map((s, i) => (
+            <View key={`svc-${i}`} style={styles.row}>
+              <View style={styles.colItem}>
+                <Text style={styles.itemName}>{s.name}</Text>
+                <Text style={styles.itemSub}>
+                  {s.kind === "set_price"
+                    ? "Set price"
+                    : [
+                        formatLaborTime(s.minutes ?? 0),
+                        s.rateCents ? `${formatCents(s.rateCents)}/hr` : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" @ ") || "Labor"}
+                </Text>
+              </View>
+              <Text style={[styles.cell, styles.colQty]}>—</Text>
+              <Text style={[styles.cell, styles.colPrice]}>—</Text>
+              <Text style={[styles.cell, styles.colAmount]}>
+                {formatCents(s.amountCents)}
+              </Text>
+            </View>
+          ))
+        ) : data.laborCents > 0 || data.laborMinutes > 0 ? (
           <View style={styles.row}>
             <View style={styles.colItem}>
               <Text style={styles.itemName}>Labor</Text>
@@ -463,6 +503,22 @@ function Invoice({ data }: { data: InvoiceData }) {
             <Text style={[styles.cell, styles.colPrice]}>—</Text>
             <Text style={[styles.cell, styles.colAmount]}>
               {formatCents(data.laborCents)}
+            </Text>
+          </View>
+        ) : null}
+
+        {data.adjustmentCents ? (
+          <View style={styles.row}>
+            <View style={styles.colItem}>
+              <Text style={styles.itemName}>Adjustment</Text>
+              <Text style={styles.itemSub}>
+                Difference between the itemized lines and the amount charged
+              </Text>
+            </View>
+            <Text style={[styles.cell, styles.colQty]}>—</Text>
+            <Text style={[styles.cell, styles.colPrice]}>—</Text>
+            <Text style={[styles.cell, styles.colAmount]}>
+              {formatCents(data.adjustmentCents)}
             </Text>
           </View>
         ) : null}

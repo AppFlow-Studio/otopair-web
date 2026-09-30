@@ -7,8 +7,12 @@ describe("FixedCentCurrencyInput shared component", () => {
     expect(existsSync(componentPath)).toBe(true);
 
     const componentSource = readFileSync(componentPath, "utf8");
-    expect(componentSource).toContain("appendFixedCentDigit");
-    expect(componentSource).toContain("backspaceFixedCentCurrency");
+    // Typing / deleting go through the selection-aware helpers (#419): a
+    // selection is REPLACED, never appended to. Paste reads a dollar amount.
+    expect(componentSource).toContain("typeFixedCentDigit");
+    expect(componentSource).toContain("deleteFixedCentDigit");
+    expect(componentSource).toContain("parsePastedCurrencyCents");
+    expect(componentSource).toContain("hasSelection(event.currentTarget)");
     expect(componentSource).toContain("syncFixedCentCurrencyInput");
     expect(componentSource).toContain("formatFixedCentCurrency(value, { emptyWhenBlank: allowEmpty })");
 

@@ -5,6 +5,8 @@ import { createPortal } from "react-dom";
 import { Loader2, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { formatHoursValue, hoursToMinutes, parseHoursInput } from "@/lib/labor-units";
 import { MAX_PRICE_DOLLARS, clampPriceDollarsInput } from "@/lib/price-cap";
+import { hasUnnamedPricedPart, UNNAMED_PRICED_PART_MESSAGE } from "@/lib/job-actuals";
+import { notify } from "@/lib/feedback";
 
 type JobActualPart = {
   part_name: string;
@@ -207,6 +209,10 @@ export default function JobActualsDialog({
     fn: ((payload: JobActualsPayload) => Promise<void>) | undefined
   ) {
     if (!fn) return;
+    if (hasUnnamedPricedPart(parts)) {
+      notify.error(UNNAMED_PRICED_PART_MESSAGE);
+      return;
+    }
     setActiveAction(action);
     try {
       await fn(

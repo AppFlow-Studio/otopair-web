@@ -37,6 +37,19 @@ export type PartRowState = {
   cost: string;
 };
 
+/** Shown when a part the shop is charging for has no name. The server rejects
+ *  that row (convex/lib/job_actuals.ts, booking_approvals.performSubmission) —
+ *  an unnamed priced line reached customers as a blank row (#331). */
+export const UNNAMED_PRICED_PART_MESSAGE =
+  "Every part with a price needs a name. Add a name or remove the part.";
+
+/** True when any row has a price but no name. */
+export function hasUnnamedPricedPart(
+  parts: Array<{ part_name: string; cost: string }>,
+): boolean {
+  return parts.some((p) => !p.part_name.trim() && Number(p.cost || 0) > 0);
+}
+
 export function toNumberString(value?: number | null) {
   return value == null ? "" : String(value);
 }

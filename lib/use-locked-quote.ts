@@ -5,6 +5,8 @@ import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import type { JobActualPartPayload } from "@/lib/vehicle-passport";
+import type { BookingMoney } from "@/convex/lib/bookingMoney";
+import { partDisplayName } from "@/lib/tire-part-lines";
 
 /** The locked, customer-approved quote breakdown (cents) that drives the
  *  read-only post-job confirmation. Mirrors the `LockedQuote` prop shape on
@@ -15,7 +17,14 @@ export type LockedQuoteValue = {
   taxCents: number;
   feeCents: number;
   totalCents: number;
+  /** The "before" total: the last one the customer confirmed before this
+   *  one (#350). Null when the price never moved. */
   originalTotalCents: number | null;
+  beforeLabel?: string | null;
+  originalQuoteCents?: number | null;
+  setPriceCents?: number;
+  adjustmentCents?: number;
+  partsCount?: number | null;
   hasBreakdown: boolean;
 };
 
@@ -116,7 +125,39 @@ export function useLockedQuote(job: any) {
   // adjustment wins (its frozen breakdown reconciles exactly); otherwise the
   // booking's original quote. originalTotalCents is set only when an adjustment
   // moved the price, so the confirmation can show original → new.
+  const money = (job?.money ?? null) as BookingMoney | null;
   const lockedQuote = useMemo<LockedQuoteValue | null>(() => {
+    // The canonical money statement (getJobDetail.money) — the same numbers the
+    // customer's receipt, the PDF and the capture use. Its "before" is the last
+    // total the customer CONFIRMED (#350), not the create-time quote; the
+    // create-time quote rides along as its own labelled line.
+    if (
+      money &&
+      (money.basis === "approval" ||
+        money.basis === "estimate" ||
+        money.basis === "quote")
+    ) {
+      const t = money.totals;
+      const prev = money.previousAgreedTotalCents;
+      return {
+        partsCents: t.partsCents,
+        laborCents: t.laborCents,
+        taxCents: t.taxCents,
+        feeCents: t.feeCents,
+        totalCents: t.totalCents,
+        originalTotalCents: prev != null && prev !== t.totalCents ? prev : null,
+        beforeLabel:
+          money.previousAgreedKind === "booked" ||
+          money.previousAgreedKind === "quote"
+            ? "Original quote"
+            : "Last approved",
+        originalQuoteCents: money.originalQuoteCents,
+        setPriceCents: t.setPriceCents,
+        adjustmentCents: t.adjustmentCents,
+        partsCount: money.counts.parts,
+        hasBreakdown: true,
+      };
+    }
     const APPROVED = new Set([
       "pre_job_approved",
       "mid_job_approved",
@@ -185,6 +226,7 @@ export function useLockedQuote(job: any) {
       hasBreakdown: true,
     };
   }, [
+    money,
     job?.quotedBreakdown,
     job?.quotedSetPriceDollars,
     job?.mechanicSetPriceCents,
@@ -200,7 +242,9 @@ export function useLockedQuote(job: any) {
   const lockedQuoteParts = useMemo<JobActualPartPayload[] | null>(() => {
     if (effectiveQuote && effectiveQuote.partsSnapshot.length > 0) {
       return effectiveQuote.partsSnapshot.map((p) => ({
-        part_name: p.part_name,
+        // Never a blank row: a legacy unnamed part shows its number or
+        // "Unnamed part" (#331).
+        part_name: partDisplayName(p as any),
         brand: p.brand ?? null,
         oem_number: p.oem_number,
         cost: p.cost,
@@ -214,6 +258,13 @@ export function useLockedQuote(job: any) {
         // dialog (mid-job "Add unforeseen scope") doesn't revive a dropped
         // part as an active $0 line.
         not_used: (p as { not_used?: boolean }).not_used === true ? true : undefined,
+        // Round-trip mechanic-entered tire identity so re-opening the dialog
+        // keeps the size/brand/model instead of the `TIRE-{size}` sentinel.
+        is_tire: (p as any).is_tire ?? undefined,
+        tire_size: (p as any).tire_size ?? undefined,
+        tire_brand: (p as any).tire_brand ?? undefined,
+        tire_model: (p as any).tire_model ?? undefined,
+        tire_position: (p as any).tire_position ?? undefined,
       }));
     }
     const snapshot = job?.pricedPartsSnapshot;
@@ -230,6 +281,11 @@ export function useLockedQuote(job: any) {
       custom_service_name: (p as any).custom_service_name ?? null,
       source: "catalog" as const,
       not_used: (p as { not_used?: boolean }).not_used === true ? true : undefined,
+      is_tire: p.is_tire ?? undefined,
+      tire_size: p.tire_size ?? undefined,
+      tire_brand: p.tire_brand ?? undefined,
+      tire_model: p.tire_model ?? undefined,
+      tire_position: p.tire_position ?? undefined,
     }));
   }, [effectiveQuote, job?.pricedPartsSnapshot]);
 

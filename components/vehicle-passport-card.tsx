@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
+import type { BookingMoney } from "@/convex/lib/bookingMoney";
 import { cn } from "@/lib/utils";
 import VehiclePassportSection from "@/components/vehicle-passport-section";
 import {
@@ -93,6 +94,10 @@ interface VehiclePassportCardJob {
   customerNotes?: string | null;
   customerName?: string;
   customerEmail?: string | null;
+  /** The canonical money statement (getJobDetail.money). When present, every
+   *  number on this card comes from it — the same numbers the customer's
+   *  receipt, the PDF and the capture use. */
+  money?: BookingMoney | null;
 }
 
 interface VehiclePassportCardProps {
@@ -217,7 +222,192 @@ function Section({
   );
 }
 
+/** Services / parts / totals from the canonical money statement — every line
+ *  and total the customer is billed, one source, reconciling by construction. */
+function MoneyScopeSection({ money }: { money: BookingMoney }) {
+  const t = money.totals;
+  const prev = money.previousAgreedTotalCents;
+  const showPrev =
+    money.basis === "approval" && prev != null && prev !== t.totalCents;
+  const prevLabel =
+    money.previousAgreedKind === "booked" || money.previousAgreedKind === "quote"
+      ? "Original quote"
+      : "Last approved";
+  return (
+    <div className="space-y-4 text-sm">
+      <div>
+        <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
+          SERVICES
+        </p>
+        <ul className="mt-1 space-y-0.5">
+          {money.services.length === 0 ? (
+            <li className="text-muted-foreground">No services on file.</li>
+          ) : (
+            money.services.map((s) => (
+              <li
+                key={s.key}
+                className="flex items-baseline justify-between gap-3 text-foreground"
+              >
+                <span className="min-w-0">
+                  {s.name}
+                  <span className="ml-1.5 text-xs text-muted-foreground">
+                    {s.kind === "set_price"
+                      ? "Set price"
+                      : [
+                          s.minutes ? formatLaborMinutes(s.minutes) : null,
+                          s.rateCents ? `@ ${formatCents(s.rateCents)}/hr` : null,
+                        ]
+                          .filter(Boolean)
+                          .join(" ")}
+                  </span>
+                </span>
+                <span className="shrink-0 tabular-nums text-foreground">
+                  {formatCents(s.amountCents)}
+                </span>
+              </li>
+            ))
+          )}
+        </ul>
+      </div>
+
+      <div>
+        <div className="flex items-center justify-between">
+          <p className="text-[10px] font-bold tracking-widest text-muted-foreground">
+            PARTS
+          </p>
+          {showPrev ? (
+            <span className="inline-flex items-center rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              Quote adjusted
+            </span>
+          ) : null}
+        </div>
+        {money.parts.length === 0 && money.setPriceParts.length === 0 ? (
+          <p className="mt-1 text-muted-foreground">No parts on this job.</p>
+        ) : (
+          <ul className="mt-1 divide-y divide-border">
+            {[
+              ...money.parts.map((p) => ({ p, included: false })),
+              ...money.setPriceParts.map((p) => ({ p, included: true })),
+            ].map(({ p, included }, i) => (
+              <li
+                key={`${p.partNumber ?? p.name}-${i}`}
+                className="flex items-start justify-between gap-3 py-2 first:pt-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="truncate font-medium text-foreground">{p.name}</p>
+                  <p className="flex min-w-0 items-center text-xs text-muted-foreground">
+                    <CopyableOemNumber
+                      value={p.partNumber ?? ""}
+                      className="text-xs text-muted-foreground"
+                      emptyFallback=""
+                    />
+                    {p.brand ? (
+                      <span className="truncate">&nbsp;· {p.brand}</span>
+                    ) : null}
+                    {p.quantity !== 1 ? (
+                      <span className="whitespace-nowrap">&nbsp;· ×{p.quantity}</span>
+                    ) : null}
+                  </p>
+                </div>
+                <p className="shrink-0 tabular-nums text-foreground">
+                  {included ? (
+                    <span className="text-xs text-muted-foreground">In set price</span>
+                  ) : (
+                    formatCents(p.lineCents)
+                  )}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+        {money.excludedParts.length > 0 ? (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            Not billed:{" "}
+            {money.excludedParts
+              .map(
+                (p) =>
+                  `${p.name} (${p.reason === "not_used" ? "not used" : "customer supplied"})`,
+              )
+              .join(", ")}
+          </p>
+        ) : null}
+      </div>
+
+      <div className="border-t border-border pt-3">
+        <div className="flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Parts subtotal</span>
+          <span className="tabular-nums text-foreground">{formatCents(t.partsCents)}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">
+            Labor{t.laborMinutes ? ` (${formatLaborMinutes(t.laborMinutes)})` : ""}
+          </span>
+          <span className="tabular-nums text-foreground">{formatCents(t.laborCents)}</span>
+        </div>
+        {t.setPriceCents > 0 ? (
+          <div className="mt-1 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Set price</span>
+            <span className="tabular-nums text-foreground">
+              {formatCents(t.setPriceCents)}
+            </span>
+          </div>
+        ) : null}
+        {t.adjustmentCents !== 0 ? (
+          <div className="mt-1 flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">Adjustment</span>
+            <span className="tabular-nums text-foreground">
+              {formatCents(t.adjustmentCents)}
+            </span>
+          </div>
+        ) : null}
+        <div className="mt-1 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Tax</span>
+          <span className="tabular-nums text-foreground">{formatCents(t.taxCents)}</span>
+        </div>
+        <div className="mt-1 flex items-center justify-between text-sm">
+          <span className="text-muted-foreground">Otopair service fee</span>
+          <span className="tabular-nums text-foreground">{formatCents(t.feeCents)}</span>
+        </div>
+        <div className="mt-2 flex items-center justify-between text-sm font-semibold">
+          <span className="text-foreground">Total</span>
+          <span className="flex items-baseline gap-2">
+            {showPrev ? (
+              <span className="text-xs font-medium tabular-nums text-muted-foreground line-through">
+                {formatCents(prev)}
+              </span>
+            ) : null}
+            <span className="tabular-nums text-foreground">{formatCents(t.totalCents)}</span>
+          </span>
+        </div>
+        {showPrev ? (
+          <p className="mt-1.5 text-[11px] text-muted-foreground">
+            {prevLabel} {formatCents(prev)}
+            {money.originalQuoteCents != null &&
+            prevLabel !== "Original quote" &&
+            money.originalQuoteCents !== prev
+              ? ` · Original quote ${formatCents(money.originalQuoteCents)}`
+              : ""}
+          </p>
+        ) : null}
+        {money.payment.capturedCents != null ? (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Collected {formatCents(money.payment.capturedCents)}
+            {money.payment.capturedCents < t.totalCents - 100
+              ? ` · ${formatCents(t.totalCents - money.payment.capturedCents)} short of the agreed total`
+              : ""}
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
+  if (job.money) return <MoneyScopeSection money={job.money} />;
+  return <LegacyJobScopeSection job={job} />;
+}
+
+function LegacyJobScopeSection({ job }: { job: VehiclePassportCardJob }) {
   // The effective AGREED quote — the latest customer-approved mechanic
   // adjustment, if any. When present its frozen breakdown (which reconciles to
   // its total) replaces the original so the scope reflects what the customer
@@ -810,7 +1000,21 @@ export function VehiclePassportCard({
   scheduleLabel,
   className,
 }: VehiclePassportCardProps) {
-  const partsCount = job.pricedPartsSnapshot?.length ?? 0;
+  // Every number on the card comes from the money statement when it's there:
+  // the count and the money are the SAME lines, so "0 parts" can never sit
+  // above "PARTS $120.00" (#445), and a shop-priced booking shows its set
+  // price rather than the $0.00 the booking row used to store (#390).
+  const money = job.money ?? null;
+  const partsCount = money ? money.counts.parts : (job.pricedPartsSnapshot?.length ?? 0);
+  const serviceCount = money ? money.counts.services : job.serviceNames.length;
+  const totalDollars = money ? money.totals.totalCents / 100 : job.totalCost;
+  const laborDollars = money ? money.totals.laborCents / 100 : job.laborCost;
+  const partsDollars = money ? money.totals.partsCents / 100 : job.partsCost;
+  const laborMinutes = money ? money.totals.laborMinutes : job.estimatedLaborMinutes;
+  const setPriceDollars = money ? money.totals.setPriceCents / 100 : 0;
+  const taxAndFeeDollars = money
+    ? (money.totals.taxCents + money.totals.feeCents) / 100
+    : null;
   const mileage = passport?.passport.mileage;
 
   const history = useQuery(api.vehicle_history.getServiceHistoryForVin, {
@@ -880,12 +1084,17 @@ export function VehiclePassportCard({
           </div>
           <div className="text-right">
             <p className="text-sm font-semibold tabular-nums text-foreground">
-              {formatCurrency(job.totalCost)}
+              {formatCurrency(totalDollars)}
             </p>
             <p className="text-[11px] text-muted-foreground">
-              {job.serviceNames.length} svc · {partsCount} part
+              {serviceCount} svc · {partsCount} part
               {partsCount === 1 ? "" : "s"}
             </p>
+            {taxAndFeeDollars != null && taxAndFeeDollars > 0 ? (
+              <p className="text-[11px] text-muted-foreground">
+                incl. {formatCurrency(taxAndFeeDollars)} tax &amp; fees
+              </p>
+            ) : null}
           </div>
         </div>
         <div className="grid grid-cols-3 divide-x divide-border border-t border-border">
@@ -899,16 +1108,19 @@ export function VehiclePassportCard({
             >
               {job.serviceNames.join(", ") || "—"}
             </p>
+            {setPriceDollars > 0 ? (
+              <p className="text-[11px] tabular-nums text-muted-foreground">
+                Set price {formatCurrency(setPriceDollars)}
+              </p>
+            ) : null}
           </div>
           <div className="px-4 py-2.5">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
               Labor
-              {job.estimatedLaborMinutes
-                ? ` (${formatLaborMinutes(job.estimatedLaborMinutes)})`
-                : ""}
+              {laborMinutes ? ` (${formatLaborMinutes(laborMinutes)})` : ""}
             </p>
             <p className="mt-0.5 text-sm font-medium text-foreground">
-              {formatCurrency(job.laborCost)}
+              {formatCurrency(laborDollars)}
             </p>
           </div>
           <div className="px-4 py-2.5">
@@ -916,7 +1128,7 @@ export function VehiclePassportCard({
               Parts
             </p>
             <p className="mt-0.5 text-sm font-medium text-foreground">
-              {formatCurrency(job.partsCost)}
+              {formatCurrency(partsDollars)}
             </p>
           </div>
         </div>
@@ -996,7 +1208,7 @@ export function VehiclePassportCard({
           rightSlot={
             <span className="text-[11px] text-muted-foreground">
               {partsCount} part{partsCount === 1 ? "" : "s"} ·{" "}
-              {formatCurrency(job.partsCost)} catalog
+              {formatCurrency(partsDollars)}
             </span>
           }
         >

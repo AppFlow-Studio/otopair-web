@@ -15,6 +15,11 @@ export default function NotificationBell() {
     undefined,
   );
   const containerRef = useRef<HTMLDivElement>(null);
+  // Set by a mousedown anywhere in this component's React tree — including
+  // dialogs a card portals to <body> (Release car / Can't release yet). Those
+  // sit outside containerRef in the DOM, so the contains() check alone closed
+  // the popover on the dialog's first click and unmounted it (bug #432).
+  const pressedInsideRef = useRef(false);
   const compact = useIsCompact();
 
   const feed = useQuery(api.mechanicNotifications.getFeed);
@@ -24,7 +29,12 @@ export default function NotificationBell() {
     // On mobile/iPad the popover is a portaled bottom sheet, so a click inside
     // it registers as "outside" this container — let the sheet backdrop close it.
     if (!open || compact) return;
+    // The press on the bell that opened the popover also set the flag.
+    pressedInsideRef.current = false;
     function handler(e: MouseEvent) {
+      const pressedInside = pressedInsideRef.current;
+      pressedInsideRef.current = false;
+      if (pressedInside) return;
       if (
         containerRef.current &&
         !containerRef.current.contains(e.target as Node)
@@ -55,7 +65,13 @@ export default function NotificationBell() {
   const count = unread + liveAlerts.length;
 
   return (
-    <div ref={containerRef} className="relative flex items-center gap-2">
+    <div
+      ref={containerRef}
+      onMouseDownCapture={() => {
+        pressedInsideRef.current = true;
+      }}
+      className="relative flex items-center gap-2"
+    >
       <DynamicAlertIsland alerts={liveAlerts} onClick={handleIslandClick} />
       <button
         onClick={handleBellClick}

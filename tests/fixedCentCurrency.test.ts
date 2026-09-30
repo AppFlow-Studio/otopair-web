@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   appendFixedCentDigit,
   backspaceFixedCentCurrency,
+  deleteFixedCentDigit,
   formatFixedCentCurrency,
+  parsePastedCurrencyCents,
   syncFixedCentCurrencyInput,
+  typeFixedCentDigit,
 } from "../lib/fixed-cent-currency";
 
 describe("fixed-cent currency input", () => {
@@ -47,5 +50,26 @@ describe("fixed-cent currency input", () => {
     expect(syncFixedCentCurrencyInput("0.00", "0.003")).toBe("0.03");
     expect(syncFixedCentCurrencyInput("0.35", "0.358")).toBe("3.58");
     expect(syncFixedCentCurrencyInput("35.80", "35.8")).toBe("3.58");
+  });
+
+  // #419 — "select $20.00 and paste 99999" gave $2,000,999.99.
+  it("a typed digit replaces a selection instead of appending to it", () => {
+    expect(typeFixedCentDigit("20.00", "9", true)).toBe("0.09");
+    expect(typeFixedCentDigit("20.00", "9", false)).toBe("200.09");
+  });
+
+  it("backspace over a selection clears the value", () => {
+    expect(deleteFixedCentDigit("20.00", true)).toBe("0.00");
+    expect(deleteFixedCentDigit("20.00", false)).toBe("2.00");
+  });
+
+  it("a paste is read as a dollar amount", () => {
+    expect(parsePastedCurrencyCents("99999")).toBe(9_999_900);
+    expect(formatFixedCentCurrency(parsePastedCurrencyCents("99999")! / 100)).toBe("99999.00");
+    expect(parsePastedCurrencyCents("12.5")).toBe(1250);
+    expect(parsePastedCurrencyCents("$1,234.56")).toBe(123456);
+    expect(parsePastedCurrencyCents("1.2.3")).toBe(123);
+    expect(parsePastedCurrencyCents("abc")).toBeNull();
+    expect(parsePastedCurrencyCents("")).toBeNull();
   });
 });

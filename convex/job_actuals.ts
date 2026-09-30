@@ -26,6 +26,7 @@ import { passesI1ReadGuardNamed, makeNameCached } from "./lib/makeIdentity";
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
 import { rotorMinForVin } from "./lib/rotorMin";
 import { serviceMatchKey } from "./lib/serviceMatch";
+import { quoteResponsePartLines } from "./lib/bookingMoney";
 import { resolveSparkPlugQuantity } from "./lib/sparkPlugs";
 import { deriveSuggestedRecommendations } from "../lib/inspection-template";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
@@ -393,27 +394,6 @@ const ROTOR_REPLACEMENT_SLUGS = new Set([
   "rotor_replacement",
 ]);
 
-/** Per-axle tire counts. Honors the customer's booked corners
- *  (tire_specs.positions: FL/FR → front, RL/RR → rear) so a rear-only job seeds
- *  two rear tires, not one per axle. Falls back to an even split (front-weighted
- *  on odd counts) when no positions were recorded. */
-function tireAxleQuantities(
-  positions: string[] | null | undefined,
-  totalQty: number,
-): { front: number; rear: number } {
-  if (Array.isArray(positions) && positions.length > 0) {
-    let front = 0;
-    let rear = 0;
-    for (const p of positions) {
-      if (p === "FL" || p === "FR") front += 1;
-      else if (p === "RL" || p === "RR") rear += 1;
-    }
-    if (front + rear > 0) return { front, rear };
-  }
-  const front = Math.ceil(totalQty / 2);
-  return { front, rear: totalQty - front };
-}
-
 /**
  * The parts-step prefill for a quote-originated tire/rotor service.
  *
@@ -432,90 +412,21 @@ export async function quotePrefillLinesForService(
 ): Promise<SuggestedPart[]> {
   if (!slug) return [];
 
-  if (TIRE_REPLACEMENT_SLUGS.has(slug)) {
-    const q = await ctx.db
-      .query("tire_quote_responses")
-      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
-      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
-      .first();
-    if (!q) return [];
-    const totalQty = q.quantity ?? booking.tire_specs?.quantity ?? 4;
-    const size = booking.tire_specs?.size ?? null;
-    const brand = q.tire_brand ?? null;
-    const model = q.tire_model ?? null;
-    const brandModel = [brand, model].filter(Boolean).join(" ");
-    const oem = size ? `TIRE-${size}` : "";
-    const { front, rear } = tireAxleQuantities(
-      booking.tire_specs?.positions,
-      totalQty,
-    );
-    const lines: SuggestedPart[] = [];
-    for (const [position, axleQty] of [
-      ["front", front],
-      ["rear", rear],
-    ] as const) {
-      if (axleQty <= 0) continue;
-      lines.push({
-        part_name: brandModel
-          ? `Tires — ${brandModel} (x${axleQty})`
-          : `Tires (x${axleQty})`,
-        oem_number: oem,
-        cost: q.per_tire_price ?? 0,
-        quantity: axleQty,
-        service_id: serviceId,
-        is_tire: true,
-        from_quote: true,
-        tire_size: size,
-        tire_brand: brand,
-        tire_model: model,
-        tire_position: position,
-      });
-    }
-    return lines;
-  }
-
-  if (ROTOR_REPLACEMENT_SLUGS.has(slug)) {
-    const q = await ctx.db
-      .query("rotor_quote_responses")
-      .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
-      .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
-      .first();
-    if (!q) return [];
-    const lines: SuggestedPart[] = [];
-    const rotorQty = q.quantity ?? 2;
-    const rotorBrandModel = [q.rotor_brand, q.rotor_model]
-      .filter(Boolean)
-      .join(" ");
-    // Axle-neutral name so the dialog's off-axle pruning (partNameAxle) never
-    // drops it — the quote gives a total count, not a per-axle split.
-    lines.push({
-      part_name: rotorBrandModel
-        ? `Rotors — ${rotorBrandModel} (x${rotorQty})`
-        : `Rotors (x${rotorQty})`,
-      oem_number: "",
-      cost: q.per_rotor_price ?? 0,
-      quantity: rotorQty,
-      service_id: serviceId,
-      from_quote: true,
-    });
-    if (q.pad_price != null || q.pad_brand) {
-      const padQty = q.pad_quantity ?? 1;
-      const padName = [q.pad_brand, q.pad_type].filter(Boolean).join(" ");
-      lines.push({
-        part_name: padName
-          ? `Brake Pads — ${padName} (x${padQty})`
-          : `Brake Pads (x${padQty})`,
-        oem_number: "",
-        cost: q.pad_price ?? 0,
-        quantity: padQty,
-        service_id: serviceId,
-        from_quote: true,
-      });
-    }
-    return lines;
-  }
-
-  return [];
+  // The line shapes live in lib/bookingMoney (quoteResponsePartLines), shared
+  // with the money statement so the parts confirmed here are the parts billed.
+  const kind = TIRE_REPLACEMENT_SLUGS.has(slug)
+    ? ("tire" as const)
+    : ROTOR_REPLACEMENT_SLUGS.has(slug)
+      ? ("rotor" as const)
+      : null;
+  if (!kind) return [];
+  const q = await ctx.db
+    .query(kind === "tire" ? "tire_quote_responses" : "rotor_quote_responses")
+    .withIndex("by_booking_id", (x: any) => x.eq("booking_id", booking._id))
+    .filter((x: any) => x.eq(x.field("superseded_at"), undefined))
+    .first();
+  if (!q) return [];
+  return quoteResponsePartLines({ kind, response: q, booking, serviceId }) as SuggestedPart[];
 }
 
 export const getPrefillData = query({

@@ -20,11 +20,10 @@
  * but an id — which is exactly what the overlay has.
  */
 
-import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
-import type { JobActualPartPayload } from "@/lib/vehicle-passport";
+import { useLockedQuote } from "@/lib/use-locked-quote";
 import type { BookingWorkflowBooking } from "@/lib/booking-workflow-state";
 import PostJobSurveyDialog from "@/components/post-job-survey-dialog";
 import BookingWorkflowGuard from "@/components/booking/booking-workflow-guard";
@@ -69,82 +68,14 @@ export default function MidJobScopeDialog({
     api.bookings.getVehiclePassportForBooking,
     args,
   );
-  const effectiveQuote = useQuery(
-    (api as any).booking_approvals.getEffectiveQuoteForBooking,
-    args,
-  ) as
-    | {
-        partsSnapshot: Array<{
-          part_name: string;
-          brand?: string | null;
-          oem_number: string;
-          cost: number;
-          quantity: number;
-          supplied_by?: string;
-          part_tier?: string | null;
-          service_id?: string | null;
-          source?: string;
-          not_used?: boolean;
-          is_tire?: boolean;
-          tire_size?: string | null;
-          tire_brand?: string | null;
-          tire_model?: string | null;
-          tire_position?: string | null;
-        }>;
-      }
-    | null
-    | undefined;
-
   /**
    * Seed from the latest APPROVED quote — the mechanic's entered prices with
    * removed / not-used rows already excluded — falling back to the priced
    * snapshot. NOT the catalog prefill: that resets every price to $0 and brings
-   * back parts the mechanic dropped.
+   * back parts the mechanic dropped. The shared hook, so this dialog and the
+   * post-job confirmation can never seed from different parts lists.
    */
-  const lockedQuoteParts = useMemo<JobActualPartPayload[] | null>(() => {
-    if (effectiveQuote && effectiveQuote.partsSnapshot.length > 0) {
-      return effectiveQuote.partsSnapshot.map((p) => ({
-        part_name: p.part_name,
-        brand: p.brand ?? null,
-        oem_number: p.oem_number,
-        cost: p.cost,
-        quantity: p.quantity,
-        supplied_by: p.supplied_by === "customer" ? "customer" : "shop",
-        part_tier: p.part_tier ?? "oem",
-        service_id: (p.service_id ?? null) as JobActualPartPayload["service_id"],
-        source: (p.source ?? "catalog") as JobActualPartPayload["source"],
-        // Preserve the prior "Not used" flag, or re-opening revives a dropped
-        // part as an active $0 line.
-        not_used: p.not_used === true ? true : undefined,
-        // Round-trip mechanic-entered tire identity so re-opening the dialog
-        // keeps the size/brand/model instead of the `TIRE-{size}` sentinel.
-        is_tire: p.is_tire ?? undefined,
-        tire_size: p.tire_size ?? undefined,
-        tire_brand: p.tire_brand ?? undefined,
-        tire_model: p.tire_model ?? undefined,
-        tire_position: p.tire_position ?? undefined,
-      }));
-    }
-    const snapshot = (job as any)?.pricedPartsSnapshot;
-    if (!snapshot || snapshot.length === 0) return null;
-    return snapshot.map((p: any) => ({
-      part_name: p.part_name,
-      brand: p.brand ?? null,
-      oem_number: p.oem_number,
-      cost: p.unit_price_cents / 100,
-      quantity: p.quantity,
-      supplied_by: "shop" as const,
-      part_tier: p.part_tier ?? "oem",
-      service_id: p.service_id ?? null,
-      source: "catalog" as const,
-      not_used: p.not_used === true ? true : undefined,
-      is_tire: p.is_tire ?? undefined,
-      tire_size: p.tire_size ?? undefined,
-      tire_brand: p.tire_brand ?? undefined,
-      tire_model: p.tire_model ?? undefined,
-      tire_position: p.tire_position ?? undefined,
-    }));
-  }, [effectiveQuote, job]);
+  const { lockedQuoteParts } = useLockedQuote(job);
 
   // Unmounts when closed, so each re-quote starts from a clean dialog rather
   // than whatever the last aborted one left behind. The data above stays warm.

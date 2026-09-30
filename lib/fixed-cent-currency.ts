@@ -32,6 +32,45 @@ export function backspaceFixedCentCurrency(value: string): string {
   return formatCents(Math.floor(fixedCentCurrencyCents(value) / 10));
 }
 
+/**
+ * A typed digit. When the field has text SELECTED (select-all, or a drag over
+ * the digits) the digit REPLACES the value, like every other text field —
+ * appending to what was selected turned "select 20.00, type 9" into $200.09
+ * (#419). With no selection it shifts in from the cents side as before.
+ */
+export function typeFixedCentDigit(
+  value: string,
+  digit: string,
+  replacesSelection: boolean,
+): string {
+  return appendFixedCentDigit(replacesSelection ? "0.00" : value, digit);
+}
+
+/** Backspace / Delete: clears the whole value when text is selected,
+ *  otherwise drops the rightmost digit. */
+export function deleteFixedCentDigit(value: string, replacesSelection: boolean): string {
+  return replacesSelection ? formatCents(0) : backspaceFixedCentCurrency(value);
+}
+
+/**
+ * Pasted text read as a DOLLAR amount — "99999" → 99999.00, "12.5" → 12.50,
+ * "$1,234.56" → 1234.56. A paste REPLACES the value: it used to append each
+ * pasted digit to the existing cents, so pasting 99999 over $20.00 produced
+ * $2,000,999.99 (#419). Null when the text holds no number (paste ignored).
+ */
+export function parsePastedCurrencyCents(text: string): number | null {
+  const cleaned = String(text ?? "").replace(/[^\d.]/g, "");
+  if (!/\d/.test(cleaned)) return null;
+  const firstDot = cleaned.indexOf(".");
+  const normalized =
+    firstDot === -1
+      ? cleaned
+      : cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, "");
+  const amount = Number(normalized);
+  if (!Number.isFinite(amount) || amount < 0) return null;
+  return Math.round(amount * 100);
+}
+
 export function syncFixedCentCurrencyInput(previousValue: string, rawInputValue: string): string {
   const previousDigits = formatFixedCentCurrency(previousValue).replace(/\D/g, "");
   const nextDigits = rawInputValue.replace(/\D/g, "");

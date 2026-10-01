@@ -29,10 +29,20 @@ export type BookingAudience = "customer" | "shop" | "system";
 
 export type BookingBlock = { code: BookingErrorCode; message: string };
 
-const TERMINAL_STATUSES = new Set(["completed", "cancelled", "no_show", "declined"]);
+/**
+ * Statuses a booking never leaves. The one shared copy: bookings.ts, and the
+ * Team page's "active bookings on this mechanic" counts (bug #397), read this
+ * set so a declined booking can't block a removal the move would ignore.
+ */
+export const TERMINAL_BOOKING_STATUSES: ReadonlySet<string> = new Set([
+  "completed",
+  "cancelled",
+  "no_show",
+  "declined",
+]);
 
 function isTerminalStatus(status: unknown): boolean {
-  return typeof status === "string" && TERMINAL_STATUSES.has(status);
+  return typeof status === "string" && TERMINAL_BOOKING_STATUSES.has(status);
 }
 
 // ----------------------------------------------------------------------------

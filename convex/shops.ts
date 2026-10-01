@@ -1,5 +1,6 @@
 import { internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { v } from "convex/values";
+import type { Doc } from "./_generated/dataModel";
 import {
   syncMechanicAvailabilityWindow,
   syncShopAvailabilityWindow,
@@ -14,15 +15,21 @@ import {
   validateOverrunTimingMinutes,
 } from "../lib/scheduling-overhaul";
 import { detectTimezoneFromState } from "../lib/shopTimezone";
+import { shopAddressChanged, shopCoordinatesFromArgs } from "../lib/shopAddress";
 import { getBookableShopIds } from "../lib/bookableShop";
 import {
   logShopOfferingChange,
   replaceShopOfferedServices,
 } from "./lib/shopServiceOffering";
+import { getActiveBookingsByMechanic } from "./bookings";
+import {
+  assertNoActiveBookingsForRemoval,
+  removalSubjectFor,
+  retireMechanic,
+} from "./mechanics";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
-const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 // DEFAULT_NO_SHOW_THRESHOLD_MINUTES / DEFAULT_OVERRUN_EXTENSION_PERCENT /
 // DEFAULT_OVERRUN_EXTENSION_FLOOR_MINUTES are imported from
 // `../lib/scheduling-overhaul` above — the local duplicates that lived
@@ -196,20 +203,13 @@ export async function requireShopOwner(ctx: any, shopId: any) {
   return { user, shop };
 }
 
-async function getBlockingBookingsForMechanic(ctx: any, shopId: any, mechanicId: any) {
-  const bookings = await ctx.db
-    .query("bookings")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .collect();
-
-  return bookings.filter(
-    (booking: any) =>
-      String(booking.mechanic_id ?? "") === String(mechanicId) &&
-      !TERMINAL_BOOKING_STATUSES.has(booking.status)
-  );
-}
-
-function getMechanicPortalStatus(args: { activeShopUser: any; latestInvitation: any; now: number }) {
+function getMechanicPortalStatus(args: {
+  activeShopUser: any;
+  latestInvitation: any;
+  now: number;
+  /** Any active login linked to the profile, whatever its role now is. */
+  hasLinkedLogin?: boolean;
+}) {
   if (args.activeShopUser) return "active";
   if (!args.latestInvitation) return "not_invited";
   if (
@@ -222,7 +222,14 @@ function getMechanicPortalStatus(args: { activeShopUser: any; latestInvitation: 
   if (args.latestInvitation.status === "pending") return "invite_sent";
   if (args.latestInvitation.status === "expired") return "invite_expired";
   if (args.latestInvitation.status === "revoked") return "invite_revoked";
-  if (args.latestInvitation.status === "accepted") return "active";
+  // Same reading as mechanics.getPortalStatus: an accepted invite whose login
+  // was removed offers a re-invite (bug #397); an owner-closed invite never
+  // had a login and keeps reading "active".
+  if (args.latestInvitation.status === "accepted") {
+    return args.latestInvitation.accepted_by_admin || args.hasLinkedLogin
+      ? "active"
+      : "not_invited";
+  }
   return "not_invited";
 }
 
@@ -816,6 +823,9 @@ export const getMyOnboardingData = query({
     const shopUserRecordByMechanicId = new Map(
       mechanicRoleShopUsers.map((row: any) => [String(row.mechanic_id), row])
     );
+    const activeBookingsByMechanic = shop
+      ? await getActiveBookingsByMechanic(ctx, shop._id)
+      : new Map<string, Doc<"bookings">[]>();
     const invitationsByMechanicId = new Map<string, any[]>();
     for (const invitation of mechanicRoleInvitations) {
       const key = String(invitation.mechanic_id);
@@ -886,9 +896,7 @@ export const getMyOnboardingData = query({
               ? await ctx.storage.getUrl(linkedUser.profile_photo_storage_id)
               : (linkedUser?.profile_photo_url ?? null);
             const activeShopUser = shopUser ?? null;
-            const blockingBookings = shop
-              ? await getBlockingBookingsForMechanic(ctx, shop._id, mechanic._id)
-              : [];
+            const blockingBookings = activeBookingsByMechanic.get(String(mechanic._id)) ?? [];
 
             return {
               _id: String(mechanic._id),
@@ -907,6 +915,9 @@ export const getMyOnboardingData = query({
                 activeShopUser,
                 latestInvitation,
                 now: Date.now(),
+                hasLinkedLogin: shopUsers.some(
+                  (row) => !!row.mechanic_id && String(row.mechanic_id) === String(mechanic._id)
+                ),
               }),
               blockingBookingCount: blockingBookings.length,
               photoUrl: mechanicPhotoUrl ?? linkedUserPhotoUrl,
@@ -926,9 +937,15 @@ export const upsertOnboardingShopDetails = mutation({
     state: v.string(),
     zipCode: v.string(),
     phone: v.string(),
+    // The map pin, from the same Google place as the address (bug #354).
+    // Optional so older portal builds keep saving — without it, an address
+    // change clears the stored pin instead of leaving it on the old place.
+    lat: v.optional(v.number()),
+    lng: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const user = await getOrCreateCurrentShopOwner(ctx);
+    const coordinates = shopCoordinatesFromArgs(args.lat, args.lng);
 
     const existingSlug = await ctx.db
       .query("shops")
@@ -945,6 +962,16 @@ export const upsertOnboardingShopDetails = mutation({
     const detectedTimezone = detectTimezoneFromState(args.state);
 
     if (currentShop) {
+      const addressChanged = shopAddressChanged(currentShop, args);
+      // A state change re-derives the timezone only when the stored one is
+      // the automatic value for the OLD state (a mistyped "TX" left
+      // America/Chicago behind for good). A manually-set value is kept.
+      const stateChanged =
+        (currentShop.state ?? "").trim().toUpperCase() !== args.state.trim().toUpperCase();
+      const timezoneIsAutomatic =
+        !currentShop.timezone ||
+        (stateChanged &&
+          currentShop.timezone === detectTimezoneFromState(currentShop.state));
       await ctx.db.patch(currentShop._id, {
         name: args.name,
         slug: args.slug,
@@ -954,8 +981,16 @@ export const upsertOnboardingShopDetails = mutation({
         zip: args.zipCode,
         phone: args.phone,
         onboarding_complete: false,
-        // Only backfill timezone — never overwrite a manually-set value.
-        ...(!currentShop.timezone && detectedTimezone
+        // Sent coordinates are always written — including onto an unchanged
+        // address that never had a pin. Without them, a changed address drops
+        // the old pin (patching undefined removes the field) so it can't
+        // outlive the place it marked.
+        ...(coordinates
+          ? { lat: coordinates.lat, lng: coordinates.lng }
+          : addressChanged
+            ? { lat: undefined, lng: undefined }
+            : {}),
+        ...(timezoneIsAutomatic && detectedTimezone
           ? { timezone: detectedTimezone }
           : {}),
       });
@@ -971,6 +1006,7 @@ export const upsertOnboardingShopDetails = mutation({
       state: args.state,
       zip: args.zipCode,
       phone: args.phone,
+      ...(coordinates ? { lat: coordinates.lat, lng: coordinates.lng } : {}),
       is_active: true,
       owner_user_id: user._id,
       labor_rate: 150,
@@ -1160,6 +1196,9 @@ export const updateOnboardingMechanic = mutation({
 export const removeOnboardingMechanic = mutation({
   args: {
     mechanicId: v.id("mechanics"),
+    // Same consent flag as mechanics.deactivateManaged: move the mechanic's
+    // active bookings instead of refusing. Optional for older portal builds.
+    reassignBookings: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const user = await getOrCreateCurrentShopOwner(ctx);
@@ -1174,17 +1213,16 @@ export const removeOnboardingMechanic = mutation({
       throw new Error("Mechanic not found.");
     }
 
-    const blockers = await getBlockingBookingsForMechanic(ctx, primary.shop._id, args.mechanicId);
-    if (blockers.length > 0) {
-      throw new Error("This mechanic has active bookings or jobs that must be completed or reassigned first.");
+    if (!args.reassignBookings) {
+      await assertNoActiveBookingsForRemoval(ctx, { shopId: primary.shop._id, mechanic });
     }
 
-    await ctx.db.patch(args.mechanicId, { is_active: false });
-    await syncMechanicAvailabilityWindow(ctx, {
+    const { reassigned, unassigned } = await retireMechanic(ctx, {
       shopId: primary.shop._id,
       mechanicId: args.mechanicId,
+      subject: removalSubjectFor(mechanic),
     });
-    return args.mechanicId;
+    return { mechanicId: args.mechanicId, reassigned, unassigned };
   },
 });
 

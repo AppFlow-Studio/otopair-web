@@ -7,6 +7,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import type { Doc } from "@/convex/_generated/dataModel";
 import {
   Bell,
   CalendarCheck,
@@ -34,6 +35,7 @@ import {
   DEFAULT_OVERRUN_EXTENSION_PERCENT,
 } from "@/lib/scheduling-overhaul";
 import { detectTimezoneFromState, US_TIMEZONES } from "@/lib/shopTimezone";
+import { formatShopAddressLines } from "@/lib/shopAddress";
 import HoursEditor from "./hours-editor";
 import ShopLogoUploader from "./logo-uploader";
 import PortfolioManager from "./portfolio-manager";
@@ -283,9 +285,11 @@ function SettingsInner() {
                           <li className="flex items-start gap-3 text-sm text-foreground">
                             <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                             <span>
-                              {shop.address}
-                              <br />
-                              {shop.city}, {shop.state} {shop.zip}
+                              {formatShopAddressLines(shop as Doc<"shops">).map((line, index) => (
+                                <span key={index} className="block">
+                                  {line}
+                                </span>
+                              ))}
                             </span>
                           </li>
                           <li className="flex items-center gap-3 text-sm text-foreground">

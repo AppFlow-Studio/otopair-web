@@ -2,7 +2,7 @@
 
 "use client";
 
-import { errorMessage } from "@/lib/feedback";
+import { errorMessage, readBookingError } from "@/lib/feedback";
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useUser } from "@clerk/nextjs";
@@ -11,12 +11,18 @@ import { makeFunctionReference } from "convex/server";
 import type { Id } from "@/convex/_generated/dataModel";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
-import { removeTeamMember } from "@/lib/remove-team-member";
+import { describeMovedBookings, removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import TimePicker from "@/components/ui/time-picker";
 import Tooltip from "@/components/ui/tooltip";
 import LicenseUploader from "@/components/shop/license-uploader";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import {
+  parseGoogleShopAddress,
+  storedShopCoordinates,
+  type GoogleLatLng,
+  type ShopCoordinates,
+} from "@/lib/shopAddress";
 import {
   BadgeDollarSign,
   Building2,
@@ -230,10 +236,7 @@ type GoogleAutocompleteSuggestion = {
         shortText?: string;
         types?: string[];
       }>;
-      location?: {
-        lat?: () => number;
-        lng?: () => number;
-      };
+      location?: GoogleLatLng;
     };
   };
 };
@@ -315,6 +318,9 @@ type OnboardingData = {
     state: string;
     zipCode: string;
     phone: string;
+    /** The map pin (bug #354) — read through storedOnboardingShopCoordinates. */
+    lat?: number | null;
+    lng?: number | null;
     laborRate?: number;
     laborRatesByTier?: Partial<Record<TierCode, number>>;
     declinedTiers?: TierCode[];
@@ -328,22 +334,33 @@ type OnboardingData = {
   mechanics: OnboardingMechanicRow[];
 };
 
-type NormalizedShopAddress = {
+/**
+ * The pin an earlier Google-checked Step 0 save stored, when the stored
+ * address is one coherent place (bug #354). One reading for both the Step 0
+ * gate and the form's "verified" state, so they can't disagree.
+ */
+function storedOnboardingShopCoordinates(
+  shop: OnboardingData["shop"] | null | undefined
+): ShopCoordinates | null {
+  if (!shop) return null;
+  return storedShopCoordinates({
+    address: shop.address,
+    city: shop.city,
+    state: shop.state,
+    zip: shop.zipCode,
+    lat: shop.lat,
+    lng: shop.lng,
+  });
+}
+
+type VerifiedShopAddress = {
   address: string;
   city: string;
   state: string;
   zipCode: string;
+  lat: number;
+  lng: number;
 };
-
-function getAddressComponent(
-  components: Array<{ longText?: string; shortText?: string; types?: string[] }>,
-  type: string,
-  mode: "long" | "short" = "long"
-) {
-  const match = components.find((component) => component.types?.includes(type));
-  if (!match) return "";
-  return mode === "short" ? match.shortText ?? "" : match.longText ?? "";
-}
 
 function normalizeAddressToken(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -351,7 +368,7 @@ function normalizeAddressToken(value: string): string {
 
 async function validateShopAddressWithGoogle(
   details: Pick<ShopDetailsForm, "address" | "city" | "state" | "zipCode">
-): Promise<NormalizedShopAddress> {
+): Promise<VerifiedShopAddress> {
   await loadGoogleMapsPlacesApi();
 
   const mapsWindow = window as GoogleMapsWindow;
@@ -366,6 +383,7 @@ async function validateShopAddressWithGoogle(
                 short_name?: string;
                 types?: string[];
               }>;
+              geometry?: { location?: GoogleLatLng };
             }>;
           }>;
         };
@@ -395,19 +413,14 @@ async function validateShopAddressWithGoogle(
       types: component.types ?? [],
     })) ?? [];
 
-  const streetNumber = getAddressComponent(components, "street_number");
-  const route = getAddressComponent(components, "route");
-  const city =
-    getAddressComponent(components, "locality") ||
-    getAddressComponent(components, "postal_town") ||
-    getAddressComponent(components, "sublocality_level_1");
-  const state = getAddressComponent(components, "administrative_area_level_1", "short");
-  const zipCode = getAddressComponent(components, "postal_code");
-  const address =
-    [streetNumber, route].filter(Boolean).join(" ") || result.formatted_address || details.address;
-
-  if (!address || !city || !state || !zipCode) {
-    throw new Error("This address is missing required location details. Choose a different suggestion.");
+  // Street level only (bug #354): a town-level match ("Jericho, NY") used to
+  // pass through its formatted_address and be saved beside a typed city.
+  const parsed = parseGoogleShopAddress(components, result.geometry?.location);
+  if ("error" in parsed) {
+    throw new Error(parsed.error);
+  }
+  if (parsed.lat === null || parsed.lng === null) {
+    throw new Error("Google couldn't place this address on the map. Pick a suggested address.");
   }
 
   // ZIP uniquely identifies a small geographic area; if the user's typed ZIP
@@ -415,19 +428,14 @@ async function validateShopAddressWithGoogle(
   // City/state are normalized silently using Google's values (handles common
   // typos like "N" → "NY", "Staten Is" → "Staten Island").
   if (
-    normalizeAddressToken(zipCode) !== normalizeAddressToken(details.zipCode)
+    normalizeAddressToken(parsed.zipCode) !== normalizeAddressToken(details.zipCode)
   ) {
     throw new Error(
       "We couldn't match that ZIP code to the street address. Double-check the ZIP or pick a suggested address."
     );
   }
 
-  return {
-    address,
-    city,
-    state,
-    zipCode,
-  };
+  return { ...parsed, lat: parsed.lat, lng: parsed.lng };
 }
 
 async function loadGoogleMapsPlacesApi() {
@@ -591,6 +599,8 @@ export default function ShopSetupPage() {
     state: string;
     zipCode: string;
     phone: string;
+    lat?: number;
+    lng?: number;
   }) => Promise<Id<"shops">>;
   const saveHours = useMutation(saveHoursMutation) as (args: {
     hours: HoursFormRow[];
@@ -619,7 +629,8 @@ export default function ShopSetupPage() {
   }) => Promise<Id<"mechanics">>;
   const removeMechanic = useMutation(removeMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
-  }) => Promise<Id<"mechanics">>;
+    reassignBookings?: boolean;
+  }) => Promise<{ mechanicId: Id<"mechanics">; reassigned: number; unassigned: number }>;
   const setShopServiceFixedPrices = useMutation(
     setShopServiceFixedPricesMutation,
   ) as (args: {
@@ -661,7 +672,17 @@ export default function ShopSetupPage() {
   const [launchingStripe, setLaunchingStripe] = useState(false);
   const [addressSuggestions, setAddressSuggestions] = useState<AddressSuggestion[]>([]);
   const [addressLookupLoading, setAddressLookupLoading] = useState(false);
-  const [addressSelectedFromAutocomplete, setAddressSelectedFromAutocomplete] = useState(false);
+  // Two jobs the old single flag conflated (bug #354):
+  // - addressVerified: the Address/City/State/ZIP on screen are one Google
+  //   street-level place, with its map location. Set only by such a pick or
+  //   a passed save-time check; any edit to those fields clears it, so an
+  //   unchecked address is re-checked on save.
+  // - suppressLookup: don't fetch suggestions for what's in Street Address
+  //   (a pick, a hydrated value). Only typing there clears it, so hydration
+  //   and City/State/ZIP edits don't open the list or bill a Places request.
+  const [addressVerified, setAddressVerified] = useState<ShopCoordinates | null>(null);
+  const [suppressLookup, setSuppressLookup] = useState(true);
+  const [addressPickError, setAddressPickError] = useState<string | null>(null);
   const [highlightedAddressSuggestionIndex, setHighlightedAddressSuggestionIndex] = useState(-1);
   const addressLookupSessionRef = useRef<unknown>(null);
   const addressLookupRequestIdRef = useRef(0);
@@ -684,6 +705,10 @@ export default function ShopSetupPage() {
     pendingInvitationId: string | null;
     firstName: string;
     lastName: string;
+    /** Active bookings when the confirm opened — the live row's count wins. */
+    blockingBookingCount: number;
+    /** The count the server refused with — a booking landed while it was open. */
+    refusedBookingCount?: number;
   } | null>(null);
   const [mechanicInviteActionId, setMechanicInviteActionId] = useState<string | null>(null);
   const [removingMechanicId, setRemovingMechanicId] = useState<string | null>(null);
@@ -741,7 +766,12 @@ export default function ShopSetupPage() {
         // fill the required "page name" on Step 0. Gate on the slug actually being
         // set rather than the bare record existing, otherwise an invited shop skips
         // Step 0 and opens on Operating Hours with no page name captured.
-        hasSavedShopDetails: Boolean(onboardingData?.shop?.slug),
+        // A checked address too (bug #354): a Step 0 saved before the address
+        // was Google-checked has no pin (or a mixed one), so that shop
+        // re-picks its address once.
+        hasSavedShopDetails:
+          Boolean(onboardingData?.shop?.slug) &&
+          storedOnboardingShopCoordinates(onboardingData?.shop) !== null,
         savedHoursCount: onboardingData?.hours.length ?? 0,
         savedServiceCount: persistedServiceCount,
         mechanicCount: onboardingData?.mechanics.length ?? 0,
@@ -818,7 +848,12 @@ export default function ShopSetupPage() {
       ),
     );
     setSelectedServiceIds(nextSelectedServiceIds);
-    setAddressSelectedFromAutocomplete(Boolean(nextDetails.address));
+    // Only a record an earlier checked save wrote in full counts as verified.
+    // An invite-created shop carries its one-line application address with no
+    // city/state/ZIP/pin (bug #354) — that one is re-checked on save.
+    setAddressVerified(storedOnboardingShopCoordinates(onboardingData.shop));
+    setSuppressLookup(true);
+    setAddressPickError(null);
     setAddressSuggestions([]);
     setSlugManual(
       Boolean(nextDetails.slug) && nextDetails.slug !== toSlug(nextDetails.name)
@@ -926,7 +961,7 @@ export default function ShopSetupPage() {
 
   useEffect(() => {
     const query = details.address.trim();
-    if (!query || addressSelectedFromAutocomplete) {
+    if (!query || suppressLookup) {
       setAddressLookupLoading(false);
       if (!query) setAddressSuggestions([]);
       return;
@@ -982,7 +1017,7 @@ export default function ShopSetupPage() {
     }, 250);
 
     return () => window.clearTimeout(timeoutId);
-  }, [addressSelectedFromAutocomplete, details.address]);
+  }, [suppressLookup, details.address]);
 
   const inputClass =
     "w-full rounded-lg border border-input bg-white px-3.5 py-2.5 text-sm text-foreground placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent";
@@ -1085,8 +1120,12 @@ export default function ShopSetupPage() {
   async function handleSelectAddressSuggestion(entry: AddressSuggestion) {
     const place = entry.suggestion.placePrediction?.toPlace?.();
     if (!place?.fetchFields) {
+      // No place details to check against: take the text but leave the
+      // address unverified, so the save-time Google check still runs.
       setDetails((prev) => ({ ...prev, address: entry.primaryText }));
-      setAddressSelectedFromAutocomplete(true);
+      setAddressVerified(null);
+      setSuppressLookup(true);
+      setAddressPickError(null);
       setAddressSuggestions([]);
       setHighlightedAddressSuggestionIndex(-1);
       return;
@@ -1098,28 +1137,29 @@ export default function ShopSetupPage() {
       await place.fetchFields({
         fields: ["formattedAddress", "addressComponents", "location"],
       });
-      const components = place.addressComponents ?? [];
-      const streetNumber = getAddressComponent(components, "street_number");
-      const route = getAddressComponent(components, "route");
-      const line1 =
-        [streetNumber, route].filter(Boolean).join(" ") ||
-        place.formattedAddress ||
-        entry.primaryText;
-      const city =
-        getAddressComponent(components, "locality") ||
-        getAddressComponent(components, "postal_town") ||
-        getAddressComponent(components, "sublocality_level_1");
-      const state = getAddressComponent(components, "administrative_area_level_1", "short");
-      const zipCode = getAddressComponent(components, "postal_code");
+      const parsed = parseGoogleShopAddress(place.addressComponents ?? [], place.location);
+      if ("error" in parsed) {
+        // A town or bare street ("Jericho, NY") has no spot for the pin.
+        setAddressPickError(parsed.error);
+        setAddressSuggestions([]);
+        setHighlightedAddressSuggestionIndex(-1);
+        addressLookupSessionRef.current = null;
+        return;
+      }
 
+      // Every part from the one place — never a previous City/State/ZIP.
       setDetails((prev) => ({
         ...prev,
-        address: line1,
-        city: city || prev.city,
-        state: state || prev.state,
-        zipCode: zipCode || prev.zipCode,
+        address: parsed.address,
+        city: parsed.city,
+        state: parsed.state,
+        zipCode: parsed.zipCode,
       }));
-      setAddressSelectedFromAutocomplete(true);
+      setAddressVerified(
+        parsed.lat !== null && parsed.lng !== null ? { lat: parsed.lat, lng: parsed.lng } : null
+      );
+      setSuppressLookup(true);
+      setAddressPickError(null);
       setAddressSuggestions([]);
       setHighlightedAddressSuggestionIndex(-1);
       addressLookupSessionRef.current = null;
@@ -1156,21 +1196,30 @@ export default function ShopSetupPage() {
 
     setSavingStep(0);
     try {
-      const normalizedAddress = addressSelectedFromAutocomplete
+      const verifiedAddress: VerifiedShopAddress = addressVerified
         ? {
             address: details.address,
             city: details.city,
             state: details.state,
             zipCode: details.zipCode,
+            lat: addressVerified.lat,
+            lng: addressVerified.lng,
           }
         : await validateShopAddressWithGoogle(details);
+      const { lat, lng, ...normalizedAddress } = verifiedAddress;
       const nextDetails = {
         ...details,
         ...normalizedAddress,
       };
 
       setDetails(nextDetails);
-      await upsertShopDetails(nextDetails);
+      // The fields now hold Google's answer: keep them verified and don't
+      // look the normalized street line up again.
+      setAddressVerified({ lat, lng });
+      setSuppressLookup(true);
+      setAddressPickError(null);
+      // The pin comes from the same Google place as the address (bug #354).
+      await upsertShopDetails({ ...nextDetails, lat, lng });
       setCurrentStep(1);
     } catch (error) {
       setStepError(
@@ -1529,28 +1578,77 @@ export default function ShopSetupPage() {
     mechanicId: string;
     shopUserId: string | null;
     pendingInvitationId: string | null;
+    blockingBookingCount: number;
   }) {
     clearBanners();
     setRemovingMechanicId(args.mechanicId);
+    let result: { reassigned: number; unassigned: number };
     try {
-      if (args.shopUserId) {
-        await removeTeamMember({ shopUserId: args.shopUserId });
-      }
-
-      if (args.pendingInvitationId) {
-        await removeTeamMember({ invitationId: args.pendingInvitationId });
-      }
-
-      await removeMechanic({ mechanicId: args.mechanicId as Id<"mechanics"> });
-      setRemoveMechanicConfirm(null);
-      setStepSuccess("Mechanic removed.");
+      // Retire the profile FIRST (bug #397): the server moves their active
+      // bookings — only when the confirm told the owner about them — or
+      // refuses, and a refusal must leave the mechanic's login untouched.
+      result = await removeMechanic({
+        mechanicId: args.mechanicId as Id<"mechanics">,
+        ...(args.blockingBookingCount > 0 ? { reassignBookings: true } : {}),
+      });
     } catch (error) {
-      setStepError(
-        errorMessage(error, "Failed to remove mechanic.")
-      );
-    } finally {
+      const conflict = readBookingError(error);
+      if (
+        args.blockingBookingCount === 0 &&
+        conflict?.code === "MECHANIC_HAS_ACTIVE_JOB" &&
+        conflict.reason === "active_bookings"
+      ) {
+        // A booking landed on them while the confirm was open — keep it open,
+        // now asking to move it (as the Team page does).
+        const refused =
+          typeof conflict.activeBookingCount === "number" ? conflict.activeBookingCount : 1;
+        setRemoveMechanicConfirm((current) =>
+          current ? { ...current, refusedBookingCount: refused } : current
+        );
+      } else {
+        setRemoveMechanicConfirm(null);
+        setStepError(
+          errorMessage(error, "Failed to remove mechanic.")
+        );
+      }
       setRemovingMechanicId(null);
+      return;
     }
+
+    setRemoveMechanicConfirm(null);
+    const movedCopy = describeMovedBookings(result);
+    const removedCopy = movedCopy ? `Mechanic removed. ${movedCopy}` : "Mechanic removed.";
+    // Separate tries, so a failed sign-in reset never skips the invite revoke
+    // (or the reverse). The mutation already revoked a pending invite in
+    // Convex; this call revokes the Clerk side.
+    const unfinished: string[] = [];
+    // shopUserId is only ever a mechanic-role login (getMyOnboardingData),
+    // never the owner's own membership. The mutation already took its shop
+    // access away (retireMechanic); this call only resets their sign-in.
+    if (args.shopUserId) {
+      try {
+        await removeTeamMember({ shopUserId: args.shopUserId });
+      } catch (error) {
+        unfinished.push(
+          `Their shop access is off, but their sign-in couldn't be reset. ${errorMessage(error, "")}`.trim(),
+        );
+      }
+    }
+    if (args.pendingInvitationId) {
+      try {
+        await removeTeamMember({ invitationId: args.pendingInvitationId });
+      } catch (error) {
+        unfinished.push(
+          `Their pending invite couldn't be revoked. ${errorMessage(error, "")}`.trim(),
+        );
+      }
+    }
+    if (unfinished.length > 0) {
+      setStepError(`${removedCopy} ${unfinished.join(" ")}`);
+    } else {
+      setStepSuccess(removedCopy);
+    }
+    setRemovingMechanicId(null);
   }
 
   async function handleLaunchStripeOnboarding() {
@@ -1643,6 +1741,14 @@ export default function ShopSetupPage() {
       ? null
       : mechanics.find((mechanic) => mechanic._id === removeMechanicConfirm.mechanicId) ??
         removeMechanicConfirm;
+  // Read live (the row is reactive), floored by a server refusal, so the copy,
+  // the button and the consent flag all match what the removal will move.
+  const removeDialogBookingCount = removeMechanicConfirm
+    ? Math.max(
+        selectedMechanicForRemoveDialog?.blockingBookingCount ?? 0,
+        removeMechanicConfirm.refusedBookingCount ?? 0
+      )
+    : 0;
   const offeredCount = selectedServiceIds.size;
   // A selected service that legally needs the NY DMV inspection station license.
   const selectedNeedsInspectionLicense = serviceCategories.some((category) =>
@@ -1810,18 +1916,24 @@ export default function ShopSetupPage() {
                   value={details.address}
                   onChange={(event) => {
                     const value = event.target.value;
-                    setAddressSelectedFromAutocomplete(false);
+                    setAddressVerified(null);
+                    setSuppressLookup(false);
+                    setAddressPickError(null);
                     setHighlightedAddressSuggestionIndex(-1);
                     setDetails((prev) => ({ ...prev, address: value }));
                   }}
                   onKeyDown={handleAddressInputKeyDown}
                   autoComplete="off"
-                  placeholder="1234 Main St"
+                  placeholder="Building number and street"
                   className={inputClass}
                 />
-                <p className="mt-1.5 text-xs text-muted-foreground">
-                  Start typing and pick your address from the suggestions - we&apos;ll fill in the rest.
-                </p>
+                {addressPickError ? (
+                  <p className="mt-1.5 text-xs text-destructive">{addressPickError}</p>
+                ) : (
+                  <p className="mt-1.5 text-xs text-muted-foreground">
+                    Start typing and pick your address from the suggestions - we&apos;ll fill in the rest.
+                  </p>
+                )}
                 {(addressLookupLoading || addressSuggestions.length > 0) && (
                   <div className="absolute left-0 right-0 top-full z-20 mt-2 overflow-hidden rounded-xl border border-border bg-white shadow-lg">
                     {addressLookupLoading && addressSuggestions.length === 0 ? (
@@ -1866,10 +1978,12 @@ export default function ShopSetupPage() {
                   <input
                     type="text"
                     value={details.city}
-                    onChange={(event) =>
-                      setDetails((prev) => ({ ...prev, city: event.target.value }))
-                    }
-                    placeholder="Austin"
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setAddressVerified(null);
+                      setDetails((prev) => ({ ...prev, city: value }));
+                    }}
+                    placeholder="City"
                     className={inputClass}
                   />
                 </div>
@@ -1881,13 +1995,12 @@ export default function ShopSetupPage() {
                     type="text"
                     maxLength={2}
                     value={details.state}
-                    onChange={(event) =>
-                      setDetails((prev) => ({
-                        ...prev,
-                        state: event.target.value.toUpperCase(),
-                      }))
-                    }
-                    placeholder="TX"
+                    onChange={(event) => {
+                      const value = event.target.value.toUpperCase();
+                      setAddressVerified(null);
+                      setDetails((prev) => ({ ...prev, state: value }));
+                    }}
+                    placeholder="State"
                     className={inputClass}
                   />
                 </div>
@@ -1899,13 +2012,12 @@ export default function ShopSetupPage() {
                     type="text"
                     inputMode="numeric"
                     value={details.zipCode}
-                    onChange={(event) =>
-                      setDetails((prev) => ({
-                        ...prev,
-                        zipCode: event.target.value.replace(/\D/g, "").slice(0, 5),
-                      }))
-                    }
-                    placeholder="78701"
+                    onChange={(event) => {
+                      const value = event.target.value.replace(/\D/g, "").slice(0, 5);
+                      setAddressVerified(null);
+                      setDetails((prev) => ({ ...prev, zipCode: value }));
+                    }}
+                    placeholder="5-digit ZIP"
                     className={inputClass}
                   />
                 </div>
@@ -1924,7 +2036,7 @@ export default function ShopSetupPage() {
                       phone: formatPhone(event.target.value),
                     }))
                   }
-                  placeholder="(512) 555-0100"
+                  placeholder="Shop phone number"
                   className={inputClass}
                 />
               </div>
@@ -2689,18 +2801,16 @@ export default function ShopSetupPage() {
                         <button
                           type="button"
                           onClick={() => {
-                            if ((mechanic.blockingBookingCount ?? 0) > 0) {
-                              setStepError(
-                                "This mechanic has active bookings or jobs that must be completed or reassigned first."
-                              );
-                              return;
-                            }
+                            clearBanners();
+                            // Active bookings no longer dead-end here: the
+                            // confirm asks to move them at the same time.
                             setRemoveMechanicConfirm({
                               mechanicId: mechanic._id,
                               shopUserId: mechanic.shopUserId,
                               pendingInvitationId: mechanic.pendingInvitationId,
                               firstName: mechanic.firstName,
                               lastName: mechanic.lastName,
+                              blockingBookingCount: mechanic.blockingBookingCount ?? 0,
                             });
                           }}
                           disabled={removingMechanicId === mechanic._id}
@@ -2776,13 +2886,27 @@ export default function ShopSetupPage() {
                     ? `${selectedMechanicForRemoveDialog.firstName} ${selectedMechanicForRemoveDialog.lastName}`
                     : undefined
                 }
-                confirmLabel="Remove mechanic"
+                description={
+                  selectedMechanicForRemoveDialog && removeDialogBookingCount > 0
+                    ? (() => {
+                        const name =
+                          `${selectedMechanicForRemoveDialog.firstName} ${selectedMechanicForRemoveDialog.lastName}`.trim() ||
+                          "This mechanic";
+                        const count = removeDialogBookingCount;
+                        return `${name} has ${count} active booking${count === 1 ? "" : "s"}. Remove ${name} and move ${count === 1 ? "it" : "those bookings"} to another available mechanic or bay at the same time? If a job is already in progress, or no one else is free at an upcoming booking's time, nothing is removed.`;
+                      })()
+                    : undefined
+                }
+                confirmLabel={removeDialogBookingCount > 0 ? "Reassign & remove" : "Remove mechanic"}
                 isSubmitting={!!removingMechanicId}
                 submittingLabel="Removing..."
                 onClose={() => setRemoveMechanicConfirm(null)}
                 onConfirm={() => {
                   if (!removeMechanicConfirm) return;
-                  void handleRemoveMechanic(removeMechanicConfirm);
+                  void handleRemoveMechanic({
+                    ...removeMechanicConfirm,
+                    blockingBookingCount: removeDialogBookingCount,
+                  });
                 }}
               />
 

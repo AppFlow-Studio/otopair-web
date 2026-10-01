@@ -29,14 +29,23 @@
  */
 
 import { mutation, query } from "./_generated/server";
+import type { MutationCtx, QueryCtx } from "./_generated/server";
+import type { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
-import { syncMechanicAvailabilityWindow } from "./lib/timeSlotAvailability";
+import {
+  QUOTE_HOLD_BOOKING_STATUSES,
+  syncMechanicAvailabilityWindow,
+} from "./lib/timeSlotAvailability";
 import { getBookableShopIds } from "../lib/bookableShop";
-import { reassignActiveBookingsAwayFromMechanic } from "./bookings";
+import {
+  getActiveBookingsByMechanic,
+  reassignActiveBookingsAwayFromMechanic,
+  type MechanicRemovalSubject,
+} from "./bookings";
+import { throwBookingError } from "./lib/bookingErrors";
 
 const OWNER_ROLES = new Set(["owner", "shop_owner", "admin"]);
 const MECHANIC_ROLES = new Set(["shop_mechanic", "mechanic"]);
-const TERMINAL_BOOKING_STATUSES = new Set(["completed", "cancelled", "no_show"]);
 
 async function requireShopOwner(ctx: any, shopId: any) {
   const identity = await ctx.auth.getUserIdentity();
@@ -93,24 +102,203 @@ async function resolveMechanicPhotoUrl(ctx: any, photo?: string | null) {
   }
 }
 
-async function getBlockingBookings(ctx: any, mechanicId: any, shopId: any) {
-  const bookings = await ctx.db
-    .query("bookings")
-    .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
-    .collect();
+/**
+ * The bookings removing this mechanic would move, in the shape the Team page
+ * lists them. `activeByMechanic` is getActiveBookingsByMechanic's map — the
+ * same set reassignActiveBookingsAwayFromMechanic moves.
+ */
+function toBlockingBookings(
+  activeByMechanic: Map<string, Doc<"bookings">[]>,
+  mechanicId: Id<"mechanics">,
+) {
+  return (activeByMechanic.get(String(mechanicId)) ?? []).map((booking) => ({
+    _id: String(booking._id),
+    status: booking.status as string,
+    scheduledDate: booking.scheduled_date ?? null,
+    scheduledTime: booking.scheduled_time ?? null,
+  }));
+}
 
-  return bookings
-    .filter(
-      (booking: any) =>
-        String(booking.mechanic_id ?? "") === String(mechanicId) &&
-        !TERMINAL_BOOKING_STATUSES.has(booking.status)
-    )
-    .map((booking: any) => ({
-      _id: String(booking._id),
-      status: booking.status as string,
-      scheduledDate: booking.scheduled_date ?? null,
-      scheduledTime: booking.scheduled_time ?? null,
-    }));
+type MechanicNameFields = Pick<Doc<"mechanics">, "first_name" | "last_name" | "entity_type">;
+
+/** Refusal copy subject for a shop removing someone else's row. */
+export function removalSubjectFor(mechanic: MechanicNameFields): {
+  name: string;
+  kind: "mechanic" | "bay";
+} {
+  const kind = mechanic.entity_type === "bay" ? "bay" : "mechanic";
+  const name = [mechanic.first_name, mechanic.last_name]
+    .map((part) => (part ?? "").trim())
+    .filter(Boolean)
+    .join(" ");
+  return { name: name || (kind === "bay" ? "This bay" : "This mechanic"), kind };
+}
+
+/**
+ * Refuse a removal the caller didn't consent to move bookings for. Old portal
+ * builds never send `reassignBookings`, so for them this keeps today's
+ * behaviour — only now as a typed error that names the count (bug #397).
+ */
+export async function assertNoActiveBookingsForRemoval(
+  ctx: QueryCtx,
+  { shopId, mechanic }: { shopId: Id<"shops">; mechanic: Doc<"mechanics"> },
+) {
+  const active = (await getActiveBookingsByMechanic(ctx, shopId)).get(String(mechanic._id)) ?? [];
+  if (active.length === 0) return;
+  const subject = removalSubjectFor(mechanic);
+  const count = active.length;
+  throwBookingError(
+    "MECHANIC_HAS_ACTIVE_JOB",
+    `${subject.name} has ${count} active booking${count === 1 ? "" : "s"} or job${count === 1 ? "" : "s"}. Complete or reassign ${count === 1 ? "it" : "them"} before removing this ${subject.kind}.`,
+    {
+      reason: "active_bookings",
+      mechanicId: String(mechanic._id),
+      activeBookingCount: count,
+      attemptedAction: "remove_mechanic",
+    },
+  );
+}
+
+/**
+ * Take a mechanic (or bay) off the team — the one routine behind "Remove
+ * mechanic" on the Team page, the setup wizard, and an owner removing their
+ * own row (bug #397). All in the caller's mutation, so a refusal rolls
+ * everything back:
+ *   1. Move every active booking to someone free at the same time, or unassign
+ *      it (reassignActiveBookingsAwayFromMechanic — refuses on a job in
+ *      progress or when nobody is free for an upcoming booking).
+ *   2. Deactivate the profile and unlink every shop_users row pointing at it,
+ *      deactivating a mechanic-role login outright (never the shop owner's),
+ *      and revoke any pending invite for it.
+ *   3. Drop what still pins the mechanic: checkout slot holds (their consume
+ *      would fail), the mechanic on open tire/rotor quotes (accepting would
+ *      fail with "Requested mechanic is unavailable"), and the mechanic on the
+ *      moved bookings' message tickets (so replies reach the new mechanic).
+ */
+export async function retireMechanic(
+  ctx: MutationCtx,
+  {
+    shopId,
+    mechanicId,
+    subject,
+  }: { shopId: Id<"shops">; mechanicId: Id<"mechanics">; subject?: MechanicRemovalSubject },
+): Promise<{ reassigned: number; unassigned: number }> {
+  const { reassigned, unassigned, moves } = await reassignActiveBookingsAwayFromMechanic(ctx, {
+    shopId,
+    mechanicId,
+    subject,
+  });
+  const now = Date.now();
+
+  await ctx.db.patch(mechanicId, { is_active: false });
+
+  // A mechanic-role login loses its membership here, in the same commit: left
+  // active with no mechanic_id it would read as shop-wide (see
+  // getCurrentNotificationScope) until the client's separate login removal
+  // ran — and that call can fail. Owner / admin / front-desk logins, and the
+  // shop owner's own row, only lose the link: they keep running the shop.
+  const shop = await ctx.db.get(shopId);
+  const shopUsers = await ctx.db
+    .query("shop_users")
+    .withIndex("by_shop_id", (q) => q.eq("shop_id", shopId))
+    .collect();
+  for (const row of shopUsers) {
+    if (row.mechanic_id !== mechanicId) continue;
+    const retireLogin =
+      MECHANIC_ROLES.has(row.role) &&
+      String(row.user_id) !== String(shop?.owner_user_id ?? "");
+    await ctx.db.patch(row._id, {
+      mechanic_id: undefined,
+      ...(retireLogin ? { is_active: false } : {}),
+      updated_at: now,
+    });
+  }
+
+  // A pending invite for this profile is revoked in the same commit too: the
+  // retired row drops off every Team / setup list, so nobody could revoke it
+  // later, and acceptIfInvited would still let the invitee in. The client's
+  // /api/revoke-invite call still revokes the Clerk side (idempotent here).
+  const invitations = await ctx.db
+    .query("shop_invitations")
+    .withIndex("by_shop_id", (q) => q.eq("shop_id", shopId))
+    .collect();
+  for (const invitation of invitations) {
+    if (invitation.mechanic_id === mechanicId && invitation.status === "pending") {
+      await ctx.db.patch(invitation._id, { status: "revoked" });
+    }
+  }
+
+  await syncMechanicAvailabilityWindow(ctx, { shopId, mechanicId });
+
+  const slotHolds = await ctx.db
+    .query("slot_holds")
+    .withIndex("by_shop_and_date", (q) => q.eq("shop_id", shopId))
+    .collect();
+  for (const hold of slotHolds) {
+    if (hold.mechanic_id === mechanicId) {
+      await ctx.db.delete(hold._id);
+    }
+  }
+
+  // An open quote: not withdrawn, not superseded, and its request still
+  // awaiting a quote. The accepted response is never superseded (only its
+  // siblings are), so the request's status is what sets it apart — its
+  // mechanic is history the Schedule and notifications still read.
+  const requestAwaitingQuote = new Map<string, boolean>();
+  const isOpenQuotePinnedHere = async (response: {
+    booking_id: Id<"bookings">;
+    mechanic_id?: Id<"mechanics">;
+    cancelled_at?: number;
+    superseded_at?: number;
+  }) => {
+    if (
+      response.mechanic_id !== mechanicId ||
+      response.cancelled_at != null ||
+      response.superseded_at != null
+    ) {
+      return false;
+    }
+    const key = String(response.booking_id);
+    let awaiting = requestAwaitingQuote.get(key);
+    if (awaiting === undefined) {
+      const request = await ctx.db.get(response.booking_id);
+      awaiting = !!request && QUOTE_HOLD_BOOKING_STATUSES.has(request.status);
+      requestAwaitingQuote.set(key, awaiting);
+    }
+    return awaiting;
+  };
+  const tireQuotes = await ctx.db
+    .query("tire_quote_responses")
+    .withIndex("by_shop_id", (q) => q.eq("shop_id", shopId))
+    .collect();
+  for (const response of tireQuotes) {
+    if (await isOpenQuotePinnedHere(response)) {
+      await ctx.db.patch(response._id, { mechanic_id: undefined });
+    }
+  }
+  const rotorQuotes = await ctx.db
+    .query("rotor_quote_responses")
+    .withIndex("by_shop_id", (q) => q.eq("shop_id", shopId))
+    .collect();
+  for (const response of rotorQuotes) {
+    if (await isOpenQuotePinnedHere(response)) {
+      await ctx.db.patch(response._id, { mechanic_id: undefined });
+    }
+  }
+
+  for (const move of moves) {
+    const tickets = await ctx.db
+      .query("shop_tickets")
+      .withIndex("by_booking_id", (q) => q.eq("booking_id", move.bookingId))
+      .collect();
+    for (const ticket of tickets) {
+      if (ticket.mechanic_id === mechanicId) {
+        await ctx.db.patch(ticket._id, { mechanic_id: move.mechanicId });
+      }
+    }
+  }
+
+  return { reassigned, unassigned };
 }
 
 function getPortalStatus(args: {
@@ -130,7 +318,13 @@ function getPortalStatus(args: {
   if (args.latestInvitation.status === "pending") return "invite_sent";
   if (args.latestInvitation.status === "expired") return "invite_expired";
   if (args.latestInvitation.status === "revoked") return "invite_revoked";
-  if (args.latestInvitation.status === "accepted") return "active";
+  // An accepted invite only means a login while its shop_users row is active.
+  // Once portal access is removed the row must say so and offer a re-invite
+  // (bug #397). An owner closing out the invite on their behalf never created
+  // a login, and keeps its old reading.
+  if (args.latestInvitation.status === "accepted") {
+    return args.latestInvitation.accepted_by_admin ? "active" : "not_invited";
+  }
   return "not_invited";
 }
 
@@ -152,6 +346,7 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
     .query("shop_invitations")
     .withIndex("by_shop_id", (q: any) => q.eq("shop_id", shopId))
     .collect();
+  const activeByMechanic = await getActiveBookingsByMechanic(ctx, shopId);
 
   return await Promise.all(
     mechanics.map(async (mechanic: any) => {
@@ -171,7 +366,7 @@ async function buildManagedMechanicRows(ctx: any, shopId: any) {
         .sort((a: any, b: any) => (b.created_at ?? 0) - (a.created_at ?? 0));
       const latestInvitation = mechanicInvitations[0] ?? null;
       const pendingInvitation = mechanicInvitations.find((row: any) => row.status === "pending");
-      const blockers = await getBlockingBookings(ctx, mechanic._id, shopId);
+      const blockers = toBlockingBookings(activeByMechanic, mechanic._id);
 
       return {
         _id: String(mechanic._id),
@@ -699,26 +894,38 @@ export const getRemovalBlockers = query({
   args: { mechanicId: v.id("mechanics") },
   handler: async (ctx, args) => {
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
-    return await getBlockingBookings(ctx, args.mechanicId, mechanic.shop_id);
+    return toBlockingBookings(
+      await getActiveBookingsByMechanic(ctx, mechanic.shop_id),
+      args.mechanicId,
+    );
   },
 });
 
+/**
+ * MUTATION: deactivateManaged
+ * "Remove mechanic" / "Remove bay" on the Team page. With `reassignBookings`
+ * (the owner confirmed "Reassign & remove"), their active bookings move to
+ * whoever is free at the same time before the profile is retired; without it
+ * the removal is refused while any are left (typed MECHANIC_HAS_ACTIVE_JOB).
+ */
 export const deactivateManaged = mutation({
-  args: { mechanicId: v.id("mechanics") },
+  args: {
+    mechanicId: v.id("mechanics"),
+    // Optional so portal builds that predate it keep the refusal.
+    reassignBookings: v.optional(v.boolean()),
+  },
   handler: async (ctx, args) => {
     const mechanic = await getMechanicForOwner(ctx, args.mechanicId);
-    const blockers = await getBlockingBookings(ctx, args.mechanicId, mechanic.shop_id);
-    if (blockers.length > 0) {
-      const label = mechanic.entity_type === "bay" ? "bay" : "mechanic";
-      throw new Error(`This ${label} has active bookings or jobs that must be completed or reassigned first.`);
+    if (!args.reassignBookings) {
+      await assertNoActiveBookingsForRemoval(ctx, { shopId: mechanic.shop_id, mechanic });
     }
 
-    await ctx.db.patch(args.mechanicId, { is_active: false });
-    await syncMechanicAvailabilityWindow(ctx, {
+    const { reassigned, unassigned } = await retireMechanic(ctx, {
       shopId: mechanic.shop_id,
       mechanicId: args.mechanicId,
+      subject: removalSubjectFor(mechanic),
     });
-    return args.mechanicId;
+    return { mechanicId: args.mechanicId, reassigned, unassigned };
   },
 });
 
@@ -888,19 +1095,17 @@ export const disableSelfAsMechanic = mutation({
     // available mechanic at the same time, refusing if a job is in progress or
     // no one is free. Convex mutation atomicity means any refusal here rolls back
     // before the mechanic is deactivated, so we never strand bookings.
-    const { reassigned, unassigned } = await reassignActiveBookingsAwayFromMechanic(ctx, {
+    const { reassigned, unassigned } = await retireMechanic(ctx, {
       shopId: args.shopId,
       mechanicId: mechanic._id,
+      subject: { self: true },
     });
 
-    await ctx.db.patch(mechanic._id, { is_active: false });
+    // retireMechanic unlinks rows pointing at this profile; the owner's own
+    // membership may point at another (stale) one — clear it either way.
     if (membership?.mechanic_id) {
       await ctx.db.patch(membership._id, { mechanic_id: undefined, updated_at: now });
     }
-    await syncMechanicAvailabilityWindow(ctx, {
-      shopId: args.shopId,
-      mechanicId: mechanic._id,
-    });
 
     return { ok: true, reassigned, unassigned };
   },

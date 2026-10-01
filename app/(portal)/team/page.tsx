@@ -1,13 +1,13 @@
 "use client";
 
-import { errorMessage } from "@/lib/feedback";
+import { errorMessage, readBookingError } from "@/lib/feedback";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { makeFunctionReference, type FunctionReference } from "convex/server";
 import { useUser } from "@clerk/nextjs";
 import type { Id } from "@/convex/_generated/dataModel";
-import ConfirmationDialog from "@/components/confirmation-dialog";
+import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import RemoveConfirmationDialog from "@/components/remove-confirmation-dialog";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { drawerSelectTriggerClassName } from "@/components/drawer-panel-styles";
-import { removeTeamMember } from "@/lib/remove-team-member";
+import { describeMovedBookings, removeTeamMember } from "@/lib/remove-team-member";
 import { sendTeamInvite } from "@/lib/send-team-invite";
 import {
   Camera,
@@ -179,6 +179,36 @@ function getPortalStatusMeta(status: MechanicRow["portalStatus"]) {
     label: "Not invited",
     className: "border-border bg-muted text-muted-foreground",
   };
+}
+
+/**
+ * "Remove mechanic" confirm copy for a row linked to an owner / admin login
+ * that isn't yours: the removal keeps that login, so the default "they will no
+ * longer have access" copy would be wrong.
+ */
+function describeKeptLogin(name: string, keptLogin: TeamMemberRow): string {
+  return `${name} keeps their ${getRoleLabel(keptLogin.role)} login; only their schedule lane is removed.`;
+}
+
+/** "Reassign & remove" confirm copy for a mechanic/bay row with active bookings. */
+function describeReassignRemoval(mechanic: MechanicRow, keptLogin: TeamMemberRow | null): string {
+  const name = formatMechanicName(mechanic.firstName, mechanic.lastName) || "This mechanic";
+  const count = mechanic.blockingBookingCount;
+  const bookings = `${count} active booking${count === 1 ? "" : "s"}`;
+  const copy = `${name} has ${bookings}. Remove ${name} and move ${count === 1 ? "it" : "those bookings"} to another available mechanic or bay at the same time? If a job is already in progress, or no one else is free at an upcoming booking's time, nothing is removed.`;
+  return keptLogin ? `${copy} ${describeKeptLogin(name, keptLogin)}` : copy;
+}
+
+/** "Remove portal access" confirm copy for a login linked to a mechanic/bay row. */
+function describePortalAccessRemoval(
+  name: string,
+  linked: { entityType: MechanicRow["entityType"]; activeBookingCount: number }
+): string {
+  const count = linked.activeBookingCount;
+  const entity = linked.entityType === "bay" ? "bay" : "mechanic";
+  const bookings =
+    count > 0 ? ` with their ${count} active booking${count === 1 ? "" : "s"}` : "";
+  return `${name} will lose their portal login but stays on the schedule as a ${entity}${bookings}. To take them off the team, use "Remove ${entity}" instead.`;
 }
 
 function PersonAvatar({
@@ -527,10 +557,14 @@ export default function TeamPage() {
   const [uploadingMechanicId, setUploadingMechanicId] = useState<string | null>(null);
   const [pendingPhotoMechanicId, setPendingPhotoMechanicId] = useState<string | null>(null);
   const [removeMechanicConfirm, setRemoveMechanicConfirm] = useState<MechanicRow | null>(null);
-  const [blockedMechanic, setBlockedMechanic] = useState<MechanicRow | null>(null);
+  // "Remove mechanic" on a row that still has active bookings: asks to move them
+  // at the same time ("Reassign & remove") instead of dead-ending (bug #397).
+  const [reassignMechanicConfirm, setReassignMechanicConfirm] = useState<MechanicRow | null>(null);
   const [removeMemberConfirm, setRemoveMemberConfirm] = useState<{
     shopUserId: Id<"shop_users">;
     name: string;
+    /** Set when the login belongs to a mechanic/bay row — it stays on the schedule. */
+    linkedMechanic?: { entityType: MechanicRow["entityType"]; activeBookingCount: number };
   } | null>(null);
   const [removingMemberId, setRemovingMemberId] = useState<string | null>(null);
   const [changingRoleFor, setChangingRoleFor] = useState<{
@@ -582,7 +616,8 @@ export default function TeamPage() {
   }) => Promise<{ mechanicId: Id<"mechanics">; photoUrl: string | null }>;
   const deactivateMechanic = useMutation(deactivateManagedMechanicMutation) as (args: {
     mechanicId: Id<"mechanics">;
-  }) => Promise<Id<"mechanics">>;
+    reassignBookings?: boolean;
+  }) => Promise<{ mechanicId: Id<"mechanics">; reassigned: number; unassigned: number }>;
   const enableSelfAsMechanic = useMutation(enableSelfAsMechanicMutation) as (args: {
     shopId: Id<"shops">;
   }) => Promise<Id<"mechanics">>;
@@ -700,10 +735,10 @@ export default function TeamPage() {
     setSelfActionBusy(true);
     try {
       const result = await disableSelfAsMechanic({ shopId });
-      const moved = (result?.reassigned ?? 0) + (result?.unassigned ?? 0);
+      const movedCopy = describeMovedBookings(result);
       setDirectorySuccess(
-        moved > 0
-          ? `You've been removed from the schedule. ${moved} booking${moved === 1 ? "" : "s"} reassigned to your team.`
+        movedCopy
+          ? `You've been removed from the schedule. ${movedCopy}`
           : "You've been removed from the schedule."
       );
       setConfirmSelfRemove(false);
@@ -1049,32 +1084,124 @@ export default function TeamPage() {
     }
   }
 
+  /** The viewer's own login, linked to this mechanic row. */
+  function isViewerMechanicRow(mechanic: MechanicRow) {
+    const linked = membersByMechanicId.get(mechanic._id);
+    return (
+      selfMechanicRow?._id === mechanic._id ||
+      (!!linked && !!clerkUser?.id && linked.user.clerkUserId === clerkUser.id)
+    );
+  }
+
+  /** An owner / admin login linked to this row that isn't yours — removal keeps it. */
+  function keptOwnerLogin(mechanic: MechanicRow): TeamMemberRow | null {
+    const linked = membersByMechanicId.get(mechanic._id);
+    if (!linked || isViewerMechanicRow(mechanic)) return null;
+    return OWNER_ROLES.has(linked.role ?? "") ? linked : null;
+  }
+
   function requestRemoveMechanic(mechanic: MechanicRow) {
+    clearDirectoryMessages();
+    // Your own row goes through "Remove myself from the schedule": it retires
+    // the profile and keeps your owner login.
+    if (isViewerMechanicRow(mechanic)) {
+      setConfirmSelfRemove(true);
+      return;
+    }
     if (mechanic.blockingBookingCount > 0) {
-      setBlockedMechanic(mechanic);
+      setReassignMechanicConfirm(mechanic);
       return;
     }
     setRemoveMechanicConfirm(mechanic);
   }
 
-  async function removeMechanic(mechanic: MechanicRow) {
+  async function removeMechanic(mechanic: MechanicRow, reassignBookings: boolean) {
     clearDirectoryMessages();
     setMechanicActionId(mechanic._id);
+    const noun = mechanic.entityType === "bay" ? "Bay" : "Mechanic";
+    let result: { reassigned: number; unassigned: number };
     try {
-      if (mechanic.shopUserId) {
-        await removeTeamMember({ shopUserId: mechanic.shopUserId });
-      }
-      if (mechanic.pendingInvitationId) {
-        await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
-      }
-      await deactivateMechanic({ mechanicId: mechanic._id as Id<"mechanics"> });
-      setRemoveMechanicConfirm(null);
-      setDirectorySuccess("Mechanic removed.");
+      // Retire the profile FIRST. The server re-checks their bookings at commit
+      // and moves them (only with consent) or refuses — and a refusal leaves the
+      // person's login untouched, never a login-less mechanic still holding jobs.
+      result = await deactivateMechanic({
+        mechanicId: mechanic._id as Id<"mechanics">,
+        ...(reassignBookings ? { reassignBookings: true } : {}),
+      });
     } catch (error) {
-      setDirectoryError(errorMessage(error, "Failed to remove mechanic."));
-    } finally {
+      const conflict = readBookingError(error);
+      setRemoveMechanicConfirm(null);
+      if (
+        !reassignBookings &&
+        conflict?.code === "MECHANIC_HAS_ACTIVE_JOB" &&
+        conflict.reason === "active_bookings"
+      ) {
+        // A booking landed on them while the confirm was open — ask again,
+        // this time about moving it.
+        const fresh = mechanics?.find((row) => row._id === mechanic._id) ?? mechanic;
+        const count =
+          typeof conflict.activeBookingCount === "number"
+            ? conflict.activeBookingCount
+            : fresh.blockingBookingCount;
+        setReassignMechanicConfirm({ ...fresh, blockingBookingCount: count });
+      } else {
+        // Close the dialog so the reason (a job in progress, nobody free at a
+        // booking's time) is visible in the directory banner.
+        setReassignMechanicConfirm(null);
+        setDirectoryError(errorMessage(error, `Failed to remove ${noun.toLowerCase()}.`));
+      }
       setMechanicActionId(null);
+      return;
     }
+
+    setRemoveMechanicConfirm(null);
+    setReassignMechanicConfirm(null);
+    const movedCopy = describeMovedBookings(result);
+    const removedCopy = movedCopy ? `${noun} removed. ${movedCopy}` : `${noun} removed.`;
+
+    // Only now take away portal access — and never your own, or an owner /
+    // admin login linked to this row: they keep running the shop.
+    const linked = membersByMechanicId.get(mechanic._id);
+    const removeLogin =
+      !!mechanic.shopUserId &&
+      !!linked &&
+      String(linked._id) === mechanic.shopUserId &&
+      !isViewerMechanicRow(mechanic) &&
+      !OWNER_ROLES.has(linked.role ?? "");
+    // The mutation already took a mechanic-role login's shop access away
+    // (retireMechanic); this call only resets their sign-in. Any other login
+    // stays a member — a standalone row below — until the call lands.
+    const loginRetiredByServer =
+      linked?.role === "shop_mechanic" || linked?.role === "mechanic";
+    // Separate tries, so a failed sign-in reset never skips the invite revoke
+    // (or the reverse). The mutation already revoked a pending invite in
+    // Convex; this call revokes the Clerk side.
+    const unfinished: string[] = [];
+    if (removeLogin && mechanic.shopUserId) {
+      try {
+        await removeTeamMember({ shopUserId: mechanic.shopUserId });
+      } catch (error) {
+        const copy = loginRetiredByServer
+          ? "Their shop access is off, but their sign-in couldn't be reset."
+          : "Their portal access couldn't be removed, so remove it from their row below.";
+        unfinished.push(`${copy} ${errorMessage(error, "")}`.trim());
+      }
+    }
+    if (mechanic.pendingInvitationId) {
+      try {
+        await removeTeamMember({ invitationId: mechanic.pendingInvitationId });
+      } catch (error) {
+        unfinished.push(
+          `Their pending invite couldn't be revoked. ${errorMessage(error, "")}`.trim(),
+        );
+      }
+    }
+    if (unfinished.length > 0) {
+      setDirectoryError(`${removedCopy} ${unfinished.join(" ")}`);
+    } else {
+      setDirectorySuccess(removedCopy);
+    }
+    setMechanicActionId(null);
   }
 
   async function handleRemoveMember(shopUserId: Id<"shop_users">) {
@@ -1134,6 +1261,8 @@ export default function TeamPage() {
       </div>
     );
   }
+
+  const removeMechanicKeptLogin = removeMechanicConfirm ? keptOwnerLogin(removeMechanicConfirm) : null;
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -1401,6 +1530,10 @@ export default function TeamPage() {
                                   setRemoveMemberConfirm({
                                     shopUserId: linkedMember._id,
                                     name: linkedName,
+                                    linkedMechanic: {
+                                      entityType: mechanic.entityType,
+                                      activeBookingCount: mechanic.blockingBookingCount,
+                                    },
                                   })
                                 }
                               >
@@ -1560,9 +1693,14 @@ export default function TeamPage() {
 
       <RemoveConfirmationDialog
         open={removeMemberConfirm !== null}
-        title="Remove member?"
+        title={removeMemberConfirm?.linkedMechanic ? "Remove portal access?" : "Remove member?"}
         subjectName={removeMemberConfirm?.name}
-        confirmLabel="Remove member"
+        description={
+          removeMemberConfirm?.linkedMechanic
+            ? describePortalAccessRemoval(removeMemberConfirm.name, removeMemberConfirm.linkedMechanic)
+            : undefined
+        }
+        confirmLabel={removeMemberConfirm?.linkedMechanic ? "Remove access" : "Remove member"}
         isSubmitting={!!removingMemberId}
         submittingLabel="Removing..."
         onClose={() => setRemoveMemberConfirm(null)}
@@ -1580,13 +1718,22 @@ export default function TeamPage() {
             ? formatMechanicName(removeMechanicConfirm.firstName, removeMechanicConfirm.lastName)
             : undefined
         }
+        description={
+          removeMechanicConfirm && removeMechanicKeptLogin
+            ? describeKeptLogin(
+                formatMechanicName(removeMechanicConfirm.firstName, removeMechanicConfirm.lastName) ||
+                  "This mechanic",
+                removeMechanicKeptLogin
+              )
+            : undefined
+        }
         confirmLabel={removeMechanicConfirm?.entityType === "bay" ? "Remove bay" : "Remove mechanic"}
         isSubmitting={mechanicActionId === removeMechanicConfirm?._id}
         submittingLabel="Removing..."
         onClose={() => setRemoveMechanicConfirm(null)}
         onConfirm={() => {
           if (!removeMechanicConfirm) return;
-          void removeMechanic(removeMechanicConfirm);
+          void removeMechanic(removeMechanicConfirm, false);
         }}
       />
 
@@ -1617,23 +1764,43 @@ export default function TeamPage() {
       />
 
       <ConfirmationDialog
-        open={blockedMechanic !== null}
-        title={blockedMechanic?.entityType === "bay" ? "Bay has active work" : "Mechanic has active work"}
+        open={reassignMechanicConfirm !== null}
+        title={reassignMechanicConfirm?.entityType === "bay" ? "Remove bay?" : "Remove mechanic?"}
         description={
-          blockedMechanic
-            ? `${formatMechanicName(blockedMechanic.firstName, blockedMechanic.lastName)} has ${blockedMechanic.blockingBookingCount} active booking or job. Complete or reassign the work before removing this ${blockedMechanic.entityType === "bay" ? "bay" : "mechanic"}.`
+          reassignMechanicConfirm
+            ? describeReassignRemoval(reassignMechanicConfirm, keptOwnerLogin(reassignMechanicConfirm))
             : undefined
         }
-        onClose={() => setBlockedMechanic(null)}
+        onClose={() => {
+          if (mechanicActionId === reassignMechanicConfirm?._id) return;
+          setReassignMechanicConfirm(null);
+        }}
+        secondaryAction={{
+          label: <ShortcutLabel text="Cancel" shortcutKey="c" />,
+          onAction: () => setReassignMechanicConfirm(null),
+          shortcutKey: "c",
+          variant: "outline",
+          disabled: mechanicActionId === reassignMechanicConfirm?._id,
+        }}
         primaryAction={{
-          label: "Close",
-          onAction: () => setBlockedMechanic(null),
-          variant: "primary",
+          label:
+            mechanicActionId === reassignMechanicConfirm?._id ? (
+              "Removing..."
+            ) : (
+              <ShortcutLabel text="Reassign & remove" shortcutKey="r" />
+            ),
+          onAction: () => {
+            if (!reassignMechanicConfirm) return;
+            void removeMechanic(reassignMechanicConfirm, true);
+          },
+          shortcutKey: "r",
+          variant: "destructive",
+          disabled: mechanicActionId === reassignMechanicConfirm?._id,
         }}
       >
-        {blockedMechanic && blockedMechanic.blockingBookings.length > 0 && (
+        {reassignMechanicConfirm && reassignMechanicConfirm.blockingBookings.length > 0 && (
           <div className="space-y-2">
-            {blockedMechanic.blockingBookings.map((booking) => (
+            {reassignMechanicConfirm.blockingBookings.map((booking) => (
               <div
                 key={booking._id}
                 className="rounded-lg border border-border bg-muted px-3 py-2 text-sm"

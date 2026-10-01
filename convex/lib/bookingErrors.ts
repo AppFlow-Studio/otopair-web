@@ -51,6 +51,8 @@ export const BOOKING_ERROR_CODES = [
   "CHECKOUT_EXPIRED",
   "INVALID_TIME",
   "RESCHEDULE_LIMIT_REACHED",
+  // The shop's no-show window hasn't opened yet (`availableAtMs` says when).
+  "NO_SHOW_TOO_EARLY",
   // Job clock (pause / resume).
   "JOB_NOT_IN_PROGRESS",
   "JOB_CLOCK_NOT_STARTED",
@@ -128,6 +130,7 @@ const DEFAULT_COPY: Record<BookingErrorCode, string> = {
   CHECKOUT_EXPIRED: "This checkout expired. Start again to book.",
   INVALID_TIME: "Pick a time from the list.",
   RESCHEDULE_LIMIT_REACHED: "This booking can't be rescheduled here any more. Message the shop to change your appointment.",
+  NO_SHOW_TOO_EARLY: "It's too early to mark a no-show. The no-show threshold has not been reached yet.",
   JOB_NOT_IN_PROGRESS: "This job isn't in progress any more.",
   JOB_CLOCK_NOT_STARTED: "The labor clock hasn't started yet.",
   QUOTE_UNAVAILABLE: "This quote is no longer available.",

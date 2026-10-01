@@ -118,17 +118,45 @@ const CANCEL_REASONS = [
   "Other",
 ];
 
-function getCancelReasons(status?: string | null) {
+// "Customer no-show" runs bookings.markNoShow, which (like the ⋯ menu's Mark
+// no-show) only accepts a confirmed booking past the shop's no-show
+// threshold — so it's listed only then (bug #437).
+function getCancelReasons(status?: string | null, noShowOpen = false) {
   return status === "confirmed" || status === "vehicle_at_shop"
     ? [
         CANCEL_REASONS[0],
-        "Customer no-show",
+        ...(status === "confirmed" && noShowOpen ? ["Customer no-show"] : []),
         CANCEL_REASONS[2],
         "Shop capacity issue",
         CANCEL_REASONS[1],
         CANCEL_REASONS[3],
       ]
     : CANCEL_REASONS;
+}
+
+// When a disabled Mark no-show opens: "at 8:15 PM" later today, "Oct 6 at
+// 9:30 AM" on a later shop-local day — so tomorrow's 9:00 booking opened at
+// 10:00 today doesn't name a time that has already passed (bug #437). Server
+// pieces preferred; without them (Convex predates the fields) the browser's
+// clock and day stand in.
+function describeNoShowOpensAt(
+  job: JobDetailData,
+  availableAtMs: number,
+  nowMs: number,
+) {
+  const at = new Date(availableAtMs);
+  const time =
+    job.noShowAvailableAtLabel ??
+    at.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+  const laterDay =
+    job.noShowAvailableAtDayStartMs != null
+      ? nowMs < job.noShowAvailableAtDayStartMs
+      : at.toDateString() !== new Date(nowMs).toDateString();
+  if (!laterDay) return `at ${time}`;
+  const day =
+    job.noShowAvailableAtDateLabel ??
+    at.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return `${day} at ${time}`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -780,6 +808,15 @@ export interface JobDetailData {
     thresholdDueAtMs: number;
     scheduledStartMs: number;
   } | null;
+  /** When Mark no-show opens (the shop's no-show threshold) — exactly what the
+   *  server enforces. Confirmed bookings only; null otherwise (bug #437). */
+  noShowAvailableAtMs?: number | null;
+  /** `noShowAvailableAtMs` as shop-local "8:15 PM". */
+  noShowAvailableAtLabel?: string | null;
+  /** Its shop-local day, "Oct 6" — named only when that isn't today. */
+  noShowAvailableAtDateLabel?: string | null;
+  /** When that shop-local day starts: before it, the threshold is on a later day. */
+  noShowAvailableAtDayStartMs?: number | null;
 }
 
 export interface JobDetailPanelHandle {
@@ -1044,6 +1081,36 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       return () => window.clearInterval(id);
     }, [isIncomingStatus, job?._id]);
 
+    // Mark no-show opens at the shop's no-show threshold (bug #437). Falls back
+    // to the active monitor's threshold when Convex predates the field.
+    const noShowAvailableAtMs =
+      job?.noShowAvailableAtMs ?? job?.customerLateMonitor?.thresholdDueAtMs ?? null;
+    // `nowMs` only ticks for incoming bookings, and this panel is reused across
+    // bookings (the dashboard keeps it mounted), so resync on every booking /
+    // status / threshold change, then wake once when the threshold passes so
+    // Mark no-show enables itself — the useClockNow pattern.
+    useEffect(() => {
+      setNowMs(Date.now());
+      if (job?.status !== "confirmed" || noShowAvailableAtMs == null) return;
+      const delay = noShowAvailableAtMs - Date.now();
+      if (delay <= 0) return;
+      const wake = () => setNowMs(Date.now());
+      const id = window.setTimeout(wake, Math.min(delay + 250, 2 ** 31 - 1));
+      // Timers don't count time the machine sleeps and are throttled in a
+      // background tab, so the timeout can fire long after the threshold —
+      // catch up as soon as the page is visible or focused again.
+      const onVisibilityChange = () => {
+        if (document.visibilityState === "visible") wake();
+      };
+      document.addEventListener("visibilitychange", onVisibilityChange);
+      window.addEventListener("focus", wake);
+      return () => {
+        window.clearTimeout(id);
+        document.removeEventListener("visibilitychange", onVisibilityChange);
+        window.removeEventListener("focus", wake);
+      };
+    }, [job?._id, job?.status, noShowAvailableAtMs]);
+
     const markNotificationsRead = useMutation(
       api.notifications.markShopNotificationsReadForBooking,
     );
@@ -1194,7 +1261,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       hasMechanicSelectionChange;
     const jobId = job?._id;
     const completedColors = BOOKING_STATUS_VISUALS.completed.calendarColors;
-    const cancelReasonOptions = getCancelReasons(job?.status);
+    const noShowOpen = noShowAvailableAtMs == null || nowMs >= noShowAvailableAtMs;
+    const noShowOpensAt =
+      job && noShowAvailableAtMs != null
+        ? describeNoShowOpensAt(job, noShowAvailableAtMs, nowMs)
+        : null;
+    const cancelReasonOptions = getCancelReasons(job?.status, noShowOpen);
     const showAssignMechanicError = actionError.startsWith(
       "Cannot assign this mechanic"
     );
@@ -1262,7 +1334,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       if (!showCancelConfirm) {
         setCancelReason(CANCEL_REASONS[0]);
         setCancelOtherText("");
+        return;
       }
+      // Re-read the clock whenever the Cancel dialog opens (the 'c' hotkey's
+      // showCancelJob included), so "Customer no-show" is listed once the
+      // threshold has passed even if the wake timer is late (bug #437).
+      setNowMs(Date.now());
     }, [showCancelConfirm]);
 
     // Auto-focus the "Other" textarea
@@ -1477,9 +1554,10 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           });
         }
       } catch (err: unknown) {
-        if (isStaleStateError(err)) {
+        if (isStaleStateError(err) || errorCode(err) === "NO_SHOW_TOO_EARLY") {
           // The booking ended or started under the dialog (customer cancelled,
-          // job began) — close it and say what happened.
+          // job began), or a "Customer no-show" beat the shop's threshold —
+          // close it and say what happened.
           resetCancelDialog();
           notify.info(readBookingError(err)!.message);
         } else {
@@ -1762,9 +1840,13 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
         await markPostThresholdNoShow({ bookingId: job._id });
         onSuccess?.("Booking marked no-show");
       } catch (err: unknown) {
-        setActionError(
-          errorMessage(err, "Could not mark no-show."),
-        );
+        if (errorCode(err) === "NO_SHOW_TOO_EARLY" || isStaleStateError(err)) {
+          // "…You can mark this booking as a no-show from 8:15 PM.", or the
+          // booking moved under the menu (checked in, auto-marked no-show).
+          notify.info(readBookingError(err)!.message);
+        } else {
+          setActionError(errorMessage(err, "Could not mark no-show."));
+        }
       } finally {
         setIsActioning(false);
       }
@@ -2575,6 +2657,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             label: string;
                             onSelect: () => void;
                             destructive?: boolean;
+                            disabled?: boolean;
                           }> = [];
                           if (
                             canAdjustQuote &&
@@ -2594,11 +2677,16 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                             });
                           }
                           if (canMarkNoShow) {
+                            // Shown from confirmation, but disabled until the
+                            // shop's no-show threshold (bug #437).
                             overflow.push({
                               key: "no-show",
-                              label: "Mark no-show",
+                              label: noShowOpen
+                                ? "Mark no-show"
+                                : `Mark no-show · available ${noShowOpensAt}`,
                               onSelect: () => handlePostThresholdNoShow(),
                               destructive: true,
+                              disabled: !noShowOpen,
                             });
                           }
                           if (canOpenMpi && !mpiGateOpen) {
@@ -2618,7 +2706,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                           }
                           if (overflow.length === 0) return null;
                           return (
-                            <DropdownMenu>
+                            <DropdownMenu
+                              onOpenChange={(open) => {
+                                // Re-read the clock so Mark no-show's state is current.
+                                if (open) setNowMs(Date.now());
+                              }}
+                            >
                               <DropdownMenuTrigger asChild>
                                 <button
                                   type="button"
@@ -2634,6 +2727,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                                   <DropdownMenuItem
                                     key={item.key}
                                     onSelect={item.onSelect}
+                                    disabled={item.disabled}
                                     className={
                                       item.destructive
                                         ? "text-destructive focus:text-destructive"

@@ -86,6 +86,24 @@ describe("readBookingError", () => {
     expect(isBookingError(bookingError("PRICE_CHANGED", "x"), "PRICE_CHANGED")).toBe(true);
     expect(isBookingError(bookingError("PRICE_CHANGED", "x"), "FEE_CHANGED")).toBe(false);
   });
+
+  it("NO_SHOW_TOO_EARLY is not a stale view and carries when the window opens (bug #437)", () => {
+    const err = bookingError(
+      "NO_SHOW_TOO_EARLY",
+      "The no-show threshold has not been reached yet. You can mark this booking as a no-show from 8:15 PM.",
+      { availableAtMs: 1_790_000_000_000, attemptedAction: "mark_no_show" },
+    );
+    expect(isStaleStateError(err)).toBe(false);
+    expect(errorCode(err)).toBe("NO_SHOW_TOO_EARLY");
+    expect(readBookingError(err)?.availableAtMs).toBe(1_790_000_000_000);
+    expect(errorMessage(err, "Could not mark no-show.")).toBe(
+      "The no-show threshold has not been reached yet. You can mark this booking as a no-show from 8:15 PM.",
+    );
+    // A payload without a message still reads as a sentence, not a code.
+    expect(readBookingError(new ConvexError({ code: "NO_SHOW_TOO_EARLY" }))?.message).toMatch(
+      /threshold has not been reached/,
+    );
+  });
 });
 
 describe("formatBookingError", () => {

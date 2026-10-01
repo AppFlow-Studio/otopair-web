@@ -4,19 +4,32 @@
 // (1 req/s per usage policy, custom User-Agent) and the result is PATCHED
 // onto the shop row, so the map query picks it up reactively and the lookup
 // never repeats. Director action gated on shops.write; every fix is audited.
+// A shop whose stored address mixes two places or lacks city/state/ZIP is
+// skipped (bug #354): its pin would land wherever the geocoder preferred, and
+// a pin on the record reads as a checked address. Repair it first
+// (migrations/shopAddressRepair).
 // =============================================================================
 import { v } from "convex/values";
 import { action, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { logAudit, roleHasCapability, type DirectorRole } from "./directorGate";
 import type { Id } from "./_generated/dataModel";
+import { incoherentShopAddressIssues } from "../lib/shopAddress";
 
 export const _missingCoords = internalQuery({
   args: {},
   handler: async (
     ctx,
   ): Promise<
-    { id: Id<"shops">; name: string; address: string | null; city: string | null; state: string | null; zip: string | null }[]
+    {
+      id: Id<"shops">;
+      name: string;
+      address: string | null;
+      city: string | null;
+      state: string | null;
+      zip: string | null;
+      incoherentIssues: string[];
+    }[]
   > => {
     const shops = await ctx.db.query("shops").collect();
     return shops
@@ -28,6 +41,7 @@ export const _missingCoords = internalQuery({
         city: s.city ?? null,
         state: s.state ?? null,
         zip: s.zip ?? null,
+        incoherentIssues: incoherentShopAddressIssues(s),
       }));
   },
 });
@@ -78,6 +92,14 @@ export const geocodeMissingShops = action({
       const parts = [s.address, s.city, s.state, s.zip].filter(Boolean);
       if (parts.length === 0) {
         out.failed.push({ id: String(s.id), name: s.name, reason: "no address on record" });
+        continue;
+      }
+      if (s.incoherentIssues.length > 0) {
+        out.failed.push({
+          id: String(s.id),
+          name: s.name,
+          reason: `address incoherent (${s.incoherentIssues.join(", ")}) — repair first`,
+        });
         continue;
       }
       // Nominatim usage policy: max 1 req/s, identifying User-Agent.

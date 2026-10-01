@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { api, internal } from "../convex/_generated/api";
+import type { Doc, Id } from "../convex/_generated/dataModel";
+import { isStaleStateError, readBookingError } from "../convex/lib/bookingErrors";
 import { identityFor, makeT, seedConfirmedBooking } from "./helpers";
 
 /**
@@ -448,5 +450,295 @@ describe("LATE-* customer-late flow", () => {
     for (const row of aOutbox) {
       expect((row as any).shop_id).toBe(seedA.shopId);
     }
+  });
+});
+
+// Bug #437: the booking panel offered "Mark no-show" before the shop's
+// threshold and the server's rejection was a plain Error (a raw Convex toast).
+// The rejection is now typed and names the shop-local time the action opens,
+// getJobDetail sends that same time, and the cancel dialog's "Customer
+// no-show" (markNoShow) waits for it too.
+describe("LATE-NOSHOW availability (bug #437)", () => {
+  type T = ReturnType<typeof makeT>;
+
+  /** What the server prints for `ms` in the seed shop's timezone ("2:30 PM"). */
+  function shopLocalLabel(ms: number) {
+    return new Date(ms)
+      .toLocaleTimeString("en-US", {
+        timeZone: "America/New_York",
+        hour: "numeric",
+        minute: "2-digit",
+      })
+      .replace(/\s/g, " ");
+  }
+
+  /** The sentence's "from …": the time, prefixed with its day ("May 18 at
+   *  12:05 AM") when that isn't today in the shop — these tests warp from the
+   *  real clock, so the threshold can land past shop-local midnight. */
+  function shopLocalOpensAt(ms: number) {
+    const day = (at: number) =>
+      new Date(at).toLocaleDateString("en-US", {
+        timeZone: "America/New_York",
+        month: "short",
+        day: "numeric",
+      });
+    return day(ms) === day(Date.now())
+      ? shopLocalLabel(ms)
+      : `${day(ms)} at ${shopLocalLabel(ms)}`;
+  }
+
+  function staffOf(t: T, seed: { ownerClerkId: string }) {
+    return t.withIdentity(identityFor(seed.ownerClerkId));
+  }
+
+  /** What the call rejected with (null when it succeeded). */
+  async function rejectionOf(promise: Promise<unknown>): Promise<unknown> {
+    return await promise.then(
+      () => null,
+      (err: unknown) => err,
+    );
+  }
+
+  function messageOf(err: unknown): string {
+    return err instanceof Error ? err.message : "";
+  }
+
+  async function bookingOf(t: T, bookingId: Id<"bookings">) {
+    return await t.run((ctx) => ctx.db.get(bookingId));
+  }
+
+  async function thresholdOf(t: T, bookingId: Id<"bookings">): Promise<number> {
+    const monitor = (await getMonitor(t, bookingId)) as Doc<"customer_late_monitors"> | null;
+    if (!monitor) throw new Error("expected a customer-late monitor");
+    return monitor.threshold_due_at_ms;
+  }
+
+  test("early Mark no-show is NO_SHOW_TOO_EARLY and names the shop-local time it opens", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await warpAndProcess(t, seed.bookingId, 11);
+    const thresholdMs = await thresholdOf(t, seed.bookingId);
+
+    const err = await rejectionOf(
+      staffOf(t, seed).mutation(api.bookings.markPostThresholdNoShow, {
+        bookingId: seed.bookingId,
+      }),
+    );
+    expect(messageOf(err)).toMatch(/threshold has not been reached/);
+    expect(readBookingError(err)).toMatchObject({
+      code: "NO_SHOW_TOO_EARLY",
+      attemptedAction: "mark_no_show",
+      availableAtMs: thresholdMs,
+      message: `The no-show threshold has not been reached yet. You can mark this booking as a no-show from ${shopLocalOpensAt(thresholdMs)}.`,
+    });
+    // Not a stale view — the booking is exactly what the caller saw.
+    expect(isStaleStateError(err)).toBe(false);
+    expect((await bookingOf(t, seed.bookingId))?.status).toBe("confirmed");
+  });
+
+  test("getJobDetail sends the availability the server enforces", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    const staff = staffOf(t, seed);
+    await warpAndProcess(t, seed.bookingId, 11);
+    const thresholdMs = await thresholdOf(t, seed.bookingId);
+
+    const before = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(before?.noShowAvailableAtMs).toBe(thresholdMs);
+    expect(thresholdMs).toBeGreaterThan(Date.now());
+    expect(before?.noShowAvailableAtLabel).toBe(shopLocalLabel(thresholdMs));
+    // The panel names the day exactly when the sentence does.
+    const laterDay = Date.now() < (before?.noShowAvailableAtDayStartMs ?? 0);
+    expect(laterDay).toBe(shopLocalOpensAt(thresholdMs) !== shopLocalLabel(thresholdMs));
+    const opensAt = laterDay
+      ? `${before?.noShowAvailableAtDateLabel} at ${before?.noShowAvailableAtLabel}`
+      : before?.noShowAvailableAtLabel;
+
+    const err = await rejectionOf(
+      staff.mutation(api.bookings.markPostThresholdNoShow, {
+        bookingId: seed.bookingId,
+      }),
+    );
+    expect(readBookingError(err)?.availableAtMs).toBe(before?.noShowAvailableAtMs);
+    expect(readBookingError(err)?.message).toContain(`from ${opensAt}.`);
+
+    await warpAndProcess(t, seed.bookingId, 20); // total +31
+    const after = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(after?.noShowAvailableAtMs).toBe(await thresholdOf(t, seed.bookingId));
+    expect(await thresholdOf(t, seed.bookingId)).toBeLessThanOrEqual(Date.now());
+    await staff.mutation(api.bookings.markPostThresholdNoShow, {
+      bookingId: seed.bookingId,
+    });
+
+    const ended = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(ended?.status).toBe("no_show");
+    expect(ended?.noShowAvailableAtMs).toBeNull();
+    expect(ended?.noShowAvailableAtLabel).toBeNull();
+    expect(ended?.noShowAvailableAtDateLabel).toBeNull();
+    expect(ended?.noShowAvailableAtDayStartMs).toBeNull();
+  });
+
+  test("getJobDetail falls back to the shop's window without a monitor; null once the car is here", async () => {
+    const t = makeT();
+    // 2026-05-17 14:00 America/New_York (EDT, 18:00Z), 30-minute threshold.
+    const seed = await seedConfirmedBooking(t);
+    const staff = staffOf(t, seed);
+    expect(await getMonitor(t, seed.bookingId)).toBeNull();
+
+    const detail = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(detail?.noShowAvailableAtMs).toBe(Date.UTC(2026, 4, 17, 18, 30));
+    expect(detail?.noShowAvailableAtLabel).toBe("2:30 PM");
+    expect(detail?.noShowAvailableAtDateLabel).toBe("May 17");
+    // Shop-local midnight: 00:00 EDT = 04:00Z.
+    expect(detail?.noShowAvailableAtDayStartMs).toBe(Date.UTC(2026, 4, 17, 4, 0));
+
+    await staff.mutation(api.bookings.markVehicleAtShop, {
+      bookingId: seed.bookingId,
+    });
+    const atShop = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(atShop?.status).toBe("vehicle_at_shop");
+    expect(atShop?.noShowAvailableAtMs).toBeNull();
+    expect(atShop?.noShowAvailableAtLabel).toBeNull();
+  });
+
+  test("a booking on a later day names the day it opens, not just the time", async () => {
+    const t = makeT();
+    // Tue 2030-10-08 09:00 America/New_York (EDT, 13:00Z), 30-minute threshold:
+    // opened today, "9:30 AM" alone would read as a time today.
+    const seed = await seedConfirmedBooking(t, {
+      scheduledDate: "2030-10-08",
+      scheduledTime: "09:00",
+    });
+    const staff = staffOf(t, seed);
+
+    const detail = await staff.query(api.bookings.getJobDetail, {
+      bookingId: seed.bookingId,
+    });
+    expect(detail?.noShowAvailableAtMs).toBe(Date.UTC(2030, 9, 8, 13, 30));
+    expect(detail?.noShowAvailableAtLabel).toBe("9:30 AM");
+    expect(detail?.noShowAvailableAtDateLabel).toBe("Oct 8");
+    expect(detail?.noShowAvailableAtDayStartMs).toBe(Date.UTC(2030, 9, 8, 4, 0));
+    expect(Date.now()).toBeLessThan(detail?.noShowAvailableAtDayStartMs ?? 0);
+
+    for (const mutation of [
+      api.bookings.markPostThresholdNoShow,
+      api.bookings.markNoShow,
+    ]) {
+      const err = await rejectionOf(
+        staff.mutation(mutation, { bookingId: seed.bookingId }),
+      );
+      expect(readBookingError(err)).toMatchObject({
+        code: "NO_SHOW_TOO_EARLY",
+        availableAtMs: Date.UTC(2030, 9, 8, 13, 30),
+        message:
+          "The no-show threshold has not been reached yet. You can mark this booking as a no-show from Oct 8 at 9:30 AM.",
+      });
+    }
+    expect((await bookingOf(t, seed.bookingId))?.status).toBe("confirmed");
+  });
+
+  test("Cancel → Customer no-show (markNoShow) waits for the same threshold", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    const staff = staffOf(t, seed);
+    await warpAndProcess(t, seed.bookingId, 11);
+
+    const early = await rejectionOf(
+      staff.mutation(api.bookings.markNoShow, {
+        bookingId: seed.bookingId,
+        reason: "Customer no-show",
+      }),
+    );
+    expect(messageOf(early)).toMatch(/threshold has not been reached/);
+    expect(readBookingError(early)).toMatchObject({
+      code: "NO_SHOW_TOO_EARLY",
+      attemptedAction: "mark_no_show",
+    });
+    expect((await bookingOf(t, seed.bookingId))?.status).toBe("confirmed");
+
+    await warpAndProcess(t, seed.bookingId, 20); // total +31
+    await staff.mutation(api.bookings.markNoShow, {
+      bookingId: seed.bookingId,
+      reason: "Customer no-show",
+    });
+    expect((await bookingOf(t, seed.bookingId))?.status).toBe("no_show");
+  });
+
+  test("a checked-in car can't be marked no-show; the rejection is a typed stale view", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    const staff = staffOf(t, seed);
+    await warpAndProcess(t, seed.bookingId, 31);
+    await staff.mutation(api.bookings.markVehicleAtShop, {
+      bookingId: seed.bookingId,
+    });
+
+    for (const mutation of [
+      api.bookings.markPostThresholdNoShow,
+      api.bookings.markNoShow,
+    ]) {
+      const err = await rejectionOf(
+        staff.mutation(mutation, { bookingId: seed.bookingId }),
+      );
+      expect(messageOf(err)).toMatch(/Only confirmed/);
+      expect(readBookingError(err)?.code).toBe("BOOKING_STATE_CHANGED");
+      expect(isStaleStateError(err)).toBe(true);
+    }
+    expect((await bookingOf(t, seed.bookingId))?.status).toBe("vehicle_at_shop");
+  });
+
+  test("an already-ended booking says so instead of a stack trace", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    const staff = staffOf(t, seed);
+    await warpAndProcess(t, seed.bookingId, 31);
+    await staff.mutation(api.bookings.markPostThresholdNoShow, {
+      bookingId: seed.bookingId,
+    });
+
+    const again = await rejectionOf(
+      staff.mutation(api.bookings.markPostThresholdNoShow, {
+        bookingId: seed.bookingId,
+      }),
+    );
+    expect(readBookingError(again)).toMatchObject({
+      code: "BOOKING_STATE_CHANGED",
+      attemptedAction: "mark_no_show",
+      message: "This booking was already marked as a no-show.",
+    });
+    expect(isStaleStateError(again)).toBe(true);
+  });
+
+  test("Reschedule no-show before the threshold is NO_SHOW_TOO_EARLY worded for rescheduling", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t);
+    await warpAndProcess(t, seed.bookingId, 11);
+    const thresholdMs = await thresholdOf(t, seed.bookingId);
+
+    const err = await rejectionOf(
+      staffOf(t, seed).mutation(api.bookings.rescheduleFromNoShowAlert, {
+        bookingId: seed.bookingId,
+        newScheduledDate: "2026-05-18",
+        newScheduledTime: "10:00",
+      }),
+    );
+    expect(messageOf(err)).toMatch(/threshold has not been reached/);
+    expect(readBookingError(err)).toMatchObject({
+      code: "NO_SHOW_TOO_EARLY",
+      attemptedAction: "reschedule_no_show",
+      availableAtMs: thresholdMs,
+      message: `The no-show threshold has not been reached yet. You can reschedule this no-show from ${shopLocalOpensAt(thresholdMs)}.`,
+    });
+    expect((await bookingOf(t, seed.bookingId))?.scheduled_date).toBe("2026-05-17");
   });
 });

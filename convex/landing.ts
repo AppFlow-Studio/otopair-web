@@ -18,7 +18,10 @@ export type LandingShopPin = {
 const NYC = { minLat: 40.35, maxLat: 41.05, minLng: -74.6, maxLng: -73.3 };
 
 /** Active shops with coordinates, for the landing coverage map. shops is a
- *  small director-curated table, so a full read is bounded by reality. */
+ *  small director-curated table, so a full read is bounded by reality.
+ *  A shop still in setup (onboarding_complete === false) stays off: Step 0
+ *  now stores its pin (bug #354) before it has hours, services or payouts.
+ *  Seed/legacy rows leave the flag unset and stay on. */
 export const shopPins = query({
   args: {},
   handler: async (ctx): Promise<LandingShopPin[]> => {
@@ -27,6 +30,7 @@ export const shopPins = query({
       .filter(
         (s) =>
           s.is_active === true &&
+          s.onboarding_complete !== false &&
           s.lat != null &&
           s.lng != null &&
           s.lat >= NYC.minLat &&
@@ -53,8 +57,9 @@ export type LandingSignup = {
 };
 
 /** Newest shops in the service area, for the sidebar's "Live signups" feed.
- *  Same NYC-coordinates gate as shopPins — it keeps far-away dev/test rows
- *  off the marketing page. Name + join time + verification only. */
+ *  Same NYC-coordinates and finished-setup gate as shopPins — it keeps
+ *  far-away dev/test rows and half-set-up shops off the marketing page.
+ *  Name + join time + verification only. */
 export const recentSignups = query({
   args: {},
   handler: async (ctx): Promise<LandingSignup[]> => {
@@ -63,6 +68,7 @@ export const recentSignups = query({
       .filter(
         (s) =>
           s.is_active === true &&
+          s.onboarding_complete !== false &&
           s.lat != null &&
           s.lng != null &&
           s.lat >= NYC.minLat &&

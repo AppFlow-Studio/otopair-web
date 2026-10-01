@@ -23,7 +23,11 @@ const TERMINAL_BOOKING_STATUSES = new Set([
   "declined",
 ]);
 
-const QUOTE_HOLD_BOOKING_STATUSES = new Set(["pending_quote", "quotes_ready"]);
+/** A tire/rotor request still awaiting a quote — its responses are open. */
+export const QUOTE_HOLD_BOOKING_STATUSES: ReadonlySet<string> = new Set([
+  "pending_quote",
+  "quotes_ready",
+]);
 
 type AvailabilityContext = {
   shop: any;

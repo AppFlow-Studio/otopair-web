@@ -9001,7 +9001,7 @@ async function applyOverrunExtension(
     ctx,
     booking.vin,
   );
-  const overrunMessage = `Your ${overrunYmm ?? "appointment"} is now estimated to finish around ${newEndTimeHHMM}. Tap reschedule if the new time doesn't work.`;
+  const overrunMessage = `Your ${overrunYmm ?? "appointment"} is now estimated to finish around ${newEndTimeHHMM}.`;
   await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,

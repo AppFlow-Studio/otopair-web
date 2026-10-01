@@ -129,6 +129,8 @@ describe("OVER-* job overrun flow", () => {
     expect((aPush[0] as any).payload.newEndTime).toBe("15:55");
     expect((aPush[0] as any).payload.extensionMinutes).toBe(15);
     expect((aPush[0] as any).payload.cascadeDepth).toBe(1);
+    expect((aPush[0] as any).payload.body).toMatch(/estimated to finish around 15:55/);
+    expect((aPush[0] as any).payload.body).not.toMatch(/reschedul/i);
 
     // Customer B courtesy push with usedAlternateMechanic=true
     const bPush = await getOutboxByCategory(

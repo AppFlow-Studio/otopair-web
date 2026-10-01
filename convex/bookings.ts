@@ -148,10 +148,11 @@ import {
 } from "./lib/shopServiceOffering";
 import { syncTicketActionStatus } from "./lib/shopTicketSync";
 import {
-  minorRecordTypeForServiceSlug,
   recordTypeForServiceSlug,
+  serviceAnchorRecordType,
+  SUPERSEDED_INPUTS_BY_RECORD_TYPE,
 } from "./lib/serviceRecordType";
-import { symptomForRecordType } from "./lib/serviceSymptoms";
+import { symptomForRecordType, symptomForServiceSlug } from "./lib/serviceSymptoms";
 import { logPrejobMechanicVerification } from "./lib/mechanic_verification_logging";
 import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 import {
@@ -10517,7 +10518,25 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
         };
 
         if (existing) {
-          await ctx.db.patch(existing._id, data);
+          // The driver's pre-visit condition report ("brakes squeak") is
+          // answered by this service. Left in place it kept the card the shop
+          // just serviced in "needs attention" (#428). Only the listed keys
+          // go; everything else in customInputs (grades, Quick Read answers)
+          // is kept.
+          const superseded = SUPERSEDED_INPUTS_BY_RECORD_TYPE[recordType] ?? [];
+          const inputs = (existing.customInputs ?? undefined) as
+            | Record<string, unknown>
+            | undefined;
+          const staleKeys = inputs
+            ? superseded.filter((key) => inputs[key] !== undefined)
+            : [];
+          if (inputs && staleKeys.length > 0) {
+            const kept = { ...inputs };
+            for (const key of staleKeys) delete kept[key];
+            await ctx.db.patch(existing._id, { ...data, customInputs: kept });
+          } else {
+            await ctx.db.patch(existing._id, data);
+          }
         } else {
           await ctx.db.insert("maintenance_records", {
             vehicleOwnerId: vehicleOwner._id,
@@ -10534,21 +10553,33 @@ export async function runCompletionSideEffects(ctx: any, booking: any) {
       const applyServiceSlug = async (slug: string | undefined) => {
         if (!slug) return;
 
-        // Consolidated Upkeep model: the per-field `minor_*` row this service
-        // actually resolves. Handled BEFORE the aggregate dedup below — several
-        // distinct minor services collapse onto the same aggregate type
-        // ("fluids"), so dedup'ing on the aggregate would silently skip the
-        // second one's own minor row. Advancing lastServiceDate here is what lets
-        // isMechanicGradeStale (utils/maintenanceStatus.ts) retire the finding.
-        const minorType = minorRecordTypeForServiceSlug(slug);
-        if (minorType && !typesUpdated.has(minorType)) {
-          typesUpdated.add(minorType);
-          await markServiced(minorType);
+        // The service's own anchor — the per-field `minor_*` row for the five
+        // Consolidated-model services, `service_<slug>` for every other
+        // service whose aggregate is shared or absent (spark plugs, a tire
+        // rotation…). Handled BEFORE the aggregate dedup below — several
+        // distinct services collapse onto the same aggregate type ("fluids"),
+        // so dedup'ing on the aggregate would silently skip the second one's
+        // own row. Advancing lastServiceDate here is what lets
+        // isMechanicGradeStale (utils/maintenanceStatus.ts) retire a minor
+        // finding, and what lets the tracker's catalog row read "just done"
+        // instead of "overdue" (#206 / #428).
+        const anchorType = serviceAnchorRecordType(slug);
+        if (anchorType && !typesUpdated.has(anchorType)) {
+          typesUpdated.add(anchorType);
+          await markServiced(anchorType);
         }
 
         // #90: services.slug is snake_case — resolve via the canonical map.
+        // Null for upkeep on a part (rotation, battery test): it must not
+        // reset the part's life (#413), but it still clears the matching
+        // warning light it always cleared.
         const recordType = recordTypeForServiceSlug(slug);
-        if (!recordType || typesUpdated.has(recordType)) return;
+        if (!recordType) {
+          const code = symptomForServiceSlug(slug);
+          if (code) clearedCodes.add(code);
+          return;
+        }
+        if (typesUpdated.has(recordType)) return;
         typesUpdated.add(recordType);
 
         await markServiced(recordType);

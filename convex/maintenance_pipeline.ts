@@ -42,7 +42,7 @@ import {
   type ServiceAnchor,
   type QuickReadFlags,
 } from "./lib/intervals";
-import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { anchorRecordTypeForServiceSlug } from "./lib/serviceRecordType";
 import { canonicalWarningLights } from "../lib/warningLightVocab";
 import { resolveVehicleMileage } from "./lib/mileage";
 
@@ -689,7 +689,10 @@ export const runPipeline = internalAction({
         serviceId: spec.service_id,
       });
       if (!service?.slug) continue;
-      const recordType = recordTypeForServiceSlug(service.slug);
+      // Aggregate first (unchanged); a service with no aggregate — a tire
+      // rotation, since it stopped resetting "tires" (#413) — anchors on its
+      // own per-service row.
+      const recordType = anchorRecordTypeForServiceSlug(service.slug);
       if (recordType && anchorsByType.has(recordType)) {
         anchorsByServiceId.set(spec.service_id.toString(), anchorsByType.get(recordType)!);
       }

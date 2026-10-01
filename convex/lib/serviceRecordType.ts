@@ -16,17 +16,22 @@
  *
  * `pre_purchase_inspection` is intentionally unmapped — completing a PPI is not a
  * maintenance reset and must not reset the state-inspection due clock.
+ *
+ * Bug #413 / #428: the same rule holds for upkeep done ON a tracked part. The
+ * "tires" record measures tread life (tire_replacement, 50,000 mi) and "battery"
+ * measures battery age, so a rotation, balance or alignment used to hand the car
+ * a full new set of tires, and a battery TEST a brand-new battery. Only the
+ * service that replaces the part resets its life. The checks and upkeep below
+ * are unmapped here and get their own per-service anchor instead
+ * (`serviceAnchorRecordType`), so they are still recorded, just not as a
+ * replacement.
  */
 export const SERVICE_SLUG_TO_RECORD_TYPE: Record<string, string> = {
   oil_change: "oil",
   brake_pad_replacement: "brakes",
   rotor_replacement: "brakes",
-  tire_rotation: "tires",
-  tire_balance: "tires",
-  wheel_alignment: "tires",
   tire_replacement: "tires",
   battery_replacement: "battery",
-  battery_test: "battery",
   brake_fluid_flush: "fluids",
   coolant_flush: "fluids",
   transmission_service: "fluids",
@@ -80,3 +85,83 @@ export const SERVICE_SLUG_TO_MINOR_RECORD_TYPE: Record<string, string> = {
 export function minorRecordTypeForServiceSlug(slug: string): string | null {
   return SERVICE_SLUG_TO_MINOR_RECORD_TYPE[slug] ?? null;
 }
+
+/** The record types that ARE a single service's own anchor, so a slug that
+ *  maps to one needs no second, per-service row. */
+const CORE_RECORD_TYPES: ReadonlySet<string> = new Set([
+  "oil",
+  "brakes",
+  "tires",
+  "battery",
+  "inspection",
+]);
+
+/**
+ * The per-service anchor: the one maintenance_records row that says "THIS
+ * service was last done here", for services whose aggregate is shared or absent.
+ *
+ * Bug #206 / #428: the tracker's catalog rows (spark plugs, differential
+ * service, timing belt…) only read a per-service anchor, and only five services
+ * had one (the `minor_*` rows above). Everything else wrote just its shared
+ * aggregate ("engine_parts", "fluids"), which the tracker deliberately ignores
+ * because it would retire every sibling service. So a shop could replace the
+ * spark plugs and the car would still read "spark plugs — overdue" the moment
+ * the job closed. Every catalog service now gets an anchor of its own: the
+ * existing `minor_*` row where there is one, `service_<slug>` otherwise.
+ *
+ * Returns null for services whose aggregate already is their anchor (oil
+ * change → "oil"), so completion does not write a redundant second row.
+ */
+export function serviceAnchorRecordType(slug: string): string | null {
+  if (!slug) return null;
+  const minor = minorRecordTypeForServiceSlug(slug);
+  if (minor) return minor;
+  const aggregate = recordTypeForServiceSlug(slug);
+  if (aggregate && CORE_RECORD_TYPES.has(aggregate)) return null;
+  return `service_${slug}`;
+}
+
+/** Every maintenance_records type a completed service stamps: its own anchor
+ *  first, then the shared aggregate (unchanged behaviour). Shared by booking
+ *  completion, the backfill and Oto's "I had it done" path so all three write
+ *  the same rows. */
+export function recordTypesForCompletedService(slug: string): string[] {
+  const out: string[] = [];
+  for (const type of [serviceAnchorRecordType(slug), recordTypeForServiceSlug(slug)]) {
+    if (type && !out.includes(type)) out.push(type);
+  }
+  return out;
+}
+
+/** The pipeline's last-service anchor for one service: the shared aggregate
+ *  where one exists (unchanged), otherwise the service's own anchor — which is
+ *  what keeps a tire rotation spec anchored now that it no longer stamps
+ *  "tires". */
+export function anchorRecordTypeForServiceSlug(slug: string): string | null {
+  return recordTypeForServiceSlug(slug) ?? serviceAnchorRecordType(slug);
+}
+
+/**
+ * Upkeep the shop does ON a tracked part without replacing it. Completing one
+ * stamps its own anchor (above) and never the part's life record. Read by the
+ * tracker so the part's card can say "Tire rotation logged by …" instead of
+ * pretending the part is new.
+ */
+export const UPKEEP_SLUGS_BY_RECORD_TYPE: Readonly<Record<string, readonly string[]>> = {
+  tires: ["tire_rotation", "tire_balance", "wheel_alignment"],
+  battery: ["battery_test"],
+};
+
+/**
+ * Driver-reported condition answers that a completed service of this type
+ * supersedes. A brake job answers "my brakes squeak"; a tire replacement
+ * answers "losing air" and replaces a patched tire. Without clearing them, the
+ * card a shop just serviced stays in "needs attention" on the strength of a
+ * report from BEFORE the work — "you had brakes done 0 months and 0 mi ago,
+ * you're getting close to due" (bug #428). The mechanic's own grade needs no
+ * entry here: it is retired by timestamp in utils/maintenanceStatus.ts.
+ */
+export const SUPERSEDED_INPUTS_BY_RECORD_TYPE: Readonly<Record<string, readonly string[]>> = {
+  brakes: ["brakeFeel", "squeaking"],
+  tires: ["symptom", "tireRepaired", "tirePressure"],
+};

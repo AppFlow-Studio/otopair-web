@@ -21,10 +21,7 @@
 import { internalMutation } from "./_generated/server";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
-import {
-  recordTypeForServiceSlug,
-  minorRecordTypeForServiceSlug,
-} from "./lib/serviceRecordType";
+import { recordTypesForCompletedService } from "./lib/serviceRecordType";
 import { resolveCatalogServiceIdByName } from "./customJobs";
 
 type LatestHit = { bookingId: Id<"bookings">; date: number; mileage?: number };
@@ -101,10 +98,9 @@ async function backfillVehicle(
     }
 
     for (const slug of slugs) {
-      const types = [
-        minorRecordTypeForServiceSlug(slug),
-        recordTypeForServiceSlug(slug),
-      ].filter(Boolean) as string[];
+      // Same rows live completion stamps — the service's own anchor, then its
+      // aggregate (never "tires" for a rotation, see serviceRecordType.ts).
+      const types = recordTypesForCompletedService(slug);
       for (const t of types) latestByType.set(t, { bookingId: b._id, date, mileage });
     }
   }

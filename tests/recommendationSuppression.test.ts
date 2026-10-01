@@ -14,10 +14,12 @@
  */
 import { describe, expect, it } from "vitest";
 import {
+  collectPerformedWork,
   EMPTY_PERFORMED_WORK,
   recommendationWasPerformed,
   type PerformedWork,
 } from "../convex/lib/performedWork";
+import { makeT } from "./helpers";
 import { serviceMatchKey } from "../convex/lib/serviceMatch";
 
 function performed(opts: {
@@ -106,5 +108,84 @@ describe("recommendationWasPerformed", () => {
         performed({ names: ["Oil Change"] }),
       ),
     ).toBe(false);
+  });
+});
+
+// #428 (from #206 / #340): the same-visit suppression covered the services that
+// were booked and missed the ones added mid-job. An oil change added mid-job
+// was recorded by name only, so the slug override never saw it and "Oil
+// Top-Off" was revealed to the driver after the oil had been changed.
+describe("collectPerformedWork — added scope counts like booked scope", () => {
+  it("a mid-job catalog line contributes its service id and slug", async () => {
+    const t = makeT();
+    const result = await t.run(async (ctx: any) => {
+      const userId = await ctx.db.insert("users", {
+        clerkUserId: "c_perf",
+        email: "perf@test.local",
+        role: "customer",
+        createdAt: Date.now(),
+      });
+      const shopId = await ctx.db.insert("shops", {
+        name: "Test Shop",
+        owner_user_id: userId,
+        is_active: true,
+        timezone: "America/New_York",
+        no_show_threshold_minutes: 30,
+        overrun_default_extension_percent: 25,
+        overrun_extension_floor_minutes: 5,
+        max_bookings_per_mechanic_rolling_hour: 2,
+        entity_label_mode: "mechanic",
+      });
+      const oil = await ctx.db.insert("services", { name: "Oil Change", slug: "oil_change" });
+      const bookingId = await ctx.db.insert("bookings", {
+        vin: "VINPERF",
+        user_id: userId,
+        service_ids: [],
+        status: "completed",
+      });
+      for (const [name, status, catalog] of [
+        ["Oil Change", "completed", oil],
+        ["Weld exhaust bracket", "completed", undefined],
+        ["Cabin Filter", "declined", undefined],
+      ] as const) {
+        await ctx.db.insert("custom_jobs", {
+          booking_id: bookingId,
+          shop_id: shopId,
+          vehicle_vin: "VINPERF",
+          name,
+          normalized_name: name.toLowerCase(),
+          match_key: serviceMatchKey(name),
+          system_tags: ["engine"],
+          work_type: "service",
+          ...(catalog ? { catalog_service_id: catalog } : {}),
+          source: "mid_job",
+          status,
+          created_at: Date.now(),
+        });
+      }
+      const booking = await ctx.db.get(bookingId);
+      const work = await collectPerformedWork(ctx, booking);
+      // Sets don't cross the convex-test boundary; carry them as arrays.
+      return {
+        serviceIds: [...work.serviceIds],
+        slugs: [...work.slugs],
+        matchKeys: [...work.matchKeys],
+        oil: String(oil),
+      };
+    });
+    const work: PerformedWork = {
+      serviceIds: new Set(result.serviceIds),
+      slugs: new Set(result.slugs),
+      matchKeys: new Set(result.matchKeys),
+    };
+
+    expect(work.slugs.has("oil_change")).toBe(true);
+    expect(work.serviceIds.has(result.oil)).toBe(true);
+    expect(
+      recommendationWasPerformed({ freeform_text: "Oil Top-Off" }, work),
+    ).toBe(true);
+    // Off-catalog and declined lines stay name-only / excluded, as before.
+    expect(work.matchKeys.has(serviceMatchKey("Weld exhaust bracket"))).toBe(true);
+    expect(work.matchKeys.has(serviceMatchKey("Cabin Filter"))).toBe(false);
   });
 });

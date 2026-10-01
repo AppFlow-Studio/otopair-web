@@ -17,7 +17,7 @@ import { v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { computeMaxDelta, validateMileageUpdate } from "./oto/vehicleTruthGuard";
 import { symptomForServiceSlug } from "./lib/serviceSymptoms";
-import { recordTypeForServiceSlug } from "./lib/serviceRecordType";
+import { recordTypesForCompletedService } from "./lib/serviceRecordType";
 import { normalizeFaultLight, toCanonicalLight } from "../lib/warningLightVocab";
 import { logKnownIssueEvents } from "./lib/knownIssueEvents";
 
@@ -216,8 +216,10 @@ async function applyVehicleTruthImpl(
       const hedged = claim.stated_confidence === "hedged";
       const code = symptomForServiceSlug(claim.service_slug);
       if (code) codesToClear.push(code);
-      const recordType = recordTypeForServiceSlug(claim.service_slug);
-      if (recordType) {
+      // Same rows booking completion stamps: the service's own anchor, then its
+      // aggregate. A rotation no longer resets "tires" (#413) — it records
+      // itself instead.
+      for (const recordType of recordTypesForCompletedService(claim.service_slug)) {
         completedRecordAnchors.set(recordType, {
           mileage: resolveServiceMileage(claim.service_mileage, owner.mileage ?? null),
           date: resolveServiceDate(claim.service_date, claim.service_age_days, now),

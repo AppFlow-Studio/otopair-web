@@ -65,7 +65,7 @@ export async function collectPerformedWork(
     }
   }
 
-  // Off-catalog lines. `completed` only — a declined or cancelled line records
+  // Added lines. `completed` only — a declined or cancelled line records
   // what was OFFERED, not what was done.
   const customJobs = await ctx.db
     .query("custom_jobs")
@@ -75,6 +75,17 @@ export async function collectPerformedWork(
     if (job.status !== "completed") continue;
     if (typeof job.name === "string" && job.name) {
       matchKeys.add(serviceMatchKey(job.name));
+    }
+    // A line added mid-job that resolved to a catalog service IS that service,
+    // exactly as if it had been booked. Recording only its name meant the
+    // slug overrides below never saw it: an oil change added mid-job left the
+    // "Oil Top-Off" recommendation standing (#206 / #340 — the suppression
+    // covered the booked services and missed added scope).
+    if (job.catalog_service_id) {
+      const service = await ctx.db.get(job.catalog_service_id);
+      if (!service) continue;
+      serviceIds.add(String(job.catalog_service_id));
+      if (typeof service.slug === "string" && service.slug) slugs.add(service.slug);
     }
   }
 

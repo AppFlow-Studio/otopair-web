@@ -78,6 +78,7 @@ import ActiveJobStrip from "@/components/active-job-strip";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { useIsCompact } from "@/lib/use-media-query";
 import { useEntityLabel } from "@/lib/use-entity-label";
+import { ScheduleSidePanel } from "./schedule-side-panel";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
   drawerInputClassName,
@@ -1704,25 +1705,12 @@ export default function SchedulePage() {
     </div>
   );
 
-  // Each side panel is a fixed 552px flex-sibling on desktop and a slide-up
-  // bottom sheet on phones/iPads (<xl). `children` is rendered in exactly one
-  // branch, so the heavy drawer components mount once.
+  // One stable tree changes presentation at xl without remounting its children.
+  // This matters for drawers whose in-progress form state lives locally.
   const sidePanel = (open: boolean, onClose: () => void, children: ReactNode) =>
-    compact ? (
-      <BottomSheet open={open} onClose={onClose} fullHeight contentClassName="schedule-scope">
-        <div className="flex h-full flex-col overflow-hidden">{children}</div>
-      </BottomSheet>
-    ) : (
-      <div
-        className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          open ? "w-[552px]" : "w-0"
-        }`}
-      >
-        <div className="w-[528px] ml-6 flex h-[calc(100dvh-124px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
-          {children}
-        </div>
-      </div>
-    );
+    <ScheduleSidePanel open={open} onClose={onClose}>
+      {children}
+    </ScheduleSidePanel>;
 
   return (
     <div className="space-y-6 schedule-scope">

@@ -28,7 +28,8 @@ import type {
   CustomJobOutcome,
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceDisplayName, formatServiceLine } from "@/lib/service-catalog";
+import { DIAGNOSTIC_SYSTEM_LABELS } from "@/convex/lib/customServiceNames";
 import {
   GreetingHeader,
   MetricRow,
@@ -485,7 +486,7 @@ export default function MechanicDashboard() {
         kind: "ready",
         dot: "primary",
         primary: `${job.customerDisplayName} · ${job.vehicle}`,
-        secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
+        secondary: formatServiceLine(job.serviceNames),
         meta: `${formatTime(job.scheduledTime)}${enroute ? " · en route" : ""}`,
         action: passportIncomplete
           ? {
@@ -509,15 +510,22 @@ export default function MechanicDashboard() {
     for (const job of diagnosticsNeedingFollowUp ?? []) {
       if (job.status === "in_progress") continue;
       const id = String(job._id);
+      const systemLabel = job.diagnosticSystem
+        ? (DIAGNOSTIC_SYSTEM_LABELS[job.diagnosticSystem] ?? job.diagnosticSystem)
+        : null;
       items.push({
         key: `diag-${id}`,
         kind: "diagnostic",
         dot: "warning",
         primary: `${job.customerName} · ${job.vehicle}`,
+        // A diagnostic booked with no service line is still a diagnostic — name
+        // it that, not "No services listed · Brakes" (bug #408).
         secondary:
-          `${job.serviceNames.map(formatServiceDisplayName).join(", ")}${
-            job.diagnosticSystem ? ` · ${job.diagnosticSystem}` : ""
-          }` || undefined,
+          job.serviceNames.length === 0 && systemLabel
+            ? `Diagnostic · ${systemLabel}`
+            : `${formatServiceLine(job.serviceNames)}${
+                systemLabel ? ` · ${systemLabel}` : ""
+              }`,
         meta: job.followupState === "awaiting_info" ? "awaiting info" : "pending",
         action: {
           label: "Follow up",
@@ -704,7 +712,7 @@ export default function MechanicDashboard() {
                   dot={statusDot(job.status)}
                   code={formatTime(job.scheduledTime)}
                   primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                  secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
+                  secondary={formatServiceLine(job.serviceNames)}
                   meta={statusText(job.status)}
                   onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                 />
@@ -732,7 +740,7 @@ export default function MechanicDashboard() {
                         dot="muted"
                         code={formatTime(job.scheduledTime)}
                         primary={`${job.customerDisplayName} · ${job.vehicle}`}
-                        secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
+                        secondary={formatServiceLine(job.serviceNames)}
                         onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
                       />
                     );
@@ -777,7 +785,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${formatServiceLine(selectedWorkflowBooking.serviceLineNames ?? selectedWorkflowBooking.serviceNames)} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -826,7 +834,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${formatServiceLine(selectedWorkflowBooking.serviceLineNames ?? selectedWorkflowBooking.serviceNames)} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -900,7 +908,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${formatServiceLine(selectedWorkflowBooking.serviceLineNames ?? selectedWorkflowBooking.serviceNames)} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""
@@ -976,7 +984,7 @@ export default function MechanicDashboard() {
         bookingLabel={selectedWorkflowBooking?.vehicle ?? "Vehicle"}
         bookingSubLabel={
           selectedWorkflowBooking
-            ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
+            ? `${selectedWorkflowBooking.customerName} · ${formatServiceLine(selectedWorkflowBooking.serviceLineNames ?? selectedWorkflowBooking.serviceNames)} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
               )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
             : ""

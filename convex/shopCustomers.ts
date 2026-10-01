@@ -19,7 +19,7 @@ import { query } from "./_generated/server";
 import { v } from "convex/values";
 import { resolveVehicleMileage } from "./lib/mileage";
 import type { Id } from "./_generated/dataModel";
-import { customServiceNames } from "./lib/customServiceNames";
+import { customServiceNames, impliedServiceNames } from "./lib/customServiceNames";
 
 /* ------------------------------------------------------------------ */
 /*  Local helpers (duplicated from bookings.ts — see note above)       */
@@ -60,30 +60,33 @@ function formatCustomerName(customer: any) {
   );
 }
 
+/** Catalog names (+ picked option label), then custom_services lines; when
+ *  both are empty, the work the booking's other fields imply — see
+ *  impliedServiceNames (bug #408). */
 async function resolveServiceLabels(
   ctx: any,
-  serviceIds: Array<any> | undefined,
-  selectedOptions:
-    | Array<{ service_id: any; option_label?: string }>
-    | undefined,
-  /** booking.custom_services — see resolveServiceNames. */
-  customServices?: unknown,
+  booking: {
+    service_ids?: Array<Id<"services">>;
+    selected_service_options?: Array<{ service_id: Id<"services">; option_label?: string }>;
+    custom_services?: unknown;
+  },
 ): Promise<string[]> {
-  const custom = customServiceNames(customServices);
-  if (!serviceIds || serviceIds.length === 0) return custom;
+  const serviceIds = booking.service_ids ?? [];
   const byServiceId = new Map<string, string>();
-  for (const opt of selectedOptions ?? []) {
+  for (const opt of booking.selected_service_options ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
   const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
-      const name = service?.name ?? "Unknown Service";
+      // `||`, not `??`: a services row with a blank name must not render blank.
+      const name = service?.name?.trim() || "Unknown Service";
       const label = byServiceId.get(String(serviceId));
       return label ? `${name} — ${label}` : name;
     }),
   );
-  return [...labelled, ...custom];
+  const labels = [...labelled, ...customServiceNames(booking.custom_services)];
+  return labels.length > 0 ? labels : impliedServiceNames(booking);
 }
 
 /**
@@ -392,12 +395,7 @@ export const getShopCustomerDetail = query({
         .slice()
         .sort((a, b) => bookingTimestampMs(b) - bookingTimestampMs(a))
         .map(async (b) => {
-          const serviceNames = await resolveServiceLabels(
-            ctx,
-            b.service_ids,
-            b.selected_service_options as any,
-            b.custom_services,
-          );
+          const serviceNames = await resolveServiceLabels(ctx, b);
           const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
           const veh = b.vin ? await resolveVehicleSummary(ctx, b.vin) : null;
           const vehicleLabel = veh
@@ -482,12 +480,7 @@ export const getShopVehicleDetail = query({
         .slice()
         .sort((a, b) => bookingTimestampMs(b) - bookingTimestampMs(a))
         .map(async (b) => {
-          const serviceNames = await resolveServiceLabels(
-            ctx,
-            b.service_ids,
-            b.selected_service_options as any,
-            b.custom_services,
-          );
+          const serviceNames = await resolveServiceLabels(ctx, b);
           const mechanic = b.mechanic_id ? await ctx.db.get(b.mechanic_id) : null;
           const bookingUser = await ctx.db.get(b.user_id);
           return {

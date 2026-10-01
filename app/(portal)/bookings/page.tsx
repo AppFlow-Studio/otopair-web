@@ -4,7 +4,7 @@ import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
 import { createPortal } from "react-dom";
 import { useMutation, useQuery } from "convex/react";
 import { jobListTotal } from "@/lib/booking-total";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceDisplayName, formatServiceLine } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import { errorMessage, notify, runAction } from "@/lib/feedback";
@@ -300,6 +300,10 @@ export default function BookingsPage() {
   // Keyboard navigation
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      // Keys aimed at an open Radix menu (the drawer's ⋯ overflow) belong to it:
+      // Escape closes just the menu and letters are its typeahead — they must
+      // not close the drawer or fire accept/decline/cancel.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-radix-menu-content]")) return;
       // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
       // held, let the key pass through instead of firing a single-key shortcut
       // (e.g. ⌘R was triggering "r" = mark-completed, popping a new form).
@@ -849,7 +853,7 @@ export default function BookingsPage() {
                               </td>
                               <td className="px-3 py-4 text-foreground whitespace-nowrap">{drawerCompact ? (job.vehicleShort ?? job.vehicle) : job.vehicle}</td>
                               <td className="px-3 py-4 text-foreground max-w-48 truncate">
-                                {job.serviceNames.map(formatServiceDisplayName).join(", ")}
+                                {formatServiceLine(job.serviceNames)}
                               </td>
                               <td className="px-3 py-4">
                                 <div className="flex items-center gap-1.5 flex-wrap">

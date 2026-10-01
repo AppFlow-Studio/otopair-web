@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "convex/react";
 import { findNextAvailableSlot } from "@/lib/findNextAvailableSlot";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceLine, NO_SERVICES_LABEL } from "@/lib/service-catalog";
 import { api } from "@/convex/_generated/api";
 import type { Id } from "@/convex/_generated/dataModel";
 import {
@@ -433,20 +433,25 @@ export default function SchedulePage() {
     }
   }, [blockTimeDrawer]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Close drawer on Escape
+  // Close drawer on Escape — unless an inner layer already consumed it (a
+  // react-aria Select/popover or a Radix menu preventDefaults the Escape that
+  // closes it), so that Escape closes only the list, not the drawer.
   useEffect(() => {
     if (!drawerOpen) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") setBlockTimeDrawer(null);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [drawerOpen]);
 
-  // Close create booking drawer on Escape
+  // Close create booking drawer on Escape — same inner-layer guard as above,
+  // so dismissing the open "Assigned to" / time list keeps the form.
   useEffect(() => {
     if (!createBookingDrawer) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") setCreateBookingDrawer(null);
     };
     document.addEventListener("keydown", onKey);
@@ -499,6 +504,10 @@ export default function SchedulePage() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!selectedBookingId) return;
+      // Keys aimed at an open Radix menu (the panel's ⋯ overflow) belong to it:
+      // Escape closes just the menu and letters are its typeahead — they must
+      // not close the panel or fire accept/decline/cancel.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-radix-menu-content]")) return;
 
       if (e.key === "Escape") {
         if ((e.target as HTMLElement).closest("[data-assign-dropdown]")) return;
@@ -1300,7 +1309,7 @@ export default function SchedulePage() {
         return {
           id: b._id,
           invoiceNumber: (b as any).invoiceNumber ?? null,
-          title: `${b.customerName} — ${b.serviceNames.map(formatServiceDisplayName).join(", ")}`,
+          title: `${b.customerName} — ${formatServiceLine(b.serviceNames)}`,
           start,
           end,
           resourceId: b.mechanicId ?? undefined,
@@ -1613,6 +1622,7 @@ export default function SchedulePage() {
     }
 
     const colors = statusColors[event.status ?? "confirmed"] ?? statusColors.confirmed;
+    const serviceLine = formatServiceLine(event.serviceNames);
     const customerDisplay = currentView === "week"
       ? (event.customerName?.split(" ")[0] ?? "")
       : currentView === "month"
@@ -1635,7 +1645,15 @@ export default function SchedulePage() {
         }}
       >
         <p className="font-medium truncate">{customerDisplay}</p>
-        <p className="truncate opacity-80">{event.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
+        <p
+          className={
+            serviceLine === NO_SERVICES_LABEL
+              ? "truncate text-muted-foreground"
+              : "truncate opacity-80"
+          }
+        >
+          {serviceLine}
+        </p>
         {isPendingCustomer && (
           <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
         )}
@@ -1818,7 +1836,7 @@ export default function SchedulePage() {
               <SelectTrigger className="hidden xl:flex h-9 rounded-lg border-border bg-card text-sm px-3 min-w-0 sm:min-w-40">
                 <SelectValue />
               </SelectTrigger>
-              <SelectPopover placement="bottom end">
+              <SelectPopover placement="bottom end" className="w-56 min-w-(--trigger-width) max-w-[calc(100vw-2rem)]">
                 <SelectListBox shouldFocusWrap>
                   <SelectItem id="all" textValue={`All ${entityLabel.plural}`}>{`All ${entityLabel.plural}`}</SelectItem>
                   {context.mechanics.map((m) => (

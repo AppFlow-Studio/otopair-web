@@ -626,3 +626,24 @@ export function formatServiceDisplayName(name: string | null | undefined): strin
     });
 }
 
+/** Placeholder for a booking with no service at all (e.g. a Create booking
+ *  submitted with no service picked) — the same wording the customer job
+ *  history already uses. */
+export const NO_SERVICES_LABEL = "No services listed";
+
+/**
+ * A booking's service line for display: display names joined, or
+ * NO_SERVICES_LABEL instead of a blank line (bug #408). Display strings only —
+ * never write the placeholder back into `serviceNames`, which other views
+ * count (`serviceNames.length`) and filter on.
+ */
+export function formatServiceLine(
+  names: ReadonlyArray<string | null | undefined> | null | undefined,
+  separator = ", ",
+): string {
+  return (
+    (names ?? []).map(formatServiceDisplayName).filter(Boolean).join(separator) ||
+    NO_SERVICES_LABEL
+  );
+}
+

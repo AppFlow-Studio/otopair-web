@@ -2374,7 +2374,8 @@ export default function CreateBookingDrawer({
                   <SelectTrigger className="inline-flex h-auto w-auto items-center gap-1 rounded-md border-0 bg-transparent px-1.5 py-0.5 text-sm font-medium text-foreground shadow-none ring-offset-0 hover:text-primary">
                     <SelectValue />
                   </SelectTrigger>
-                  <SelectPopover placement="bottom start">
+                  {/* Content-width trigger: the default w-(--trigger-width) squeezed the list to the selected name. */}
+                  <SelectPopover placement="bottom start" className="w-56 min-w-(--trigger-width) max-w-[calc(100vw-2rem)]">
                     <SelectListBox shouldFocusWrap>
                       <SelectItem id="any" textValue={entityLabel.anyLabel}>
                         <span className="text-muted-foreground">{entityLabel.anyLabel}</span>

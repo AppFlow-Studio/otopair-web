@@ -9,7 +9,7 @@ import {
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
 import type { RescheduleProposal, ContextMenuCellInfo, ContextMenuBlockedInfo } from "./day-swim-lanes";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceLine, NO_SERVICES_LABEL } from "@/lib/service-catalog";
 
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
@@ -273,7 +273,7 @@ export default function WeekSingleMechanicLanes({
 
       const svcP = document.createElement("p");
       Object.assign(svcP.style, { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", opacity: "0.8" });
-      svcP.textContent = ev.serviceNames?.map(formatServiceDisplayName).join(", ") ?? "";
+      svcP.textContent = formatServiceLine(ev.serviceNames);
       floating.appendChild(svcP);
 
       if (isPendingCustomer) {
@@ -701,6 +701,12 @@ export default function WeekSingleMechanicLanes({
                   const slotTop = (evStartMin / totalMinutes) * totalHeight;
                   const slotHeight = Math.max(ROW_HEIGHT * 0.5, (evDuration / totalMinutes) * totalHeight);
                   const colors = statusColors[ev.status ?? "confirmed"] ?? statusColors.confirmed;
+                  // No service at all → muted placeholder, not a blank line (bug #408).
+                  const serviceLine = formatServiceLine(ev.serviceNames);
+                  const serviceLineClass =
+                    serviceLine === NO_SERVICES_LABEL
+                      ? "truncate text-muted-foreground"
+                      : "truncate opacity-80";
                   const isDraggable = DRAGGABLE_STATUSES.has(ev.status ?? "");
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer = ev.status === "pending_customer_acceptance";
@@ -721,7 +727,7 @@ export default function WeekSingleMechanicLanes({
                         }}
                       >
                         <p className="font-medium truncate">{ev.customerName}</p>
-                        <p className="truncate opacity-80">{ev.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
+                        <p className={serviceLineClass}>{serviceLine}</p>
                       </div>
                     );
                   }
@@ -751,7 +757,7 @@ export default function WeekSingleMechanicLanes({
                         {formatCompactTime(ev.start.getHours(), ev.start.getMinutes())}
                       </span>
                       <p className="font-medium truncate">{ev.customerName}</p>
-                      <p className="truncate opacity-80">{ev.serviceNames?.map(formatServiceDisplayName).join(", ")}</p>
+                      <p className={serviceLineClass}>{serviceLine}</p>
                       {isPendingCustomer && (
                         <p className="truncate opacity-70 text-[10px]">{pendingLabel}</p>
                       )}

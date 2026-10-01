@@ -23,7 +23,7 @@ import LateStartReviewDialog, {
 import NowWorkingOverlay, {
   type ActiveJobRow,
 } from "@/components/mechanic/now-working-overlay";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceDisplayName, formatServiceLine } from "@/lib/service-catalog";
 import {
   GreetingHeader,
   MetricRow,
@@ -292,6 +292,10 @@ function OwnerDashboardPage({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!selectedJobId) return;
+      // Keys aimed at an open Radix menu (the panel's ⋯ overflow) belong to it:
+      // Escape closes just the menu and letters are its typeahead — they must
+      // not close the panel or fire accept/decline/cancel.
+      if ((e.target as HTMLElement | null)?.closest?.("[data-radix-menu-content]")) return;
 
       // Never hijack browser/OS chords (⌘R reload, ⌘L, ⌃…): with a modifier
       // held, let the key pass through instead of firing a single-key shortcut
@@ -487,7 +491,7 @@ function OwnerDashboardPage({
         kind: "enroute",
         dot: "success",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
+        secondary: formatServiceLine([alert.serviceSummary]),
         meta: `en route · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -507,7 +511,7 @@ function OwnerDashboardPage({
         kind: "notified",
         dot: "warning",
         primary: `${alert.customerName} · ${alert.vehicle ?? "Vehicle"}`,
-        secondary: formatServiceDisplayName(alert.serviceSummary) || undefined,
+        secondary: formatServiceLine([alert.serviceSummary]),
         meta: `notified · ${alert.minutesLate}m late`,
         action: {
           label: "Vehicle here",
@@ -525,7 +529,7 @@ function OwnerDashboardPage({
         kind: "accept",
         dot: "primary",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
+        secondary: formatServiceLine([job.serviceSummary]),
         meta: `${formatScheduledDateLabel(job.scheduledDate)} · ${job.scheduledTimeLabel}`,
         action: {
           label: "Open",
@@ -565,7 +569,7 @@ function OwnerDashboardPage({
         kind: "actuals",
         dot: "muted",
         primary: `${job.customerName} · ${job.vehicle}`,
-        secondary: formatServiceDisplayName(job.serviceSummary) || undefined,
+        secondary: formatServiceLine([job.serviceSummary]),
         meta: "needs details",
         action: {
           label: "Finalize",
@@ -875,7 +879,7 @@ function OwnerDashboardPage({
                     dot={statusDot(booking.status)}
                     code={booking.scheduledTimeLabel || undefined}
                     primary={`${booking.customerDisplayName} · ${booking.vehicle}`}
-                    secondary={formatServiceDisplayName(booking.serviceSummary) || undefined}
+                    secondary={formatServiceLine([booking.serviceSummary])}
                     meta={`${mechanicName} · ${getScheduleStatusLabel(booking.status)}`}
                     onOpen={() => setSelectedJobId(booking._id)}
                   />

@@ -54,7 +54,8 @@ import {
   splitDiagnosticServices,
   templateForSystem,
 } from "@/lib/diagnostic-checklist-templates";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceDisplayName, formatServiceLine } from "@/lib/service-catalog";
+import { DIAGNOSTIC_SYSTEM_LABELS } from "@/convex/lib/customServiceNames";
 import {
   EARLY_PUSH_THRESHOLD_MS,
   getMechanicAssignmentConflict,
@@ -590,17 +591,6 @@ function RecommendedServiceCard({ job }: { job: JobDetailData }) {
   );
 }
 
-const DIAGNOSTIC_SYSTEM_LABELS: Record<
-  "brakes" | "tires_wheels" | "engine" | "battery_electrical" | "not_sure",
-  string
-> = {
-  brakes: "Brakes",
-  tires_wheels: "Tires & Wheels",
-  engine: "Engine",
-  battery_electrical: "Battery & Electrical",
-  not_sure: "Not sure",
-};
-
 /* ------------------------------------------------------------------ */
 /*  Types                                                               */
 /* ------------------------------------------------------------------ */
@@ -658,6 +648,10 @@ export interface JobDetailData {
   scheduledDate: string;
   scheduledTime: string;
   serviceNames: string[];
+  /** Display-only service line: `serviceNames`, or the work the booking's
+   *  other fields imply when that's empty (getJobDetail, bug #408). Only for
+   *  rendering — flags and counts read `serviceNames`. */
+  serviceLineNames?: string[];
   /** Per-service agreed labor hours, matched to `serviceNames` by name. */
   perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   tireSpecs?: {
@@ -1506,7 +1500,9 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
       reason: string,
     ) {
       if (!job) return null;
-      const services = job.serviceNames.map(formatServiceDisplayName).join(", ");
+      const services = (job.serviceLineNames ?? job.serviceNames)
+        .map(formatServiceDisplayName)
+        .join(", ");
       const consequence =
         kind === "no_show"
           ? "The booking closes as a no-show and any no-show fee in your policy is charged."
@@ -2220,9 +2216,12 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
 
     /* ---- Render ---- */
 
-    const title = job
-      ? `${job.serviceNames.map(formatServiceDisplayName).join(", ")} — ${job.customerName}`
-      : "Booking Detail";
+    // serviceLineNames: the same implied-work fallback the schedule block uses,
+    // so the panel names a booking the way the block that opened it does.
+    const serviceLine = job
+      ? formatServiceLine(job.serviceLineNames ?? job.serviceNames)
+      : "";
+    const title = job ? `${serviceLine} — ${job.customerName}` : "Booking Detail";
 
     // Step actions (Accept / Decline / Vehicle here / Reschedule / …) are
     // hoisted to render at the top of the body, directly under the stepper.
@@ -2694,7 +2693,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
                   >
                     <div className={`min-h-0 overflow-hidden ${isStepIndicatorCompact ? "pointer-events-none" : ""}`}>
                       <p className="mt-0.5 truncate text-sm text-muted-foreground">
-                        {job.serviceNames.map(formatServiceDisplayName).join(", ")}
+                        {serviceLine}
                         {job.customerName ? ` · ${job.customerName}` : ""}
                       </p>
                       {/* Renders only when this booking's car is on a placeholder
@@ -3278,7 +3277,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${serviceLine} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -3308,7 +3307,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${serviceLine} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -3392,7 +3391,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${serviceLine} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`
@@ -3460,7 +3459,7 @@ const JobDetailPanel = forwardRef<JobDetailPanelHandle, JobDetailPanelProps>(
           bookingLabel={job?.vehicle ?? "Vehicle"}
           bookingSubLabel={
             job
-              ? `${job.customerName} · ${job.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatBookingDate(
+              ? `${job.customerName} · ${serviceLine} · ${formatBookingDate(
                   job.scheduledDate,
                   job.scheduledTime,
                 )}`

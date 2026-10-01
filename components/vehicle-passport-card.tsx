@@ -68,6 +68,10 @@ interface VehiclePassportCardJob {
   vin: string;
   vehicle: string;
   serviceNames: string[];
+  /** Display-only service line (getJobDetail.serviceLineNames): `serviceNames`,
+   *  or the work the booking implies when none is recorded (bug #408). Never
+   *  counted — counts and flags stay on `serviceNames`. */
+  serviceLineNames?: string[];
   /** Per-service agreed labor hours, matched to `serviceNames` by name. */
   perServiceLabor?: Array<{ name: string; laborHours: number | null }> | null;
   totalCost: number;
@@ -224,7 +228,13 @@ function Section({
 
 /** Services / parts / totals from the canonical money statement — every line
  *  and total the customer is billed, one source, reconciling by construction. */
-function MoneyScopeSection({ money }: { money: BookingMoney }) {
+function MoneyScopeSection({
+  money,
+  serviceLineNames,
+}: {
+  money: BookingMoney;
+  serviceLineNames?: string[];
+}) {
   const t = money.totals;
   const prev = money.previousAgreedTotalCents;
   const showPrev =
@@ -241,7 +251,18 @@ function MoneyScopeSection({ money }: { money: BookingMoney }) {
         </p>
         <ul className="mt-1 space-y-0.5">
           {money.services.length === 0 ? (
-            <li className="text-muted-foreground">No services on file.</li>
+            serviceLineNames && serviceLineNames.length > 0 ? (
+              // No billed service line, but the booking implies its work (an
+              // accepted tire quote, a diagnostic) — name it like the panel
+              // header does instead of "No services on file." (bug #408).
+              serviceLineNames.map((name, i) => (
+                <li key={`${name}-${i}`} className="text-foreground">
+                  {name}
+                </li>
+              ))
+            ) : (
+              <li className="text-muted-foreground">No services on file.</li>
+            )
           ) : (
             money.services.map((s) => (
               <li
@@ -403,7 +424,11 @@ function MoneyScopeSection({ money }: { money: BookingMoney }) {
 }
 
 function JobScopeSection({ job }: { job: VehiclePassportCardJob }) {
-  if (job.money) return <MoneyScopeSection money={job.money} />;
+  if (job.money) {
+    return (
+      <MoneyScopeSection money={job.money} serviceLineNames={job.serviceLineNames} />
+    );
+  }
   return <LegacyJobScopeSection job={job} />;
 }
 
@@ -482,6 +507,11 @@ function LegacyJobScopeSection({ job }: { job: VehiclePassportCardJob }) {
     }
   }
 
+  // Display only: the recorded lines, or the work the booking implies when
+  // none is recorded — the same names the panel header shows (bug #408).
+  const scopeServiceNames =
+    job.serviceNames.length > 0 ? job.serviceNames : (job.serviceLineNames ?? []);
+
   return (
     <div className="space-y-4 text-sm">
       <div>
@@ -489,10 +519,10 @@ function LegacyJobScopeSection({ job }: { job: VehiclePassportCardJob }) {
           SERVICES
         </p>
         <ul className="mt-1 space-y-0.5">
-          {job.serviceNames.length === 0 ? (
+          {scopeServiceNames.length === 0 ? (
             <li className="text-muted-foreground">No services on file.</li>
           ) : (
-            job.serviceNames.map((name, i) => {
+            scopeServiceNames.map((name, i) => {
               const hrs = laborHoursByService.get(name);
               return (
                 <li
@@ -1007,6 +1037,9 @@ export function VehiclePassportCard({
   const money = job.money ?? null;
   const partsCount = money ? money.counts.parts : (job.pricedPartsSnapshot?.length ?? 0);
   const serviceCount = money ? money.counts.services : job.serviceNames.length;
+  // Display only: the line the panel header names (implied work when nothing
+  // is recorded, bug #408). The count above stays on the recorded lines.
+  const serviceLine = (job.serviceLineNames ?? job.serviceNames).join(", ");
   const totalDollars = money ? money.totals.totalCents / 100 : job.totalCost;
   const laborDollars = money ? money.totals.laborCents / 100 : job.laborCost;
   const partsDollars = money ? money.totals.partsCents / 100 : job.partsCost;
@@ -1117,9 +1150,9 @@ export function VehiclePassportCard({
             </p>
             <p
               className="mt-0.5 truncate text-sm font-medium text-foreground"
-              title={job.serviceNames.join(", ")}
+              title={serviceLine}
             >
-              {job.serviceNames.join(", ") || "—"}
+              {serviceLine || "—"}
             </p>
             {setPriceDollars > 0 ? (
               <p className="text-[11px] tabular-nums text-muted-foreground">

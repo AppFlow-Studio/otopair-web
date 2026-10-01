@@ -50,10 +50,16 @@ export function BottomSheet({
     };
   }, [open]);
 
-  // Close on Escape.
+  // Close on Escape — unless a Radix layer inside the sheet already consumed it
+  // (Radix preventDefaults the Escape that dismisses its menu in a document
+  // capture-phase listener, which always runs before this bubble one), so
+  // Escape closes only that menu, not the sheet. Other document bubble
+  // listeners (ConfirmationDialog, SurveyDialogShell) aren't ordered against
+  // this one, so the guard makes no promise for them.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", onKey);
@@ -65,8 +71,10 @@ export function BottomSheet({
   return createPortal(
     <AnimatePresence>
       {open && (
-        // z-[55]: above the page + portal sidebar (z-40/50) but below the app's
-        // confirmation dialogs/toasts (z-[60]/z-[70]) the drawers can trigger.
+        // z-[55]: above the page + portal sidebar (z-40/50) but below everything
+        // the drawers can trigger: body-portaled menus (the Radix dropdown at
+        // z-[60], components/ui/dropdown-menu.tsx), the reschedule confirm
+        // (z-[60]) and the confirmation dialogs/toasts (z-[70]+).
         <div className="fixed inset-0 z-[55] xl:hidden" role="dialog" aria-modal="true" aria-label={ariaLabel}>
           {/* Backdrop */}
           <motion.div

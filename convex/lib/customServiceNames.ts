@@ -46,3 +46,72 @@ export function customServiceNames(
   }
   return out;
 }
+
+/** Display label per `bookings.diagnostic_system` value. Shared by the
+ *  booking detail panel's "Diagnostic · …" chip and impliedServiceNames. */
+export const DIAGNOSTIC_SYSTEM_LABELS: Record<
+  "brakes" | "tires_wheels" | "engine" | "battery_electrical" | "not_sure",
+  string
+> = {
+  brakes: "Brakes",
+  tires_wheels: "Tires & Wheels",
+  engine: "Engine",
+  battery_electrical: "Battery & Electrical",
+  not_sure: "Not sure",
+};
+
+/**
+ * Service names implied by a booking's other work fields, for a booking with
+ * no catalog `service_ids` and no `custom_services` lines.
+ *
+ * Those two are not the only places a booking records its work. An accepted
+ * tire/rotor quote whose catalog slug didn't resolve carries only
+ * `tire_specs` / `rotor_specs`; a diagnostic carries `diagnostic_system`; a
+ * booking whose typed-in line was removed can still carry that line's parts in
+ * `priced_parts_snapshot`. Without this, every one of them rendered as a
+ * schedule block with a blank service line (bug #408).
+ *
+ * Callers use it ONLY as a fallback when the catalog + custom labels are
+ * empty — never merged in — so it can't duplicate a real line or flip a
+ * booking's diagnostic/tire/rotor detection. The tire/rotor strings match the
+ * tentative quote blocks in schedule.getBookingsForRange, so a quote block
+ * keeps its label once the quote becomes a booking. Pure and total: a legacy
+ * or malformed row returns [] rather than throwing.
+ */
+export function impliedServiceNames(booking: unknown): string[] {
+  if (!booking || typeof booking !== "object") return [];
+  const b = booking as {
+    tire_specs?: unknown;
+    rotor_specs?: unknown;
+    diagnostic_system?: unknown;
+    priced_parts_snapshot?: unknown;
+  };
+
+  const out: string[] = [];
+  if (b.tire_specs && typeof b.tire_specs === "object") out.push("Tire Replacement");
+  if (b.rotor_specs && typeof b.rotor_specs === "object") out.push("Rotor Replacement");
+  if (typeof b.diagnostic_system === "string" && b.diagnostic_system) {
+    // "not_sure" names no system, so it reads as plain "Diagnostic".
+    const label =
+      b.diagnostic_system === "not_sure"
+        ? undefined
+        : (DIAGNOSTIC_SYSTEM_LABELS as Record<string, string | undefined>)[
+            b.diagnostic_system
+          ];
+    out.push(label ? `Diagnostic — ${label}` : "Diagnostic");
+  }
+  if (out.length > 0) return out;
+
+  if (!Array.isArray(b.priced_parts_snapshot)) return [];
+  const seen = new Set<string>();
+  for (const row of b.priced_parts_snapshot) {
+    if (!row || typeof row !== "object") continue;
+    const name = (row as { custom_service_name?: unknown }).custom_service_name;
+    if (typeof name !== "string") continue;
+    const trimmed = name.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    out.push(trimmed);
+  }
+  return out;
+}

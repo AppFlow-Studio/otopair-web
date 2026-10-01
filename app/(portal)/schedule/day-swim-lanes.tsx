@@ -10,7 +10,7 @@ import {
   slotHoldTooltip,
 } from "./schedule-constants";
 import type { CalendarEvent } from "./schedule-constants";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceLine, NO_SERVICES_LABEL } from "@/lib/service-catalog";
 
 interface Mechanic {
   _id: string;
@@ -452,7 +452,7 @@ export default function DaySwimLanes({
         whiteSpace: "nowrap",
         opacity: "0.8",
       });
-      svcP.textContent = ev.serviceNames?.map(formatServiceDisplayName).join(", ") ?? "";
+      svcP.textContent = formatServiceLine(ev.serviceNames);
       floating.appendChild(svcP);
 
       if (isPendingCustomer) {
@@ -1105,6 +1105,13 @@ export default function DaySwimLanes({
                   const colors =
                     statusColors[ev.status ?? "confirmed"] ??
                     statusColors.confirmed;
+                  // A booking with no service at all shows a muted placeholder
+                  // instead of a blank line (bug #408).
+                  const serviceLine = formatServiceLine(ev.serviceNames);
+                  const serviceLineClass =
+                    serviceLine === NO_SERVICES_LABEL
+                      ? "truncate text-muted-foreground"
+                      : "truncate opacity-80";
                   const isDraggable = DRAGGABLE_STATUSES.has(ev.status ?? "");
                   const isBeingDragged = dragEventId === ev.id;
                   const isPendingCustomer =
@@ -1184,8 +1191,8 @@ export default function DaySwimLanes({
                               : `#${String(ev.id).slice(-6).toUpperCase()}`}
                           </span>
                         </div>
-                        <p className="truncate opacity-80">
-                          {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
+                        <p className={serviceLineClass}>
+                          {serviceLine}
                         </p>
                       </div>
                     );
@@ -1278,8 +1285,8 @@ export default function DaySwimLanes({
                               : `#${String(ev.id).slice(-6).toUpperCase()}`}
                             </span>
                           </div>
-                          <p className="truncate opacity-80">
-                            {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
+                          <p className={serviceLineClass}>
+                            {serviceLine}
                           </p>
                         </>
                       ) : (
@@ -1299,8 +1306,8 @@ export default function DaySwimLanes({
                               : `#${String(ev.id).slice(-6).toUpperCase()}`}
                             </span>
                           </div>
-                          <p className="truncate opacity-80">
-                            {ev.serviceNames?.map(formatServiceDisplayName).join(", ")}
+                          <p className={serviceLineClass}>
+                            {serviceLine}
                           </p>
                           {(ev.vehicleDisplay || ev.licensePlate) && (
                             <p className="mt-0.5 flex items-center gap-1 truncate opacity-75 text-[10px]">

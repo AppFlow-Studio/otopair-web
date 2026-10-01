@@ -5938,31 +5938,37 @@ export async function resolveServiceNames(
 }
 
 /** Appends the selected option_label (e.g. "Front and rear", "AGM") onto
- *  each service name so mechanic-facing views show the picked variant. */
+ *  each service name so mechanic-facing views show the picked variant, then
+ *  the booking's custom_services lines. SHOP-facing only (/jobs lists and the
+ *  owner/mechanic dashboards): when both are empty it falls back to the work
+ *  the booking's other fields imply — see impliedServiceNames (bug #408).
+ *  resolveServiceNames above deliberately has no such fallback: it also feeds
+ *  customer-facing reads, notification copy and the inspection's tire/rotor
+ *  service flags. */
 async function resolveServiceLabels(
   ctx: any,
-  serviceIds: Array<any> | undefined,
-  selectedOptions:
-    | Array<{ service_id: any; option_label?: string }>
-    | undefined,
-  /** booking.custom_services — see resolveServiceNames. */
-  customServices?: unknown,
+  booking: {
+    service_ids?: Array<Id<"services">>;
+    selected_service_options?: Array<{ service_id: Id<"services">; option_label?: string }>;
+    custom_services?: unknown;
+  },
 ): Promise<string[]> {
-  const custom = customServiceNames(customServices);
-  if (!serviceIds || serviceIds.length === 0) return custom;
+  const serviceIds = booking.service_ids ?? [];
   const byServiceId = new Map<string, string>();
-  for (const opt of selectedOptions ?? []) {
+  for (const opt of booking.selected_service_options ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
   const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
-      const name = service?.name ?? "Unknown Service";
+      // `||`, not `??`: a services row with a blank name must not render blank.
+      const name = service?.name?.trim() || "Unknown Service";
       const label = byServiceId.get(String(serviceId));
       return label ? `${name} — ${label}` : name;
     }),
   );
-  return [...labelled, ...custom];
+  const labels = [...labelled, ...customServiceNames(booking.custom_services)];
+  return labels.length > 0 ? labels : impliedServiceNames(booking);
 }
 
 function firstDefinedNumber(...values: unknown[]) {
@@ -6989,7 +6995,7 @@ function getTireReplacementPositions(booking: {
 // import back into this file; re-imported here since this file's own
 // callers (grantRotorPhotoEvidence etc.) still reference it by this name.
 import { hydrateTieredInspectionState } from "./lib/hydrateInspectionState";
-import { customServiceNames } from "./lib/customServiceNames";
+import { customServiceNames, impliedServiceNames } from "./lib/customServiceNames";
 export { hydrateTieredInspectionState };
 
 /**
@@ -10782,12 +10788,7 @@ export async function applyBookingStatusTransition(
 async function mapBookingListItem(ctx: any, booking: any) {
   const customer = await ctx.db.get(booking.user_id);
   const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-  const serviceNames = await resolveServiceLabels(
-    ctx,
-    booking.service_ids,
-    booking.selected_service_options,
-    booking.custom_services,
-  );
+  const serviceNames = await resolveServiceLabels(ctx, booking);
   const mechanic = booking.mechanic_id
     ? await ctx.db.get(booking.mechanic_id)
     : null;
@@ -10824,12 +10825,7 @@ async function mapBookingListItem(ctx: any, booking: any) {
 async function mapMechanicDashboardJob(ctx: any, booking: any) {
   const customer = await ctx.db.get(booking.user_id);
   const vehicleLabels = await resolveVehicleLabel(ctx, booking.vin);
-  const serviceNames = await resolveServiceLabels(
-    ctx,
-    booking.service_ids,
-    booking.selected_service_options,
-    booking.custom_services,
-  );
+  const serviceNames = await resolveServiceLabels(ctx, booking);
   const vehiclePassportComplete = await hasCompleteVehiclePassportForBooking(
     ctx,
     booking
@@ -12361,6 +12357,13 @@ export const getJobDetail = query({
       vehicle: vehicleLabels.full,
       vehicleShort: vehicleLabels.short,
       serviceNames,
+      // Display-only service line: `serviceNames`, or — when it's empty — the
+      // work the booking's other fields imply, the same fallback the schedule
+      // block and /jobs row use (bug #408), so opening a block names it the same
+      // way. Never feed this to the MPI / diagnostic flags: those read
+      // `serviceNames`, which stays exactly the booking's recorded lines.
+      serviceLineNames:
+        serviceNames.length > 0 ? serviceNames : impliedServiceNames(booking),
       // Per-service agreed labor hours, matched to `serviceNames` by name, so the
       // scope card can render each service's own time.
       perServiceLabor,
@@ -16732,7 +16735,9 @@ export const getCustomerLateNotificationSentMonitors = query({
         if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+        // Shop-facing: same labels (incl. the implied-work fallback) as the
+        // dashboard rows beside this alert (bug #408).
+        const serviceNames = await resolveServiceLabels(ctx, booking);
         return {
           _id: row._id,
           bookingId: booking._id,
@@ -16780,7 +16785,9 @@ export const getCustomerOnMyWayMonitors = query({
         if (scope && !bookingVisibleUnderScope(scope, booking.mechanic_id ?? null)) return null;
         const customer = await ctx.db.get(booking.user_id);
         const mechanic = booking.mechanic_id ? await ctx.db.get(booking.mechanic_id) : null;
-        const serviceNames = await resolveServiceNames(ctx, booking.service_ids, booking.custom_services);
+        // Shop-facing: same labels (incl. the implied-work fallback) as the
+        // dashboard rows beside this alert (bug #408).
+        const serviceNames = await resolveServiceLabels(ctx, booking);
         return {
           _id: row._id,
           bookingId: booking._id,

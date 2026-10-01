@@ -16,7 +16,8 @@ import {
 } from "./lib/notificationScope";
 import { metaMakeModel } from "./lib/bookingEnrichment";
 import { capturedCentsOrNull } from "./lib/money";
-import { customServiceNames } from "./lib/customServiceNames";
+import { customServiceNames, impliedServiceNames } from "./lib/customServiceNames";
+import type { Id } from "./_generated/dataModel";
 import {
   getActiveQuoteCheckoutHold,
   getQuoteHoldExpiresAt,
@@ -58,52 +59,41 @@ async function getPrimaryAuthorizedShop(ctx: any, userId: any) {
   return null;
 }
 
-async function resolveServiceNames(
-  ctx: any,
-  serviceIds?: Array<any>,
-  /** booking.custom_services — off-catalog lines, appended after the catalog
-   *  ones. Without this a custom-only booking renders blank everywhere. */
-  customServices?: unknown,
-) {
-  const custom = customServiceNames(customServices);
-  if (!serviceIds || serviceIds.length === 0) return custom;
-  const names = await Promise.all(
-    serviceIds.map(async (serviceId: any) => {
-      const service = await ctx.db.get(serviceId);
-      return service?.name ?? "Unknown Service";
-    })
-  );
-  return [...names, ...custom];
-}
-
-/** Like `resolveServiceNames` but appends the per-service option label
- *  (e.g. "Brake Pad Replacement — Front and rear", "Tire Rotation — Front 2 only")
- *  when the booking has a selected_service_options entry for that service.
- *  Used by the mechanic's schedule so the option is visible at a glance. */
+/** Service lines for a schedule block: catalog names with the per-service
+ *  option label appended (e.g. "Brake Pad Replacement — Front and rear",
+ *  "Tire Rotation — Front 2 only") when the booking has a
+ *  selected_service_options entry for that service, then the off-catalog
+ *  custom_services lines. Used by the mechanic's schedule so the option is
+ *  visible at a glance.
+ *
+ *  When both are empty it falls back to the work the booking's other fields
+ *  imply (tire/rotor specs, diagnostic system, custom-line parts) — see
+ *  impliedServiceNames. A booking with none of those still returns [], and the
+ *  client renders its "No services listed" placeholder (bug #408). */
 async function resolveServiceLabels(
   ctx: any,
-  serviceIds: Array<any> | undefined,
-  selectedOptions:
-    | Array<{ service_id: any; option_label?: string }>
-    | undefined,
-  /** booking.custom_services — see resolveServiceNames. */
-  customServices?: unknown,
+  booking: {
+    service_ids?: Array<Id<"services">>;
+    selected_service_options?: Array<{ service_id: Id<"services">; option_label?: string }>;
+    custom_services?: unknown;
+  },
 ): Promise<string[]> {
-  const custom = customServiceNames(customServices);
-  if (!serviceIds || serviceIds.length === 0) return custom;
+  const serviceIds = booking.service_ids ?? [];
   const byServiceId = new Map<string, string>();
-  for (const opt of selectedOptions ?? []) {
+  for (const opt of booking.selected_service_options ?? []) {
     if (opt.option_label) byServiceId.set(String(opt.service_id), opt.option_label);
   }
   const labelled = await Promise.all(
     serviceIds.map(async (serviceId: any) => {
       const service = await ctx.db.get(serviceId);
-      const name = service?.name ?? "Unknown Service";
+      // `||`, not `??`: a services row with a blank name must not render blank.
+      const name = service?.name?.trim() || "Unknown Service";
       const label = byServiceId.get(String(serviceId));
       return label ? `${name} — ${label}` : name;
     }),
   );
-  return [...labelled, ...custom];
+  const labels = [...labelled, ...customServiceNames(booking.custom_services)];
+  return labels.length > 0 ? labels : impliedServiceNames(booking);
 }
 
 async function resolveVehicleDisplay(ctx: any, vin?: string | null): Promise<string | null> {
@@ -412,12 +402,7 @@ export const getBookingsForRange = query({
           mechanicName: mechanic
             ? `${mechanic.first_name} ${mechanic.last_name}`.trim()
             : null,
-          serviceNames: await resolveServiceLabels(
-            ctx,
-            booking.service_ids,
-            booking.selected_service_options,
-            booking.custom_services,
-          ),
+          serviceNames: await resolveServiceLabels(ctx, booking),
           vehicleDisplay: await resolveVehicleDisplay(ctx, booking.vin),
           licensePlate: booking.vin ? String(booking.vin).slice(-4) : null,
           totalCost: booking.total_cost,

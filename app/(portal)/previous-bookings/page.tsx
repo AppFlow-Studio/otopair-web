@@ -14,7 +14,7 @@ import RescheduleConfirmationDialog, {
 } from "@/components/reschedule-confirmation-dialog";
 import { StatusPill } from "@/components/status-pill";
 import { formatJobDate } from "../bookings/booking-list-shared";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceLine } from "@/lib/service-catalog";
 
 type Segment = "bookings" | "quotes";
 
@@ -328,7 +328,7 @@ function BookingsTable({
                 </td>
                 <td className="px-3 py-4 text-foreground">{job.vehicle}</td>
                 <td className="max-w-56 truncate px-3 py-4 text-foreground">
-                  {job.serviceNames.map(formatServiceDisplayName).join(", ")}
+                  {formatServiceLine(job.serviceNames)}
                 </td>
                 <td className="px-3 py-4">
                   <StatusPill status={job.status} />

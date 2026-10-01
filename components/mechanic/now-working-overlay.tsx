@@ -42,7 +42,7 @@ import { FindingTaxonomyDialog } from "@/components/finding-taxonomy-dialog";
 import { BrakeAxleDialog } from "@/components/brake-axle-dialog";
 import { getBookingServiceFlags } from "@/lib/vehicle-service-relevance";
 import type { AxlePosition } from "@/convex/lib/brakeScope";
-import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatServiceDisplayName, formatServiceLine } from "@/lib/service-catalog";
 import { errorMessage } from "@/lib/feedback";
 
 /** Brake-pad / rotor replacement needs an axle scope before it's added mid-job
@@ -778,7 +778,7 @@ export function NowWorkingPane({
                 {job.vehicle}
               </p>
               <p className="text-sm text-slate-400">
-                {job.serviceNames.map(formatServiceDisplayName).join(" · ")}
+                {formatServiceLine(job.serviceLineNames ?? job.serviceNames, " · ")}
               </p>
             </div>
 

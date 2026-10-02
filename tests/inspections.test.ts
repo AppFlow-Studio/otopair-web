@@ -202,6 +202,29 @@ describe("zone checkpoints", () => {
     });
     expect(await readCompletedAt(t, seed.bookingId)).toBe(first);
   });
+
+  it("autosaves an MPI draft without revalidating a pre-check-completed zone", async () => {
+    const t = makeT();
+    const seed = await seedConfirmedBooking(t, { status: "in_progress" });
+    await t.run(async (ctx) => {
+      const service = await ctx.db.query("services").first();
+      await ctx.db.patch(service!._id, {
+        name: "Tire Rotation",
+        slug: "tire_rotation",
+      });
+    });
+    const owner = t.withIdentity(identityFor(seed.ownerClerkId));
+    const inspection = inspectionWith(true);
+    inspection.zones[0].done_phase = "pre";
+
+    await expect(
+      owner.mutation(api.bookings.savePrejob, {
+        bookingId: seed.bookingId,
+        prejob,
+        inspection,
+      }),
+    ).resolves.toBeDefined();
+  });
 });
 
 describe("unaddressed findings", () => {

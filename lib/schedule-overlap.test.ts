@@ -76,6 +76,31 @@ test("overlapsMechanicBooking ignores no-show bookings", () => {
   assert.equal(hasOverlap, false);
 });
 
+test("completed booking does not block another booking in the same window", () => {
+  const conflict = getMechanicAssignmentConflict(
+    {
+      _id: "booking-new",
+      scheduledDate: "2026-09-21",
+      scheduledTime: "16:35",
+      estimatedMinutes: 60,
+    },
+    "mech-1",
+    [
+      {
+        _id: "booking-done",
+        scheduledDate: "2026-09-21",
+        scheduledTime: "16:30",
+        estimatedMinutes: 60,
+        status: "completed",
+        mechanicId: "mech-1",
+      },
+    ],
+    [],
+  );
+
+  assert.equal(conflict, null);
+});
+
 test("getBufferedWindowEndMinutes adds the shop buffer to the proposed end", () => {
   assert.equal(getBufferedWindowEndMinutes("12:15", 10), 745);
   assert.equal(getBufferedWindowEndMinutes("12:15", 20), 755);

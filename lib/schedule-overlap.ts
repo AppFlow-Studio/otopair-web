@@ -140,7 +140,8 @@ export function overlapsMechanicBooking(
     if (
       booking.status === "cancelled" ||
       booking.status === "declined" ||
-      booking.status === "no_show"
+      booking.status === "no_show" ||
+      booking.status === "completed"
     ) {
       return false;
     }

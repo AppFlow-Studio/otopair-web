@@ -955,36 +955,23 @@ export const OPPOSITE_CORNER: Record<CornerZoneId, CornerZoneId> = {
 };
 
 /**
- * Deep-copies every measured/observed value from a corner into a zone patch for
- * {@link patchInspectionZone}. Photos are intentionally excluded — they're
- * position-specific evidence — as are done/dirty, which patchInspectionZone
- * re-derives (it clears `done` so the copied-into corner is re-reviewed).
- */
-/**
- * What mirrors between corners, per phase (Spec v2 §5).
- *
- * Only identity — facts about the wheel or the part fitted, which really are
- * the same on the sibling corner. Every measured or observed value is
- * excluded: copying them is how a staggered setup ended up recorded as 40/43
- * psi on both axles (Aug 20), and how one corner's pad reading could stand in
- * for a corner nobody looked at.
+ * All corner fields in the active phase, including the detailed tread inputs
+ * and rotor unit that are rendered outside the template field list.
  */
 export const CORNER_COPY_FIELDS: Record<InspectionPhase, readonly string[]> = {
-  // Sidewall identity. Never tread, psi or wear — those are per-wheel readings.
-  pre: ["tire_brand", "tire_model", "tire_size", "tire_type", "run_flat"],
-  // "Nobody runs pads on one side", so brand/type mirrors. rotor_applicable is
-  // a vehicle fact (disc vs drum), not a reading, and it gates the rotor rows —
-  // without it the sibling corner shows no rotor fields until re-answered.
-  // Never pad_inner, pad_outer, rotor or desc.
-  mpi: ["pad_brand", "rotor_applicable"],
+  pre: [
+    ...INSPECTION_ZONES_BY_ID.FL.fields.filter((field) => field.phase === "pre").map((field) => field.key),
+    "tread_inner", "tread_center", "tread_outer", "tread_mode",
+  ],
+  mpi: [
+    ...INSPECTION_ZONES_BY_ID.FL.fields.filter((field) => field.phase === "mpi").map((field) => field.key),
+    "rotor_unit",
+  ],
 };
 
 /**
- * Deep-copies the mirrorable values from a corner into a zone patch for
- * {@link patchInspectionZone}, scoped to the phase being filled. Photos are
- * excluded — they're position-specific evidence — as are done/dirty, which
- * patchInspectionZone re-derives (it clears `done` so the copied-into corner
- * is re-reviewed).
+ * Copies the active phase's values into the same-axle sibling. Photos stay
+ * position-specific; patchInspectionZone reopens the destination for review.
  */
 export function cornerCopyPatch(
   source: ZoneState,
@@ -992,13 +979,14 @@ export function cornerCopyPatch(
   phase: InspectionPhase,
 ): Partial<ZoneState> {
   const allowed = new Set(CORNER_COPY_FIELDS[phase]);
-  // patchInspectionZone shallow-merges, so each bucket must be returned whole:
-  // the destination's own readings underneath, the copied fields laid over.
+  // patchInspectionZone shallow-merges, so return each bucket whole. Clear old
+  // destination values in this phase, including skip markers for blank source
+  // fields, while retaining the other phase's values.
   const merge = <T,>(
     into: Record<string, T>,
     from: Record<string, T>,
   ): Record<string, T> => ({
-    ...into,
+    ...Object.fromEntries(Object.entries(into).filter(([key]) => !allowed.has(key))),
     ...Object.fromEntries(
       Object.entries(from).filter(([key]) => allowed.has(key)),
     ),
@@ -1013,8 +1001,6 @@ export function cornerCopyPatch(
     ),
     text: merge(destination.text, source.text),
     select: merge(destination.select, source.select),
-    // Carry a skip marker only for a field that was itself copied, so "not
-    // visible" on the source can't silently mark an uncopied row answered.
     statuses: merge(destination.statuses, source.statuses),
     methods: merge(destination.methods, source.methods),
   };

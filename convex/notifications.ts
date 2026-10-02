@@ -51,6 +51,7 @@ export const getMyNotifications = query({
         let customerName: string | null = null;
         let vehicleLabel: string | null = null;
         let shopName: string | null = null;
+        let shopTimezone: string | null = null;
         let scheduledDate: string | null = null;
         let scheduledTime: string | null = null;
         let shortHandle: string | null = null;
@@ -150,12 +151,14 @@ export const getMyNotifications = query({
         if (row.shop_id) {
           const shop: any = await ctx.db.get(row.shop_id);
           shopName = shop?.name ?? null;
+          shopTimezone = shop?.timezone ?? null;
         }
         // Fall back to the booking's shop when the row itself isn't shop-scoped
         // (customer rows are user-scoped but still concern a shop).
-        if (!shopName && bookingShopId) {
+        if (!shopTimezone && bookingShopId) {
           const shop: any = await ctx.db.get(bookingShopId);
-          shopName = shop?.name ?? null;
+          shopName ??= shop?.name ?? null;
+          shopTimezone = shop?.timezone ?? null;
         }
         // Payload fallback for car-bound rows without a booking.
         const pl = row.payload ?? {};
@@ -190,6 +193,7 @@ export const getMyNotifications = query({
           customerName,
           vehicleLabel,
           shopName,
+          shopTimezone,
           shortHandle,
           scheduledDate,
           scheduledTime,

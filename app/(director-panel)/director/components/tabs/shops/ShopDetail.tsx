@@ -22,6 +22,7 @@ import type {
 } from './types'
 import { licenseLabel, documentGroupOf, DOCUMENT_GROUPS, CUSTOM_GROUP_LABEL } from '@/lib/license-catalog'
 import { formatServiceDisplayName } from '@/lib/service-catalog'
+import { shopTodayCalendarDate } from '@/lib/shopTimezone'
 
 const TABS = ['Profile', 'Hours', 'Services & Rate', 'Compliance', 'Mechanics', 'Calendar', 'Bookings', 'Insights'] as const
 
@@ -612,7 +613,7 @@ export const ShopDetail = ({ shopId, onBack, onOpenMechanic }:
               <Button size="sm" onClick={() => setWeekMonday(m => { const d = new Date(m); d.setDate(d.getDate() - 7); return d })}>‹</Button>
               <span style={{ fontSize:13, fontWeight:500, color:'var(--slate-700)' }}>Week of {dates[0]} – {dates[6]}</span>
               <Button size="sm" onClick={() => setWeekMonday(m => { const d = new Date(m); d.setDate(d.getDate() + 7); return d })}>›</Button>
-              <Button size="sm" onClick={() => setWeekMonday(mondayOf(new Date()))}>Today</Button>
+              <Button size="sm" onClick={() => setWeekMonday(mondayOf(shopTodayCalendarDate(profile?.timezone ?? undefined)))}>Today</Button>
             </div>
             <div style={{ display:'flex', alignItems:'center', gap:12, fontSize:11, color:'var(--slate-500)' }}>
               <span style={{ display:'inline-flex', alignItems:'center', gap:5 }}><span style={{ width:10, height:10, borderRadius:3, background:'var(--green-100, #D1FAE5)', boxShadow:'inset 0 0 0 1px #6EE7B7' }} /> available</span>

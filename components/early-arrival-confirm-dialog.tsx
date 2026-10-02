@@ -7,6 +7,7 @@ import type { Id } from "@/convex/_generated/dataModel";
 import { Loader2 } from "lucide-react";
 import ConfirmationDialog from "@/components/confirmation-dialog";
 import { addMinutesToHHMM } from "@/lib/schedule-overlap";
+import { formatShopTime, shopTimezoneAbbreviation } from "@/lib/shopTimezone";
 import type { ScheduleBooking } from "@/lib/schedule-overlap";
 
 type EarlyArrivalConfirmDialogProps = {
@@ -264,6 +265,7 @@ export default function EarlyArrivalConfirmDialog({
     api.bookings.getEarlyPushPreview,
     open ? { bookingId } : "skip",
   );
+  const shopContext = useQuery(api.bookings.getMyShopJobContext);
   const pushEarlier = useMutation(api.bookings.pushBookingEarlierAndArrive);
   const [actioning, setActioning] = useState(false);
   const [error, setError] = useState("");
@@ -276,6 +278,10 @@ export default function EarlyArrivalConfirmDialog({
   const proposedEnd =
     preview?.proposedEndTime ??
     (proposedTime ? addMinutesToHHMM(proposedTime, durationMinutes) : null);
+  const shopTimezone = shopContext?.shopTimezone;
+  const timezoneLabel = shopTimezone
+    ? shopTimezoneAbbreviation(scheduledDate, scheduledTime, shopTimezone)
+    : null;
   const conflict = preview?.conflict ?? null;
   const isShopHoursConflict =
     conflict === "outside_shop_hours" || conflict === "ends_outside_shop_hours";
@@ -380,15 +386,18 @@ export default function EarlyArrivalConfirmDialog({
                 ? `Customer is ${preview.minutesEarly} min early`
                 : "Customer is here"}
               {mechanicName ? ` for ${mechanicName}` : ""}. Original start was{" "}
-              <span className="font-medium">{formatTimeLabel(scheduledTime)}</span>.
+              <span className="font-medium">{formatShopTime(scheduledTime, scheduledDate, shopTimezone)}</span>.
             </p>
+            {timezoneLabel ? (
+              <p className="text-xs text-muted-foreground">All times shown in the shop&apos;s timezone ({timezoneLabel}).</p>
+            ) : null}
             {preview.eligible && proposedTime && proposedEnd ? (
               <>
                 <div className="rounded-lg border border-border bg-card p-3">
                   <p className="text-foreground">
                     Push start to{" "}
-                    <span className="font-semibold">{formatTimeLabel(proposedTime)}</span>{" "}
-                    (ends {formatTimeLabel(proposedEnd)}, {durationMinutes} min).
+                    <span className="font-semibold">{formatShopTime(proposedTime, preview.proposedScheduledDate, shopTimezone)}</span>{" "}
+                    (ends {formatShopTime(proposedEnd, preview.proposedScheduledDate, shopTimezone)}, {durationMinutes} min).
                   </p>
                   {preview.alternateMechanicId ? (
                     <p className="mt-1 text-xs text-muted-foreground">

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   addMonths,
-  endOfMonth,
   format,
   isSameDay,
   isSameMonth,
@@ -41,6 +41,10 @@ function toISO(date: Date): string {
 
 const WEEKDAYS = ["S", "M", "T", "W", "T", "F", "S"];
 
+export function getDatePickerPopoverPosition({ left, bottom }: { left: number; bottom: number }) {
+  return { left, top: bottom + 8 };
+}
+
 export default function DatePicker({
   value,
   onChange,
@@ -57,15 +61,20 @@ export default function DatePicker({
   const [open, setOpen] = useState(false);
   const [viewMonth, setViewMonth] = useState(() => selected ?? new Date());
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
+  const [popoverPosition, setPopoverPosition] = useState<{ left: number; top: number } | null>(null);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (selected) setViewMonth(selected);
   }, [value]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!open) return;
     function onPointerDown(e: MouseEvent) {
-      if (!wrapperRef.current?.contains(e.target as Node)) setOpen(false);
+      const target = e.target as Node;
+      if (!wrapperRef.current?.contains(target) && !popoverRef.current?.contains(target)) setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
@@ -77,6 +86,28 @@ export default function DatePicker({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    function positionPopover() {
+      const trigger = triggerRef.current;
+      if (!trigger) return;
+      const position = getDatePickerPopoverPosition(trigger.getBoundingClientRect());
+      const width = popoverRef.current?.offsetWidth ?? 280;
+      const height = popoverRef.current?.offsetHeight ?? 320;
+      setPopoverPosition({
+        left: Math.max(8, Math.min(position.left, window.innerWidth - width - 8)),
+        top: Math.max(8, Math.min(position.top, window.innerHeight - height - 8)),
+      });
+    }
+    positionPopover();
+    window.addEventListener("scroll", positionPopover, true);
+    window.addEventListener("resize", positionPopover);
+    return () => {
+      window.removeEventListener("scroll", positionPopover, true);
+      window.removeEventListener("resize", positionPopover);
+    };
+  }, [open, viewMonth]);
 
   const monthStart = startOfMonth(viewMonth);
   const gridStart = startOfWeek(monthStart, { weekStartsOn: 0 });
@@ -98,6 +129,7 @@ export default function DatePicker({
   return (
     <div ref={wrapperRef} className={cn("relative", className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((v) => !v)}
@@ -111,8 +143,16 @@ export default function DatePicker({
         <CalendarIcon className="w-4 h-4 text-muted-foreground shrink-0" />
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-full z-50 mt-2 w-[280px] rounded-xl border border-border bg-card shadow-lg p-3">
+      {open && typeof document !== "undefined" && createPortal(
+        <div
+          ref={popoverRef}
+          style={{
+            left: popoverPosition?.left ?? 0,
+            top: popoverPosition?.top ?? 0,
+            visibility: popoverPosition ? "visible" : "hidden",
+          }}
+          className="fixed z-[9999] w-[280px] rounded-xl border border-border bg-card p-3 shadow-lg"
+        >
           {/* Header */}
           <div className="flex items-center justify-between mb-2">
             <button
@@ -211,7 +251,8 @@ export default function DatePicker({
               Today
             </button>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

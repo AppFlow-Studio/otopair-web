@@ -659,6 +659,7 @@ export const getByUserIdWithDetails = query({
           vin: booking.vin,
           shopName,
           shopPhone,
+          shopTimezone: shop?.timezone ?? DEFAULT_SHOP_TIMEZONE,
           mechanicName,
           mechanicImageUrl,
           vehicleDisplay,
@@ -6756,7 +6757,7 @@ async function validateTieredInspectionInput({
     }
   }
   for (const [zoneId, zoneState] of Object.entries(state.zones)) {
-    if (!zoneState?.done) continue;
+    if (!isZoneDoneForPhase(zoneState, phase)) continue;
     const result = validateZoneForCompletion(state, zoneId as keyof typeof INSPECTION_ZONES_BY_ID, context);
     if (!result.valid) {
       throw new Error(`${INSPECTION_ZONES_BY_ID[zoneId as keyof typeof INSPECTION_ZONES_BY_ID].label}: ${result.error}`);
@@ -9020,7 +9021,7 @@ async function applyOverrunExtension(
     ctx,
     booking.vin,
   );
-  const overrunMessage = `Your ${overrunYmm ?? "appointment"} is now estimated to finish around ${newEndTimeHHMM}. Tap reschedule if the new time doesn't work.`;
+  const overrunMessage = `Your ${overrunYmm ?? "appointment"} is now estimated to finish around ${newEndTimeHHMM}.`;
   await enqueueNotificationOutbox(ctx, {
     shopId: booking.shop_id,
     bookingId: booking._id,
@@ -10678,6 +10679,7 @@ export const getMyShopJobContext = query({
     return {
       shopId: shop._id,
       shopName: shop.name,
+      shopTimezone: shop.timezone ?? DEFAULT_SHOP_TIMEZONE,
       userRole: primary.role,
       hours: hours.map((hour: any) => ({
         _id: hour._id,

@@ -36,6 +36,11 @@ import {
   type BookingStatus,
 } from "@/lib/booking-status";
 import { usePortalSidebar } from "../portal-context";
+import {
+  shopTimezoneAbbreviation,
+  shopTodayCalendarDate,
+  shopTodayISO,
+} from "@/lib/shopTimezone";
 import OpenBlockersBar from "@/components/mechanic/open-blockers-bar";
 import {
   statusColors,
@@ -73,6 +78,7 @@ import ActiveJobStrip from "@/components/active-job-strip";
 import { BottomSheet } from "@/components/ui/bottom-sheet";
 import { useIsCompact } from "@/lib/use-media-query";
 import { useEntityLabel } from "@/lib/use-entity-label";
+import { ScheduleSidePanel } from "./schedule-side-panel";
 import ConfirmationDialog, { ShortcutLabel } from "@/components/confirmation-dialog";
 import {
   drawerInputClassName,
@@ -249,7 +255,7 @@ export default function SchedulePage() {
   const entityLabel = useEntityLabel();
   // <xl (phones + iPads): side panels become slide-up bottom sheets.
   const compact = useIsCompact();
-  const [currentDate, setCurrentDate] = useState(new Date());
+  const [currentDate, setCurrentDate] = useState(() => shopTodayCalendarDate());
   const [nowTimestamp, setNowTimestamp] = useState(() => Date.now());
   const [currentView, setCurrentView] = useState<"month" | "week" | "day">("day");
   const [mechanicFilter, setMechanicFilter] = useState<string>("all");
@@ -372,6 +378,17 @@ export default function SchedulePage() {
   // Compact (<xl) controls sheet: Today + view switcher + mechanic + legend
   const [controlsOpen, setControlsOpen] = useState(false);
   const context = useQuery(api.schedule.getScheduleContext);
+  const shopContext = useQuery(api.bookings.getMyShopJobContext);
+  const timezoneLabel = shopContext?.shopTimezone
+    ? shopTimezoneAbbreviation(shopTodayISO(shopContext.shopTimezone), "12:00", shopContext.shopTimezone)
+    : null;
+  const initialShopDateSet = useRef(false);
+
+  useEffect(() => {
+    if (!shopContext?.shopTimezone || initialShopDateSet.current) return;
+    setCurrentDate(shopTodayCalendarDate(shopContext.shopTimezone));
+    initialShopDateSet.current = true;
+  }, [shopContext?.shopTimezone]);
   const portalAccess = useQuery(api.shops.getMyPortalAccess);
   const viewerMechanicId =
     portalAccess && portalAccess.status === "active"
@@ -1562,7 +1579,10 @@ export default function SchedulePage() {
     setCurrentView(view as "month" | "week" | "day");
   }, []);
 
-  const goToday = useCallback(() => setCurrentDate(new Date()), []);
+  const goToday = useCallback(
+    () => setCurrentDate(shopTodayCalendarDate(shopContext?.shopTimezone)),
+    [shopContext?.shopTimezone],
+  );
 
   const goBack = useCallback(() => {
     if (currentView === "month") setCurrentDate((d) => subMonths(d, 1));
@@ -1643,7 +1663,10 @@ export default function SchedulePage() {
   if (context === null) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">Schedule</h1>
+          {timezoneLabel ? <p className="text-xs text-muted-foreground">All appointment times: {timezoneLabel}</p> : null}
+        </div>
         <div className="bg-card rounded-xl border border-border p-8 text-center text-muted-foreground">
           This page is for shop team members. If you need access, reach out to your shop owner.
         </div>
@@ -1682,25 +1705,12 @@ export default function SchedulePage() {
     </div>
   );
 
-  // Each side panel is a fixed 552px flex-sibling on desktop and a slide-up
-  // bottom sheet on phones/iPads (<xl). `children` is rendered in exactly one
-  // branch, so the heavy drawer components mount once.
+  // One stable tree changes presentation at xl without remounting its children.
+  // This matters for drawers whose in-progress form state lives locally.
   const sidePanel = (open: boolean, onClose: () => void, children: ReactNode) =>
-    compact ? (
-      <BottomSheet open={open} onClose={onClose} fullHeight contentClassName="schedule-scope">
-        <div className="flex h-full flex-col overflow-hidden">{children}</div>
-      </BottomSheet>
-    ) : (
-      <div
-        className={`flex-shrink-0 overflow-hidden transition-[width] duration-200 ease-out ${
-          open ? "w-[552px]" : "w-0"
-        }`}
-      >
-        <div className="w-[528px] ml-6 flex h-[calc(100dvh-124px)] min-h-[500px] flex-col overflow-hidden rounded-2xl border border-border bg-card">
-          {children}
-        </div>
-      </div>
-    );
+    <ScheduleSidePanel open={open} onClose={onClose}>
+      {children}
+    </ScheduleSidePanel>;
 
   return (
     <div className="space-y-6 schedule-scope">
@@ -1711,7 +1721,10 @@ export default function SchedulePage() {
       <div className="flex items-center justify-between gap-2">
         {/* Left: page title + date navigation */}
         <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-          <h1 className="shrink-0 text-lg sm:text-2xl font-bold text-foreground">Schedule</h1>
+          <div>
+            <h1 className="shrink-0 text-lg sm:text-2xl font-bold text-foreground">Schedule</h1>
+            {timezoneLabel ? <p className="text-xs text-muted-foreground">Times: {timezoneLabel}</p> : null}
+          </div>
           {context.lateStartTestMode ? (
             <span className="hidden lg:inline-flex items-center rounded-full border border-amber-300 bg-amber-50 px-3 py-1 text-xs font-semibold uppercase tracking-[0.16em] text-amber-800">
               Late-start test mode active

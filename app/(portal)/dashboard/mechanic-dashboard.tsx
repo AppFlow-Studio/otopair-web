@@ -28,6 +28,7 @@ import type {
   PreJobSurveyPayload,
 } from "@/lib/vehicle-passport";
 import { formatServiceDisplayName } from "@/lib/service-catalog";
+import { formatShopTime } from "@/lib/shopTimezone";
 import {
   GreetingHeader,
   MetricRow,
@@ -93,15 +94,8 @@ function getGreeting() {
   return "Good evening";
 }
 
-function formatTime(time: string) {
-  const [hours, minutes] = time.split(":").map(Number);
-  const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+function formatTime(time: string, date?: string, timezone?: string) {
+  return formatShopTime(time, date, timezone);
 }
 
 function formatDate(dateString: string) {
@@ -115,6 +109,11 @@ function formatDate(dateString: string) {
 export default function MechanicDashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const shopContext = useQuery(api.bookings.getMyShopJobContext) as
+    | { shopTimezone?: string }
+    | null
+    | undefined;
+  const shopTimezone = shopContext?.shopTimezone;
   const dashboard = useQuery(api.bookings.getMyMechanicDashboard, {
     localDate: new Date().toLocaleDateString("en-CA"),
   });
@@ -474,7 +473,7 @@ export default function MechanicDashboard() {
         dot: "primary",
         primary: `${job.customerDisplayName} · ${job.vehicle}`,
         secondary: job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined,
-        meta: `${formatTime(job.scheduledTime)}${enroute ? " · en route" : ""}`,
+        meta: `${formatTime(job.scheduledTime, job.scheduledDate, shopTimezone)}${enroute ? " · en route" : ""}`,
         action: passportIncomplete
           ? {
               label: "Confirm specs",
@@ -690,7 +689,7 @@ export default function MechanicDashboard() {
                 <CommandRow
                   key={id}
                   dot={statusDot(job.status)}
-                  code={formatTime(job.scheduledTime)}
+                  code={formatTime(job.scheduledTime, job.scheduledDate, shopTimezone)}
                   primary={`${job.customerDisplayName} · ${job.vehicle}`}
                   secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                   meta={statusText(job.status)}
@@ -718,7 +717,7 @@ export default function MechanicDashboard() {
                       <CommandRow
                         key={id}
                         dot="muted"
-                        code={formatTime(job.scheduledTime)}
+                        code={formatTime(job.scheduledTime, job.scheduledDate, shopTimezone)}
                         primary={`${job.customerDisplayName} · ${job.vehicle}`}
                         secondary={job.serviceNames.map(formatServiceDisplayName).join(", ") || undefined}
                         onOpen={() => router.push(`/my-bookings?highlight=${id}`)}
@@ -767,7 +766,7 @@ export default function MechanicDashboard() {
           selectedWorkflowBooking
             ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
-              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime, selectedWorkflowBooking.scheduledDate, shopTimezone)}`
             : ""
         }
         bookingServices={selectedWorkflowBooking?.serviceNames?.map(formatServiceDisplayName) ?? []}
@@ -816,7 +815,7 @@ export default function MechanicDashboard() {
           selectedWorkflowBooking
             ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
-              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime, selectedWorkflowBooking.scheduledDate, shopTimezone)}`
             : ""
         }
         system={(selectedWorkflowBooking?.diagnosticSystem ?? "not_sure") as any}
@@ -890,7 +889,7 @@ export default function MechanicDashboard() {
           selectedWorkflowBooking
             ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
-              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime, selectedWorkflowBooking.scheduledDate, shopTimezone)}`
             : ""
         }
         passportData={selectedWorkflowPassport ?? null}
@@ -966,7 +965,7 @@ export default function MechanicDashboard() {
           selectedWorkflowBooking
             ? `${selectedWorkflowBooking.customerName} · ${selectedWorkflowBooking.serviceNames.map(formatServiceDisplayName).join(", ")} · ${formatDate(
                 selectedWorkflowBooking.scheduledDate,
-              )} ${formatTime(selectedWorkflowBooking.scheduledTime)}`
+              )} ${formatTime(selectedWorkflowBooking.scheduledTime, selectedWorkflowBooking.scheduledDate, shopTimezone)}`
             : ""
         }
         passportData={selectedWorkflowPassport ?? null}

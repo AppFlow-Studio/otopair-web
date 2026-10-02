@@ -25,28 +25,24 @@ export const STATUS_TABS: { key: JobStatusFilter; label: string }[] = [
   { key: "no_show", label: "No-show" },
 ];
 
-export function todayString() {
-  return new Date().toLocaleDateString("en-CA");
+import { formatShopTime, shopTodayISO } from "@/lib/shopTimezone";
+
+export function todayString(timezone?: string) {
+  return shopTodayISO(timezone);
 }
 
-export function formatTime(time: string): string {
+export function formatTime(time: string, scheduledDate?: string, timezone?: string): string {
   if (!time) return "";
-  const [hours, minutes] = time.split(":").map(Number);
-  const date = new Date();
-  date.setHours(hours, minutes, 0, 0);
-  return date.toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-  });
+  return formatShopTime(time, scheduledDate, timezone);
 }
 
 export function formatJobDate(
   scheduledDate: string,
   scheduledTime: string,
+  timezone?: string,
 ): string {
-  const today = todayString();
-  const timeLabel = formatTime(scheduledTime);
+  const today = todayString(timezone);
+  const timeLabel = formatTime(scheduledTime, scheduledDate, timezone);
   if (scheduledDate === today) return `Today, ${timeLabel}`;
   const date = new Date(`${scheduledDate}T00:00:00`);
   const dateLabel = date.toLocaleDateString("en-US", {

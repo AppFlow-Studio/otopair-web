@@ -11,6 +11,7 @@ import { v } from "convex/values";
 import { internalQuery, internalMutation } from "../_generated/server";
 import { isPoisonPriceType, isNonPooledPriceType } from "../lib/priceTypes";
 import { findMakeByName } from "../lib/makeKey";
+import { trimsAgree } from "../lib/trimIdentity";
 import { makesSameFamily } from "./contentSanitization";
 import { LABOR_EMPIRICAL_QUOTE_MIN_SAMPLES } from "../lib/labor_aggregation";
 
@@ -32,12 +33,22 @@ export const getVehicleConfigByKey = internalQuery({
  * we can skip the entire enrichment pipeline.
  */
 export const getVehicleConfigByNhtsaVinKey = internalQuery({
-  args: { nhtsaVinKey: v.string() },
+  args: {
+    nhtsaVinKey: v.string(),
+    // The trim the car is being added as. When given, only a config enriched
+    // for that trim is returned (bug #351): the key carries NHTSA's trim, the
+    // config the trim the owner picked, so one key can front several trims.
+    trim: v.optional(v.string()),
+  },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const rows = ctx.db
       .query("vehicle_configs")
-      .withIndex("by_nhtsa_vin_key", (q) => q.eq("nhtsa_vin_key", args.nhtsaVinKey))
-      .first();
+      .withIndex("by_nhtsa_vin_key", (q) => q.eq("nhtsa_vin_key", args.nhtsaVinKey));
+    if (args.trim === undefined) return await rows.first();
+    for await (const cfg of rows) {
+      if (trimsAgree(cfg.trim_name, args.trim)) return cfg;
+    }
+    return null;
   },
 });
 

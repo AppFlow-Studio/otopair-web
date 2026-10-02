@@ -23,6 +23,7 @@ import {
   modelNamesMatch,
 } from "./carApi";
 import { marketCheckTrimFacets } from "./marketCheck";
+import { cleanTrimToken } from "./trimIdentity";
 
 /** Case/separator-insensitive key for matching + dedup. */
 function normKey(s: string): string {
@@ -78,26 +79,6 @@ function prettifyVariant(name: string): string {
   // BMW M designations are written tight ("M5", "M340i"), never "M 5".
   if (/^M\d/.test(name.trim())) return name.trim();
   return name.replace(/^([A-Za-z]+)(\d)/, "$1 $2").trim();
-}
-
-/**
- * Strip Car API's body/door/drivetrain descriptors off a plain trim so the
- * picker shows a bare token. "EX 4dr SUV AWD" → "EX", "Sport 2dr Coupe" →
- * "Sport". Conservative — multi-word trims ("Black Label") survive.
- */
-function cleanTrimToken(raw: string): string {
-  let s = String(raw ?? "").trim();
-  if (!s) return "";
-  // A label that is ONLY body/doors ("2dr", "4dr Sedan", "Coupe") names no
-  // trim — Car API files a model's single base row that way.
-  if (/^\d+\s*-?\s*(?:dr|door)s?\b/i.test(s)) return "";
-  if (/^(?:sedan|coupe|hatchback|wagon|suv|convertible|roadster)\b/i.test(s)) return "";
-  s = s.replace(/\s+\d+\s*-?\s*(?:dr|door)s?\b.*$/i, "");
-  s = s.replace(
-    /\s+\b(?:sedan|coupe|hatchback|wagon|suv|truck|van|minivan|convertible|roadster|cab|pickup|crew|awd|fwd|rwd|4wd|4x4|2wd)\b.*$/i,
-    "",
-  );
-  return s.trim();
 }
 
 /** Dedupe by normalized key, preserving first-seen casing. */

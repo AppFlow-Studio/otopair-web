@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { useMutation, useQuery } from "convex/react";
 import { api } from "@/convex/_generated/api";
+import { displayEngineCode } from "@/convex/lib/engineCodeShape";
 import { makeFunctionReference } from "convex/server";
 import { useApprovalWorkflow, type ApprovalWorkflow } from "@/lib/use-approval-workflow";
 import { computeBookingTax } from "@/lib/tax";
@@ -5313,7 +5314,8 @@ function PartsStep({
     closeSwap();
   };
 
-  const vehicleBarSubtitle = [vehicleLabel, engineCode]
+  // Synthetic stand-ins ("2l_4cyl") aren't engine names — bug #351.
+  const vehicleBarSubtitle = [vehicleLabel, displayEngineCode(engineCode)]
     .filter((v) => typeof v === "string" && v.trim().length > 0)
     .join(" · ");
 

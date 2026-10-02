@@ -1892,7 +1892,8 @@ export const confirmVehicleForUser = action({
       if (args.nhtsaVinKey) {
         existingConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
-          { nhtsaVinKey: args.nhtsaVinKey },
+          // Only a config enriched for the trim being added (bug #351).
+          { nhtsaVinKey: args.nhtsaVinKey, trim: args.trim },
         );
         if (existingConfig) dedupSource = "nhtsa_vin_key";
       }
@@ -2086,7 +2087,8 @@ export const confirmVehicleForShopCustomer = action({
       if (args.nhtsaVinKey) {
         existingConfig = await ctx.runQuery(
           internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
-          { nhtsaVinKey: args.nhtsaVinKey },
+          // Only a config enriched for the trim being added (bug #351).
+          { nhtsaVinKey: args.nhtsaVinKey, trim: args.trim },
         );
         if (existingConfig) dedupSource = "nhtsa_vin_key";
       }

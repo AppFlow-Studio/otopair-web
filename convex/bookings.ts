@@ -81,6 +81,7 @@ import {
 } from "./lib/bookingMoney";
 import { hoursToMinutes } from "../lib/labor-units";
 import { metaMakeModel, resolveVehicleDisplay } from "./lib/bookingEnrichment";
+import { displayEngineCode, formatDisplacementL } from "./lib/engineCodeShape";
 import { customerCancelReasonLabel } from "./lib/cancelReasonLabels";
 import { bookingError, throwBookingError } from "./lib/bookingErrors";
 import {
@@ -5954,18 +5955,12 @@ export async function resolveVehicleLabel(
     const engine = await ctx.db.get(engineIdForLookup);
     if (engine) {
       const displacement =
-        typeof engine.displacement_l === "number"
-          ? `${engine.displacement_l}L`
-          : typeof engine.displacement_liters === "number"
-            ? `${engine.displacement_liters}L`
-            : typeof engine.displacement_liters === "string" &&
-                engine.displacement_liters.trim() !== ""
-              ? `${engine.displacement_liters}L`
-              : "";
-      const code =
-        typeof engine.engine_code === "string" && engine.engine_code.trim() !== ""
-          ? engine.engine_code.trim()
-          : "";
+        formatDisplacementL(engine.displacement_l) ??
+        formatDisplacementL(engine.displacement_liters) ??
+        "";
+      // A synthetic stand-in ("2l_4cyl") is a config-key part, not a name —
+      // bug #351 printed it as "2L 2l_4cyl".
+      const code = displayEngineCode(engine.engine_code) ?? "";
       engineLabel = [displacement, code].filter(Boolean).join(" ");
     }
   }

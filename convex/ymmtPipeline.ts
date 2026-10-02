@@ -431,7 +431,8 @@ export const enrichVehicleFromYmmt = internalAction({
     // where a manual entry meets an already-enriched VIN-decoded twin.
     let existingConfig: any = await ctx.runQuery(
       internal.vehicleEnrichment.v3queries.getVehicleConfigByNhtsaVinKey,
-      { nhtsaVinKey: id.nhtsaVinKey },
+      // Only a config enriched for this trim (bug #351).
+      { nhtsaVinKey: id.nhtsaVinKey, trim: id.trim },
     );
     let dedupSource: "nhtsa_vin_key" | "config_key" | "none" = existingConfig
       ? "nhtsa_vin_key"

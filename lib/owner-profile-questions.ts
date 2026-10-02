@@ -59,33 +59,6 @@ export const OWNER_PROFILE_QUESTIONS: OwnerQuestion[] = [
     ],
   },
   {
-    key: "lastServiceWhen",
-    question: "When was the last service?",
-    type: "single",
-    options: [
-      { value: "lt1mo", label: "< 1 month" },
-      { value: "1_3mo", label: "1–3 months" },
-      { value: "3_6mo", label: "3–6 months" },
-      { value: "6_12mo", label: "6–12 months" },
-      { value: "12plus", label: "12+ months" },
-      { value: "not_sure", label: "Not sure" },
-    ],
-  },
-  {
-    key: "lastServiceWhat",
-    question: "What was done at the last service?",
-    type: "multi",
-    options: [
-      { value: "oil_change", label: "Oil change" },
-      { value: "brakes", label: "Brakes" },
-      { value: "tires", label: "Tires" },
-      { value: "battery", label: "Battery" },
-      { value: "inspection", label: "Inspection" },
-      { value: "other", label: "Other" },
-      { value: "none", label: "None" },
-    ],
-  },
-  {
     key: "garageRole",
     question: "What's this vehicle's role?",
     type: "single",

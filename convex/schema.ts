@@ -1664,6 +1664,7 @@ export default defineSchema({
     ownershipType: v.optional(v.string()),
     ownedSinceNew: v.optional(v.boolean()),
     mileageAtPurchase: v.optional(v.number()),
+    mileageAtPurchaseNotSure: v.optional(v.boolean()),
     ownershipDuration: v.optional(v.string()),
     annualMileageBand: v.optional(v.string()),
     usagePattern: v.optional(v.string()),

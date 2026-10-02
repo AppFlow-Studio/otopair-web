@@ -97,8 +97,6 @@ const OWNER_PROFILE_FIELDS = [
   "ownedSinceNew",
   "annualMileageBand",
   "usagePattern",
-  "lastServiceWhen",
-  "lastServiceWhat",
   "garageRole",
   "knownIssues",
 ] as const;
@@ -447,8 +445,8 @@ export const deleteInspectionPhoto = mutation({
 export const saveOwnerProfileAnswers = mutation({
   args: {
     bookingId: v.id("bookings"),
-    // Map of vehicle_owners field -> answer. Strings, booleans, and string
-    // arrays only (matches OWNER_PROFILE_FIELDS). v.any() keeps the union loose;
+    // Map of vehicle_owners field -> answer. Strings and booleans only
+    // (matches OWNER_PROFILE_FIELDS). v.any() keeps the union loose;
     // we whitelist keys + coerce below.
     answers: v.any(),
   },
@@ -465,13 +463,7 @@ export const saveOwnerProfileAnswers = mutation({
       const value = answers[key];
       if (value == null) continue;
 
-      if (key === "lastServiceWhat") {
-        // multi-select -> string[]
-        const arr = Array.isArray(value)
-          ? value.filter((s) => typeof s === "string")
-          : [];
-        if (arr.length) patch[key] = arr;
-      } else if (key === "ownedSinceNew") {
+      if (key === "ownedSinceNew") {
         if (typeof value === "boolean") patch[key] = value;
       } else {
         // single-select / text -> non-empty string

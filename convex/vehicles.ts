@@ -1313,6 +1313,7 @@ export const resetVehicleOnboarding = mutation({
       ownershipType: undefined,
       ownedSinceNew: undefined,
       mileageAtPurchase: undefined,
+      mileageAtPurchaseNotSure: undefined,
       ownershipDuration: undefined,
       mileage: undefined,
       annualMileageBand: undefined,
@@ -1360,6 +1361,81 @@ export const completeVehiclePreOnboarding = mutation({
   },
 });
 
+/** Persist answered pre-onboarding steps without marking the flow complete. */
+export const saveVehiclePreOnboardingProgress = mutation({
+  args: {
+    vehicleOwnerId: v.id("vehicle_owners"),
+    ownershipType: v.optional(v.union(v.literal("leased"), v.literal("owned"))),
+    ownedSinceNew: v.optional(v.boolean()),
+    mileageAtPurchase: v.optional(v.union(v.float64(), v.null())),
+    mileageAtPurchaseNotSure: v.optional(v.boolean()),
+    currentMileage: v.optional(v.float64()),
+    annualMileageBand: v.optional(v.union(
+      v.literal("light"),
+      v.literal("avg"),
+      v.literal("heavy"),
+      v.literal("very_heavy"),
+    )),
+    usagePattern: v.optional(v.union(
+      v.literal("mostly_local"),
+      v.literal("mostly_highway"),
+      v.literal("mixed"),
+    )),
+  },
+  handler: async (ctx, args) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) throw new Error("Not authenticated");
+    const user = await ctx.db
+      .query("users")
+      .withIndex("by_clerkUserId", (q) => q.eq("clerkUserId", identity.subject))
+      .unique();
+    if (!user) throw new Error("User not found");
+
+    const owner = await ctx.db.get(args.vehicleOwnerId);
+    if (!owner) throw new Error(`Vehicle ownership not found: ${args.vehicleOwnerId}`);
+    if (owner.user_id !== user._id) throw new Error("Not authorized for this vehicle.");
+
+    if (args.currentMileage !== undefined && args.currentMileage < 0) {
+      throw new Error("currentMileage must be >= 0");
+    }
+    if (typeof args.mileageAtPurchase === "number" && args.mileageAtPurchase < 0) {
+      throw new Error("mileageAtPurchase must be >= 0");
+    }
+
+    const patch: Record<string, unknown> = {};
+    if (args.ownershipType !== undefined) {
+      patch.ownershipType = args.ownershipType;
+      if (args.ownershipType === "leased") {
+        patch.ownedSinceNew = undefined;
+        patch.mileageAtPurchase = undefined;
+        patch.mileageAtPurchaseNotSure = undefined;
+      }
+    }
+    if (args.ownedSinceNew !== undefined) {
+      patch.ownedSinceNew = args.ownedSinceNew;
+      if (args.ownedSinceNew) {
+        patch.mileageAtPurchase = undefined;
+        patch.mileageAtPurchaseNotSure = undefined;
+      }
+    }
+    if (args.mileageAtPurchase !== undefined) {
+      patch.mileageAtPurchase = args.mileageAtPurchase ?? undefined;
+      patch.mileageAtPurchaseNotSure = false;
+    }
+    if (args.mileageAtPurchaseNotSure !== undefined) {
+      patch.mileageAtPurchaseNotSure = args.mileageAtPurchaseNotSure;
+      if (args.mileageAtPurchaseNotSure) patch.mileageAtPurchase = undefined;
+    }
+    if (args.currentMileage !== undefined) patch.mileage = args.currentMileage;
+    if (args.annualMileageBand !== undefined) patch.annualMileageBand = args.annualMileageBand;
+    if (args.usagePattern !== undefined) patch.usagePattern = args.usagePattern;
+
+    if (Object.keys(patch).length === 0) throw new Error("No pre-onboarding answer provided");
+    await ctx.db.patch(args.vehicleOwnerId, patch);
+    return { success: true };
+  },
+});
+
 /**
  * Saves the branching pre-onboarding questionnaire (Vehicle Onboarding v2)
  * and marks preOnboardingComplete when required answers are present.
@@ -1370,6 +1446,7 @@ export const saveVehiclePreOnboarding = mutation({
     ownershipType: v.string(), // "leased" | "owned"
     ownedSinceNew: v.optional(v.boolean()),
     mileageAtPurchase: v.optional(v.float64()),
+    mileageAtPurchaseNotSure: v.optional(v.boolean()),
     ownershipDuration: v.optional(v.string()),
     currentMileage: v.float64(),
     annualMileageBand: v.string(), // "light" | "avg" | "heavy" | "very_heavy"
@@ -1457,6 +1534,7 @@ export const saveVehiclePreOnboarding = mutation({
       ownershipType: args.ownershipType,
       ownedSinceNew: args.ownershipType === "owned" ? args.ownedSinceNew : undefined,
       mileageAtPurchase: path3 ? args.mileageAtPurchase : undefined,
+      mileageAtPurchaseNotSure: path3 ? args.mileageAtPurchaseNotSure : undefined,
       ownershipDuration: path3 ? args.ownershipDuration : undefined,
       mileage: args.currentMileage,
       annualMileageBand: args.annualMileageBand,

@@ -1,40 +1,23 @@
 "use client";
 
 import { motion } from "motion/react";
+import { ArrowRight } from "lucide-react";
 import { APP_STORE_URL, PLAY_STORE_URL, storeIsLive, usePlatform } from "../download-app";
 import { useWaitlist } from "../waitlist-modal";
 
-/** One half of the platform pill. While its store URL is the "#" placeholder it
- *  is a button that opens the waitlist — never an href="#", which scroll-jumped
- *  visitors back to the top of the page (site audit 2026-08-31). On launch the
- *  URLs go live and it becomes the real store link. */
+/** One half of the platform pill — a real store link. Only rendered once its
+ *  store URL is live; before that the whole pill is the waitlist pill. */
 function PillHalf({
   href,
   label,
-  platform,
   className,
   children,
 }: {
   href: string;
   label: string;
-  platform: "ios" | "android";
   className: string;
   children: React.ReactNode;
 }) {
-  const { open } = useWaitlist();
-  if (!storeIsLive(href)) {
-    return (
-      <motion.button
-        type="button"
-        whileTap={{ scale: 0.97 }}
-        onClick={() => open({ platform })}
-        aria-label={`${label} — join the launch list`}
-        className={className}
-      >
-        {children}
-      </motion.button>
-    );
-  }
   return (
     <motion.a whileTap={{ scale: 0.97 }} href={href} aria-label={label} className={className}>
       {children}
@@ -49,7 +32,7 @@ const APPLE_PATH =
  * The platform control from the Figma V2 footer (node 354:756
  * `_ActionSheet-action`) and the mobile frame's hero/footer (390:3183 /
  * 390:4522): one white pill split "iPhone | Android", each half its own store
- * link (or a non-link span while the URL is still the "#" placeholder).
+ * link.
  *
  * The visitor never picks a platform (design review 2026-08-15, W1): on an
  * iPhone only the iPhone half renders, on Android only the Android half, and
@@ -57,6 +40,10 @@ const APPLE_PATH =
  * draw it. Detection runs after hydration, so the server always sends the
  * pair and a phone collapses it on first client render — same rule as the
  * store badges (2026-09-03).
+ *
+ * Pre-launch (2026-10-02): a half only renders once its store URL is live.
+ * While none of the visitor's stores is, the pill becomes a single white
+ * "Join the waitlist" pill of the same size that opens the waitlist modal.
  *
  *  - `md` (default): the desktop footer size — 15/16px labels, r-full.
  *  - `sm`: the mobile frame's 198×37 pill — 12px labels, 10×12 marks,
@@ -72,11 +59,29 @@ export default function PlatformPill({
   className?: string;
 }) {
   const platform = usePlatform();
-  const showApple = platform !== "android";
-  const showAndroid = platform !== "ios";
+  const { open } = useWaitlist();
+  const showApple = platform !== "android" && storeIsLive(APP_STORE_URL);
+  const showAndroid = platform !== "ios" && storeIsLive(PLAY_STORE_URL);
   const single = !(showApple && showAndroid);
 
   const sm = size === "sm";
+  if (!showApple && !showAndroid) {
+    return (
+      <motion.button
+        type="button"
+        whileTap={{ scale: 0.97 }}
+        onClick={() => open({ platform })}
+        className={`flex items-center justify-center bg-white text-[#1a1a1a] transition-colors hover:bg-[#f4f7fa] ${
+          sm
+            ? "h-[37px] gap-[6px] rounded-[30px] px-7 text-[12px] leading-[22px] shadow-[0_8px_20px_rgba(43,84,120,0.16)]"
+            : "gap-2 rounded-full px-9 py-3.5 text-[15px] font-medium shadow-[0_14px_34px_rgba(43,84,120,0.18)] tab:px-11 tab:py-4 tab:text-[16px]"
+        } ${className}`}
+      >
+        Join the waitlist
+        <ArrowRight className={sm ? "h-3 w-3" : "h-4 w-4"} strokeWidth={2} aria-hidden />
+      </motion.button>
+    );
+  }
   const half = sm
     ? "flex items-center justify-center gap-[6px] text-[12px] leading-[22px] text-[#1a1a1a] transition-colors hover:bg-black/[0.04]"
     : "flex items-center gap-2 text-[15px] font-medium text-[#1a1a1a] transition-colors hover:bg-black/[0.04] tab:text-[16px]";
@@ -101,7 +106,6 @@ export default function PlatformPill({
       {showApple && (
         <PillHalf
           href={APP_STORE_URL}
-          platform="ios"
           label="Download Otopair for iPhone on the App Store"
           className={`${half} ${applePad}`}
         >
@@ -115,7 +119,6 @@ export default function PlatformPill({
       {showAndroid && (
         <PillHalf
           href={PLAY_STORE_URL}
-          platform="android"
           label="Get Otopair for Android on Google Play"
           className={`${half} ${androidPad}`}
         >

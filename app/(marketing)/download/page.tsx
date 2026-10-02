@@ -76,7 +76,9 @@ export default async function DownloadPage() {
       hero={
         <div className="flex w-full flex-col items-start gap-4">
           <WaitlistForm list="app" />
-          <DownloadApp align="start" />
+          {/* The form above is the waitlist, so pre-launch this renders
+              nothing; the store badges appear here once the URLs are set. */}
+          <DownloadApp align="start" waitlist={false} />
         </div>
       }
       width="wide"

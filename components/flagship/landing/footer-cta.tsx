@@ -58,14 +58,16 @@ export default function FooterCta({
 } = {}) {
   // The caption under the pill names only the store the visitor will use
   // (phones show a single half — design feedback 2026-09-03).
+  // Pre-launch the pill itself is the waitlist button; this names what it's for.
   const platform = usePlatform();
+  const appleSoon = platform !== "android" && !storeIsLive(APP_STORE_URL);
+  const googleSoon = platform !== "ios" && !storeIsLive(PLAY_STORE_URL);
   const comingSoon =
-    platform === "ios"
-      ? !storeIsLive(APP_STORE_URL) && "Coming soon to the App Store"
-      : platform === "android"
-        ? !storeIsLive(PLAY_STORE_URL) && "Coming soon on Google Play"
-        : (!storeIsLive(APP_STORE_URL) || !storeIsLive(PLAY_STORE_URL)) &&
-          "Coming soon to the App Store & Google Play";
+    appleSoon && googleSoon
+      ? "Coming soon to the App Store & Google Play"
+      : appleSoon
+        ? "Coming soon to the App Store"
+        : googleSoon && "Coming soon on Google Play";
   return (
     <footer className={`w-full ${className}`}>
       {/* id="get-oto" — the PillNav CTA and hero store buttons anchor here. */}

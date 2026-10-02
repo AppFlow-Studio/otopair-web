@@ -495,25 +495,35 @@ const STORE_BUTTON_MOTION = {
   transition: { type: "spring", stiffness: 400, damping: 20 },
 } as const;
 
-function StoreButton({ store }: { store: "apple" | "google" }) {
+// Same launch flag as every other store control on the site: real store links
+// once the listings exist, and until then a single button that opens the
+// launch-list modal in their place — never a dead "#" link or a store badge
+// that can't download anything (site audit 2026-08-31, 2026-10-02).
+function StoreButtons() {
   const { open } = useWaitlist();
-  const url = store === "apple" ? APP_STORE_URL : PLAY_STORE_URL;
-  const label = <StoreButtonLabel store={store} />;
-  // Same launch flag as every other store control on the site: a real store
-  // link once the listing exists, and until then a button that opens the
-  // launch-list modal — never a dead "#" link (site audit 2026-08-31).
-  if (storeIsLive(url)) {
+  const live = (["apple", "google"] as const).filter((s) =>
+    storeIsLive(s === "apple" ? APP_STORE_URL : PLAY_STORE_URL),
+  );
+  if (live.length === 0) {
     return (
-      <motion.a href={url} target="_blank" rel="noopener noreferrer" className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
-        {label}
-      </motion.a>
+      <motion.button type="button" onClick={() => open()} className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
+        <span className="text-[13px] font-medium">Join the waitlist</span>
+        <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+      </motion.button>
     );
   }
-  return (
-    <motion.button type="button" onClick={() => open()} className={STORE_BUTTON_CLASS} {...STORE_BUTTON_MOTION}>
-      {label}
-    </motion.button>
-  );
+  return live.map((store) => (
+    <motion.a
+      key={store}
+      href={store === "apple" ? APP_STORE_URL : PLAY_STORE_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={STORE_BUTTON_CLASS}
+      {...STORE_BUTTON_MOTION}
+    >
+      <StoreButtonLabel store={store} />
+    </motion.a>
+  ));
 }
 
 function StoreButtonLabel({ store }: { store: "apple" | "google" }) {
@@ -724,8 +734,7 @@ export function BookingConfirmedCard({
         ))}
 
       <Step delay={0.75} className="mt-2.5 flex gap-2">
-        <StoreButton store="apple" />
-        <StoreButton store="google" />
+        <StoreButtons />
       </Step>
 
       <Step delay={0.85}>
